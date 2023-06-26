@@ -2,7 +2,6 @@ package wshandle
 
 import (
 	"crypto/tls"
-	"github.com/xgadget-lab/nexttrace/pow"
 	"github.com/xgadget-lab/nexttrace/util"
 	"log"
 	"net"
@@ -119,7 +118,7 @@ func (c *WsConn) messageSendHandler() {
 
 func (c *WsConn) recreateWsConn() {
 	// 尝试重新连线
-	u := url.URL{Scheme: "wss", Host: fastIp + ":" + port, Path: "/v3/ipGeoWs"}
+	u := url.URL{Scheme: "wss", Host: fastIp + ":" + port, Path: "/v2/ipGeoWs"}
 	// log.Printf("connecting to %s", u.String())
 	jwtToken, ua := envToken, []string{"Privileged Client"}
 	err := error(nil)
@@ -127,7 +126,8 @@ func (c *WsConn) recreateWsConn() {
 		// 无环境变量 token
 		if cacheToken == "" {
 			// 无cacheToken, 重新获取 token
-			jwtToken, err = pow.GetToken(fastIp, host, port)
+			//jwtToken, err = pow.GetToken(fastIp, host, port)
+			jwtToken = ""
 			if err != nil {
 				log.Println(err)
 				os.Exit(1)
@@ -190,7 +190,8 @@ func createWsConn() *WsConn {
 	jwtToken, ua := envToken, []string{"Privileged Client"}
 	err := error(nil)
 	if envToken == "" {
-		jwtToken, err = pow.GetToken(fastIp, host, port)
+		//jwtToken, err = pow.GetToken(fastIp, host, port)
+		jwtToken = ""
 		if err != nil {
 			log.Println(err)
 			os.Exit(1)
@@ -208,7 +209,7 @@ func createWsConn() *WsConn {
 	dialer.TLSClientConfig = &tls.Config{
 		ServerName: host,
 	}
-	u := url.URL{Scheme: "wss", Host: fastIp + ":" + port, Path: "/v3/ipGeoWs"}
+	u := url.URL{Scheme: "wss", Host: fastIp + ":" + port, Path: "/v2/ipGeoWs"}
 	// log.Printf("connecting to %s", u.String())
 
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), requestHeader)
