@@ -50,6 +50,8 @@ func GetSource(s string) Source {
 		return IPInfoLocal
 	case "CHUNZHEN":
 		return Chunzhen
+	case "IP2LOCATION":
+		return IP2Location
 	case "DISABLE-GEOIP":
 		return disableGeoIP
 	default:

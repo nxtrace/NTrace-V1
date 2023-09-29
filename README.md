@@ -218,7 +218,7 @@ nexttrace --psize 1024 example.com
 nexttrace --route-path www.time.com.my
 ```
 
-`NextTrace` supports users to select their own IP API (currently supports: `LeoMoeAPI`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `Ip2region`, `IPInfoLocal`, `CHUNZHEN`)
+`NextTrace` supports users to select their own IP API (currently supports: `LeoMoeAPI`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `Ip2region`, `IPInfoLocal`, `CHUNZHEN`, `IP2Location`)
 
 ```bash
 # You can specify the IP database by yourself [IP-API.com here], if not specified, LeoMoeAPI will be used
@@ -237,6 +237,10 @@ export NEXTTRACE_CHUNZHENURL=http://127.0.0.1:2060
 
 # You can also specify the default IP database by setting an environment variable
 export NEXTTRACE_DATAPROVIDER=ipinfo
+
+# You can set the IP2Location.io API key using an environment variable.
+# Signup for a free API key at http://www.ip2location.io/pricing
+NEXTTRACE_IP2LOCATION_TOKEN=YOUR_API_KEY_HERE
 ```
 
 `NextTrace` supports mixed parameters and shortened parameters
@@ -273,7 +277,7 @@ Usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  [-F|--fast-trace] [-p|--port <integer>] [-q|--queries
                  <integer>] [--parallel-requests <integer>] [-m|--max-hops
                  <integer>] [-d|--data-provider
-                 (Ip2region|ip2region|IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|LeoMoeAPI|leomoeapi|disable-geoip)]
+                 (Ip2region|ip2region|IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|LeoMoeAPI|leomoeapi|IP2Location|disable-geoip)]
                  [-n|--no-rdns] [-a|--always-rdns] [-P|--route-path]
                  [-r|--report] [--dn42] [-o|--output] [-t|--table] [--raw]
                  [-j|--json] [-c|--classic] [-f|--first <integer>] [-M|--map]
@@ -311,7 +315,7 @@ Arguments:
                                      reached). Default: 30
   -d  --data-provider                Choose IP Geograph Data Provider [IP.SB,
                                      IPInfo, IPInsight, IP-API.com, Ip2region,
-                                     IPInfoLocal, CHUNZHEN, disable-geoip].
+                                     IPInfoLocal, CHUNZHEN, IP2Location, disable-geoip].
                                      Default: LeoMoeAPI
       --pow-provider                 Choose PoW Provider [api.leo.moe, sakura]
                                      For China mainland users, please use

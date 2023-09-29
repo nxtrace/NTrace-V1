@@ -5,6 +5,7 @@ go 1.21
 require (
 	github.com/akamensky/argparse v1.4.0
 	github.com/google/gopacket v1.1.19
+	github.com/ip2location/ip2location-io-go/ip2locationio v0.0.0-20230620051435-c2d12bf88058
 	github.com/oschwald/maxminddb-golang v1.12.0
 	github.com/spf13/viper v1.16.0
 	github.com/stretchr/testify v1.8.4
