@@ -2,7 +2,6 @@ package ipgeo
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
