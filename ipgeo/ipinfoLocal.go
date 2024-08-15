@@ -3,13 +3,15 @@ package ipgeo
 import (
 	"errors"
 	"fmt"
-	"github.com/oschwald/maxminddb-golang"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+	
+	"github.com/nxtrace/NTrace-core/util"
+	"github.com/oschwald/maxminddb-golang"
 )
 
 const (
@@ -29,10 +31,9 @@ func getIPInfoLocalPath() (error) {
 		return nil
 	}
 	// NEXTTRACE_IPINFOLOCALPATH
-	envIPInfoLocalPath := os.Getenv("NEXTTRACE_IPINFOLOCALPATH")
-	if envIPInfoLocalPath != "" {
-		if _, err := os.Stat(envIPInfoLocalPath); err == nil {
-			ipinfoDataBasePath = envIPInfoLocalPath
+	if util.EnvIPInfoLocalPath != "" {
+		if _, err := os.Stat(util.EnvIPInfoLocalPath); err == nil {
+			ipinfoDataBasePath = util.EnvIPInfoLocalPath
 			return nil
 		} else {
 			return errors.New("NEXTTRACE_IPINFOLOCALPATH is set but the file does not exist")
