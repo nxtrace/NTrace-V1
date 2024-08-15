@@ -52,7 +52,6 @@ func getIPInfoLocalPath() (error) {
 		folders = append(folders, "/usr/local/share/nexttrace/")
 		folders = append(folders, "/usr/share/nexttrace/")
 	}
-	fmt.Println("Searching for ipinfoLocal.mmdb in these folders:", folders)
 	for _, folder := range folders {
 		if _, err := os.Stat(folder + ipinfoDataBaseFilename); err == nil {
 			ipinfoDataBasePath = folder + ipinfoDataBaseFilename
