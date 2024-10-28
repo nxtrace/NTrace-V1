@@ -38,7 +38,7 @@ require (
 )
 
 require (
-	github.com/fatih/color v1.17.0
+	github.com/fatih/color v1.18.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/lionsoul2014/ip2region v2.11.2+incompatible
 	github.com/rodaine/table v1.3.0
