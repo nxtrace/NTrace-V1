@@ -58,9 +58,9 @@ Please note, there are exceptions to this synchronization. If a version of NTrac
 * Linux
     * One-click installation script
 
-      ```shell
-      curl nxtrace.org/nt |bash
-      ```
+        ```shell
+        curl nxtrace.org/nt |bash
+        ```
     * Arch Linux AUR installation command
         * Directly download bin package (only supports amd64)
 
@@ -76,16 +76,23 @@ Please note, there are exceptions to this synchronization. If a version of NTrac
     * Linuxbrew's installation command
 
         Same as the macOS Homebrew's installation method (homebrew-core version only supports amd64)
+    * Debian-based distribution installation
+        * Deb packages for amd64 and arm64 are [provided here](https://github.com/wcbing-build/nexttrace-debs). You can add this repo according to it's README, then
+
+            ```shell
+            apt install nexttrace
+            ```
+        * deb files also can be downloaded from it's [Releases](https://github.com/wcbing-build/nexttrace-debs/releases)
     * Deepin installation command
 
-      ```shell
-      apt install nexttrace
-      ```
+        ```shell
+        apt install nexttrace
+        ```
     * Termux installation command
 
-      ```shell
-      pkg install nexttrace-enhanced
-      ```
+        ```shell
+        pkg install nexttrace-enhanced
+        ```
 
 * macOS
     * macOS Homebrew's installation command

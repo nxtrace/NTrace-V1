@@ -63,70 +63,78 @@ Document Language: [English](README.md) | 简体中文
 ### Automated Install
 
 * Linux 
-  * 一键安装脚本
+    * 一键安装脚本
 
-    ```shell
-    curl nxtrace.org/nt | bash
-    ```
-    
-  * Arch Linux AUR 安装命令
-     * 直接下载bin包(仅支持amd64)
+        ```shell
+        curl nxtrace.org/nt | bash
+        ```
+        
+    * Arch Linux AUR 安装命令
+        * 直接下载bin包(仅支持amd64)
 
-          ```shell
-          yay -S nexttrace-bin
-          ```
-     * 从源码构建(仅支持amd64)
-    
-          ```shell
-          yay -S nexttrace
-          ```
-     * AUR 的构建分别由 ouuan, huyz 维护
-  * Linuxbrew 安装命令
+            ```shell
+            yay -S nexttrace-bin
+            ```
+        * 从源码构建(仅支持amd64)
+        
+            ```shell
+            yay -S nexttrace
+            ```
+        * AUR 的构建分别由 ouuan, huyz 维护
+    * Linuxbrew 安装命令
 
-     同macOS Homebrew安装方法(homebrew-core版仅支持amd64)
-  * Deepin 安装命令
+        同macOS Homebrew安装方法(homebrew-core版仅支持amd64)
+    * 基于 Debian 的发行版安装
 
-     ```shell
-     apt install nexttrace
-     ```
-  * Termux 安装命令
-    
-     ```shell
-     pkg install nexttrace-enhanced
-     ```
-      
+        * [这里](https://github.com/wcbing-build/nexttrace-debs)提供了 amd64 和 arm64 的 deb 包。只需按照 README 添加软件源，随后
+
+            ```shell
+            apt install nexttrace
+            ```        
+        * 也可直接在其 [Releases](https://github.com/wcbing-build/nexttrace-debs/releases) 下载 deb 包安装
+    * Deepin 安装命令
+
+        ```shell
+        apt install nexttrace
+        ```
+    * Termux 安装命令
+        
+        ```shell
+        pkg install nexttrace-enhanced
+        ```
+        
      
 * macOS
-  * macOS Homebrew 安装命令
-     * homebrew-core版
+    * macOS Homebrew 安装命令
+        * homebrew-core版
 
-          ```shell
-          brew install nexttrace
-          ```
-     * 本仓库ACTIONS自动构建版(更新更快)
+            ```shell
+            brew install nexttrace
+            ```
+        * 本仓库ACTIONS自动构建版(更新更快)
 
-          ```shell
-          brew tap nxtrace/nexttrace && brew install nxtrace/nexttrace/nexttrace
-          ```
-     * homebrew-core 构建由 chenrui333 维护，请注意该版本更新可能会落后仓库Action自动构建版本
+            ```shell
+            brew tap nxtrace/nexttrace && brew install nxtrace/nexttrace/nexttrace
+            ```
+        * homebrew-core 构建由 chenrui333 维护，请注意该版本更新可能会落后仓库Action自动构建版本
 
 * Windows
-  * Windows Scoop 安装命令
-     * scoop-extras版
+    * Windows Scoop 安装命令
+        * scoop-extras版
 
-          ```powershell
-          scoop bucket add extras && scoop install extras/nexttrace
-          ```
+            ```powershell
+            scoop bucket add extras && scoop install extras/nexttrace
+            ```
 
-     * scoop-extra 由 soenggam 维护
+        * scoop-extra 由 soenggam 维护
 
 * X-CMD
-  * [x-cmd](https://cn.x-cmd.com) 是一个使用 posix shell 实现的轻量级跨平台包管理器。使用单个命令快速下载并执行 `nexttrace` ： [`x nexttrace`](https://cn.x-cmd.com/pkg/nexttrace)
-     * 您还可以在用户级安装 `nexttrace`，且不需要 root 权限
+    * [x-cmd](https://cn.x-cmd.com) 是一个使用 posix shell 实现的轻量级跨平台包管理器。使用单个命令快速下载并执行 `nexttrace` ： [`x nexttrace`](https://cn.x-cmd.com/pkg/nexttrace)
+        * 您还可以在用户级安装 `nexttrace`，且不需要 root 权限
 
-          ```shell
-          x env use nexttrace
-          ```
+            ```shell
+            x env use nexttrace
+            ```
 
 请注意，以上多种安装方式的仓库均由开源爱好者自行维护，不保证可用性和及时更新，如遇到问题请联系仓库维护者解决，或使用本项目官方编译提供的二进制包。
 
