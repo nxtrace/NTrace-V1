@@ -4,6 +4,6 @@ package internal
 
 import "net"
 
-func ListenPacket(network string, laddr string) (net.PacketConn, error) {
-	return net.ListenPacket(network, laddr)
+func ListenPacket(network string, address string) (net.PacketConn, error) {
+	return net.ListenPacket(network, address)
 }
