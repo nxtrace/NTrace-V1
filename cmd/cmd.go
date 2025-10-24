@@ -255,7 +255,7 @@ func Execute() {
 		m = trace.ICMPTrace
 	}
 
-	if *from != "" && (*fast_trace || *file != "") {
+	if *from == "" && (*fast_trace || *file != "") {
 		var paramsFastTrace = fastTrace.ParamsFastTrace{
 			OSType:         OSType,
 			ICMPMode:       *icmpMode,
