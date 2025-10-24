@@ -632,5 +632,7 @@ func executeGlobalpingTraceroute(opts *trace.GlobalpingOptions, config *trace.Co
 		}
 	}
 
-	tracemap.PrintMapUrl(res.TraceMapUrl)
+	if res.TraceMapUrl != "" {
+		tracemap.PrintMapUrl(res.TraceMapUrl)
+	}
 }
