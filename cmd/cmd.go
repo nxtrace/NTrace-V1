@@ -509,7 +509,7 @@ func Execute() {
 		return
 	}
 	if !*disableMaptrace &&
-		(util.StringInSlice(strings.ToUpper(*dataOrigin), []string{"LEOMOEAPI", "IPINFO", "IPINFO", "IP-API.COM", "IPAPI.COM"})) {
+		(util.StringInSlice(strings.ToUpper(*dataOrigin), []string{"LEOMOEAPI", "IPINFO", "IP-API.COM", "IPAPI.COM"})) {
 		url, err := tracemap.GetMapUrl(string(r))
 		if err != nil {
 			fmt.Println(err)
@@ -591,7 +591,7 @@ func executeGlobalpingTraceroute(opts *trace.GlobalpingOptions, config *trace.Co
 	}
 
 	if !opts.DisableMaptrace &&
-		(util.StringInSlice(strings.ToUpper(opts.DataOrigin), []string{"LEOMOEAPI", "IPINFO", "IPINFO", "IP-API.COM", "IPAPI.COM"})) {
+		(util.StringInSlice(strings.ToUpper(opts.DataOrigin), []string{"LEOMOEAPI", "IPINFO", "IP-API.COM", "IPAPI.COM"})) {
 		r, err := json.Marshal(res)
 		if err != nil {
 			fmt.Println(err)
