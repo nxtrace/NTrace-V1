@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/jsdelivr/globalping-cli/globalping"
@@ -14,13 +13,14 @@ import (
 )
 
 type GlobalpingOptions struct {
-	Target string
-	From   string
-	IPv4   bool
-	IPv6   bool
-	TCP    bool
-	UDP    bool
-	Port   *int
+	Target  string
+	From    string
+	IPv4    bool
+	IPv6    bool
+	TCP     bool
+	UDP     bool
+	Port    int
+	Packets int
 
 	DisableMaptrace bool
 	DataOrigin      string
@@ -44,7 +44,7 @@ func GlobalpingTraceroute(opts *GlobalpingOptions, config *Config) (*Result, *gl
 	client := globalping.NewClient(c)
 
 	o := &globalping.MeasurementCreate{
-		Type:   "traceroute",
+		Type:   "mtr",
 		Target: opts.Target,
 		Limit:  1,
 		Locations: []globalping.Locations{
@@ -52,11 +52,10 @@ func GlobalpingTraceroute(opts *GlobalpingOptions, config *Config) (*Result, *gl
 				Magic: opts.From,
 			},
 		},
-		Options: &globalping.MeasurementOptions{},
-	}
-
-	if opts.Port != nil {
-		o.Options.Port = uint16(*opts.Port)
+		Options: &globalping.MeasurementOptions{
+			Port:    uint16(opts.Port),
+			Packets: opts.Packets,
+		},
 	}
 
 	if opts.TCP {
@@ -87,7 +86,7 @@ func GlobalpingTraceroute(opts *GlobalpingOptions, config *Config) (*Result, *gl
 		return nil, nil, fmt.Errorf("measurement did not complete successfully: %s", measurement.Status)
 	}
 
-	gpHops, err := globalping.DecodeTracerouteHops(measurement.Results[0].Result.HopsRaw)
+	gpHops, err := globalping.DecodeMTRHops(measurement.Results[0].Result.HopsRaw)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -102,7 +101,7 @@ func GlobalpingTraceroute(opts *GlobalpingOptions, config *Config) (*Result, *gl
 	for i := range gpHops {
 		hops := make([]Hop, 0, maxTimings)
 		for j := range maxTimings {
-			var timing *globalping.TracerouteTiming
+			var timing *globalping.MTRTiming
 			if j < len(gpHops[i].Timings) {
 				timing = &gpHops[i].Timings[j]
 			}
@@ -115,7 +114,7 @@ func GlobalpingTraceroute(opts *GlobalpingOptions, config *Config) (*Result, *gl
 	return result, measurement, nil
 }
 
-func mapGlobalpingHop(ttl int, gpHop *globalping.TracerouteHop, timing *globalping.TracerouteTiming, geoMap map[string]*ipgeo.IPGeoData, config *Config) Hop {
+func mapGlobalpingHop(ttl int, gpHop *globalping.MTRHop, timing *globalping.MTRTiming, geoMap map[string]*ipgeo.IPGeoData, config *Config) Hop {
 	hop := Hop{
 		Hostname: gpHop.ResolvedHostname,
 		TTL:      ttl,
@@ -154,12 +153,4 @@ func GlobalpingFormatLocation(m *globalping.ProbeMeasurement) string {
 		m.Probe.Continent + ", " +
 		m.Probe.Network + " " +
 		"(AS" + fmt.Sprint(m.Probe.ASN) + ")"
-}
-
-func GlobalpingGetFirstOutputLine(m *globalping.ProbeMeasurement) string {
-	index := strings.Index(m.Result.RawOutput, "\n")
-	if index == -1 {
-		return ""
-	}
-	return m.Result.RawOutput[:index]
 }

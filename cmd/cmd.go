@@ -347,13 +347,14 @@ func Execute() {
 	if *from != "" {
 		executeGlobalpingTraceroute(
 			&trace.GlobalpingOptions{
-				Target: *str,
-				From:   *from,
-				IPv4:   *ipv4Only,
-				IPv6:   *ipv6Only,
-				TCP:    *tcp,
-				UDP:    *udp,
-				Port:   port,
+				Target:  *str,
+				From:    *from,
+				IPv4:    *ipv4Only,
+				IPv6:    *ipv6Only,
+				TCP:     *tcp,
+				UDP:     *udp,
+				Port:    *port,
+				Packets: *numMeasurements,
 
 				DisableMaptrace: *disableMaptrace,
 				DataOrigin:      *dataOrigin,
@@ -616,11 +617,6 @@ func executeGlobalpingTraceroute(opts *trace.GlobalpingOptions, config *trace.Co
 	}
 
 	fmt.Fprintln(color.Output, color.New(color.FgGreen, color.Bold).Sprintf("> %s", trace.GlobalpingFormatLocation(&measurement.Results[0])))
-
-	output := trace.GlobalpingGetFirstOutputLine(&measurement.Results[0])
-	if output != "" {
-		fmt.Fprintln(color.Output, output)
-	}
 
 	if opts.TablePrint {
 		printer.TracerouteTablePrinter(res)
