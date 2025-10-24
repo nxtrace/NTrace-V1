@@ -624,15 +624,15 @@ func executeGlobalpingTraceroute(opts *trace.GlobalpingOptions, config *trace.Co
 
 	if opts.TablePrint {
 		printer.TracerouteTablePrinter(res)
-	}
-
-	for i := range res.Hops {
-		if opts.ClassicPrint {
-			printer.ClassicPrinter(res, i)
-		} else if opts.RawPrint {
-			printer.EasyPrinter(res, i)
-		} else {
-			printer.RealtimePrinter(res, i)
+	} else {
+		for i := range res.Hops {
+			if opts.ClassicPrint {
+				printer.ClassicPrinter(res, i)
+			} else if opts.RawPrint {
+				printer.EasyPrinter(res, i)
+			} else {
+				printer.RealtimePrinter(res, i)
+			}
 		}
 	}
 
