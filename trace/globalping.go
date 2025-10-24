@@ -21,6 +21,7 @@ type GlobalpingOptions struct {
 	UDP     bool
 	Port    int
 	Packets int
+	MaxHops int
 
 	DisableMaptrace bool
 	DataOrigin      string
@@ -96,9 +97,15 @@ func GlobalpingTraceroute(opts *GlobalpingOptions, config *Config) (*Result, *gl
 	maxTimings := 1
 
 	for i := range gpHops {
+		if i >= opts.MaxHops {
+			break
+		}
 		maxTimings = max(maxTimings, len(gpHops[i].Timings))
 	}
 	for i := range gpHops {
+		if i >= opts.MaxHops {
+			break
+		}
 		hops := make([]Hop, 0, maxTimings)
 		for j := range maxTimings {
 			var timing *globalping.MTRTiming

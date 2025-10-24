@@ -355,6 +355,7 @@ func Execute() {
 				UDP:     *udp,
 				Port:    *port,
 				Packets: *numMeasurements,
+				MaxHops: *maxHops,
 
 				DisableMaptrace: *disableMaptrace,
 				DataOrigin:      *dataOrigin,
