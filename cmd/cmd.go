@@ -78,6 +78,7 @@ func Execute() {
 		Help: "Choose the language for displaying [en, cn]"})
 	file := parser.String("", "file", &argparse.Options{Help: "Read IP Address or domain name from file"})
 	noColor := parser.Flag("C", "no-color", &argparse.Options{Help: "Disable Colorful Output"})
+	from := parser.String("", "from", &argparse.Options{Help: "Run traceroute via Globalping (globalping.io) from a specified location. The location field accepts continents, countries, regions, cities, ASNs, ISPs, or cloud regions."})
 
 	err := parser.Parse(os.Args)
 	if err != nil {
@@ -152,7 +153,7 @@ func Execute() {
 		m = trace.ICMPTrace
 	}
 
-	if *fast_trace || *file != "" {
+	if *from != "" && (*fast_trace || *file != "") {
 		var paramsFastTrace = fastTrace.ParamsFastTrace{
 			OSType:         OSType,
 			ICMPMode:       *icmpMode,
@@ -239,6 +240,39 @@ func Execute() {
 				}
 			}()
 		}
+	}
+
+	if *from != "" {
+		executeGlobalpingTraceroute(
+			&trace.GlobalpingOptions{
+				Target: *str,
+				From:   *from,
+				IPv4:   *ipv4Only,
+				IPv6:   *ipv6Only,
+				TCP:    *tcp,
+				UDP:    *udp,
+				Port:   port,
+
+				DisableMaptrace: *disableMaptrace,
+				DataOrigin:      *dataOrigin,
+
+				TablePrint:   *tablePrint,
+				ClassicPrint: *classicPrint,
+				RawPrint:     *rawPrint,
+				JSONPrint:    *jsonPrint,
+			},
+			&trace.Config{
+				OSType:          OSType,
+				DN42:            *dn42,
+				NumMeasurements: *numMeasurements,
+				Lang:            *lang,
+				RDNS:            !*norDNS,
+				AlwaysWaitRDNS:  *alwaysrDNS,
+				IPGeoSource:     ipgeo.GetSource(*dataOrigin),
+				Timeout:         time.Duration(*timeout) * time.Millisecond,
+			},
+		)
+		return
 	}
 
 	var ip net.IP
@@ -445,4 +479,55 @@ func capabilitiesCheck() {
 		fmt.Println("请使用管理员用户执行 `sudo setcap cap_net_raw,cap_net_admin+eip ${your_nexttrace_path}/nexttrace` 命令，赋予相关权限后再运行~")
 		fmt.Println("什么？为什么 ping 普通用户执行不要 root 权限？因为这些工具在管理员安装时就已经被赋予了一些必要的权限，具体请使用 `getcap /usr/bin/ping` 查看")
 	}
+}
+
+func executeGlobalpingTraceroute(opts *trace.GlobalpingOptions, config *trace.Config) {
+	res, measurement, err := trace.GlobalpingTraceroute(opts, config)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if !opts.DisableMaptrace &&
+		(util.StringInSlice(strings.ToUpper(opts.DataOrigin), []string{"LEOMOEAPI", "IPINFO", "IPINFO", "IP-API.COM", "IPAPI.COM"})) {
+		r, err := json.Marshal(res)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		url, err := tracemap.GetMapUrl(string(r))
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		res.TraceMapUrl = url
+	}
+
+	if opts.JSONPrint {
+		r, err := json.Marshal(res)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println(string(r))
+		return
+	}
+
+	fmt.Fprint(color.Output, color.New(color.FgGreen, color.Bold).Sprintf("> %s\n", trace.GlobalpingFormatLocation(&measurement.Results[0])))
+
+	if opts.TablePrint {
+		printer.TracerouteTablePrinter(res)
+	}
+
+	for i := range res.Hops {
+		if opts.ClassicPrint {
+			printer.ClassicPrinter(res, i)
+		} else if opts.RawPrint {
+			printer.EasyPrinter(res, i)
+		} else {
+			printer.RealtimePrinter(res, i)
+		}
+	}
+
+	tracemap.PrintMapUrl(res.TraceMapUrl)
 }

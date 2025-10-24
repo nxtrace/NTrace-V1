@@ -7,6 +7,7 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/google/gopacket v1.1.19
 	github.com/gorilla/websocket v1.5.3
+	github.com/jsdelivr/globalping-cli v1.5.1-0.20251021113849-e3a634e8349d
 	github.com/lionsoul2014/ip2region v2.11.2+incompatible
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/rodaine/table v1.3.0
@@ -22,6 +23,7 @@ require (
 )
 
 require (
+	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
