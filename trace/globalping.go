@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/jsdelivr/globalping-cli/globalping"
@@ -93,15 +94,19 @@ func GlobalpingTraceroute(opts *GlobalpingOptions, config *Config) (*Result, *gl
 
 	result := &Result{}
 	geoMap := map[string]*ipgeo.IPGeoData{}
+	maxTimings := 1
+
 	for i := range gpHops {
-		if len(gpHops[i].Timings) == 0 {
-			hop := mapGlobalpingHop(i+1, &gpHops[i], nil, geoMap, config)
-			result.Hops = append(result.Hops, []Hop{hop})
-			continue
-		}
-		hops := make([]Hop, 0, len(gpHops[i].Timings))
-		for j := range gpHops[i].Timings {
-			hop := mapGlobalpingHop(i+1, &gpHops[i], &gpHops[i].Timings[j], geoMap, config)
+		maxTimings = max(maxTimings, len(gpHops[i].Timings))
+	}
+	for i := range gpHops {
+		hops := make([]Hop, 0, maxTimings)
+		for j := range maxTimings {
+			var timing *globalping.TracerouteTiming
+			if j < len(gpHops[i].Timings) {
+				timing = &gpHops[i].Timings[j]
+			}
+			hop := mapGlobalpingHop(i+1, &gpHops[i], timing, geoMap, config)
 			hops = append(hops, hop)
 		}
 		result.Hops = append(result.Hops, hops)
@@ -149,4 +154,12 @@ func GlobalpingFormatLocation(m *globalping.ProbeMeasurement) string {
 		m.Probe.Continent + ", " +
 		m.Probe.Network + " " +
 		"(AS" + fmt.Sprint(m.Probe.ASN) + ")"
+}
+
+func GlobalpingGetFirstOutputLine(m *globalping.ProbeMeasurement) string {
+	index := strings.Index(m.Result.RawOutput, "\n")
+	if index == -1 {
+		return ""
+	}
+	return m.Result.RawOutput[:index]
 }

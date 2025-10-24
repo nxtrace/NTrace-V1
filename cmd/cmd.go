@@ -615,7 +615,12 @@ func executeGlobalpingTraceroute(opts *trace.GlobalpingOptions, config *trace.Co
 		return
 	}
 
-	fmt.Fprint(color.Output, color.New(color.FgGreen, color.Bold).Sprintf("> %s\n", trace.GlobalpingFormatLocation(&measurement.Results[0])))
+	fmt.Fprintln(color.Output, color.New(color.FgGreen, color.Bold).Sprintf("> %s", trace.GlobalpingFormatLocation(&measurement.Results[0])))
+
+	output := trace.GlobalpingGetFirstOutputLine(&measurement.Results[0])
+	if output != "" {
+		fmt.Fprintln(color.Output, output)
+	}
 
 	if opts.TablePrint {
 		printer.TracerouteTablePrinter(res)
