@@ -75,8 +75,10 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 		IPGeoSource:      ipgeo.GetSource("LeoMoeAPI"),
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
+		SrcDevice:        f.ParamsFastTrace.SrcDev,
 		PktSize:          f.ParamsFastTrace.PktSize,
 		Lang:             f.ParamsFastTrace.Lang,
+		DisableMPLS:      util.DisableMPLS,
 	}
 
 	if oe {
@@ -357,8 +359,10 @@ func testFile(paramsFastTrace ParamsFastTrace, traceMode trace.Method) {
 			IPGeoSource:      ipgeo.GetSource("LeoMoeAPI"),
 			Timeout:          paramsFastTrace.Timeout,
 			SrcAddr:          srcAddr,
+			SrcDevice:        paramsFastTrace.SrcDev,
 			PktSize:          paramsFastTrace.PktSize,
 			Lang:             paramsFastTrace.Lang,
+			DisableMPLS:      util.DisableMPLS,
 		}
 
 		if oe {

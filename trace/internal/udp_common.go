@@ -14,8 +14,15 @@ import (
 	"github.com/nxtrace/NTrace-core/util"
 )
 
-func NewUDPSpec(IPVersion, ICMPMode int, srcIP, dstIP net.IP, dstPort int) *UDPSpec {
-	return &UDPSpec{IPVersion: IPVersion, ICMPMode: ICMPMode, SrcIP: srcIP, DstIP: dstIP, DstPort: dstPort}
+func NewUDPSpec(IPVersion, ICMPMode int, srcIP, dstIP net.IP, dstPort int, srcDev string) *UDPSpec {
+	return &UDPSpec{
+		IPVersion: IPVersion,
+		ICMPMode:  ICMPMode,
+		SrcIP:     srcIP,
+		DstIP:     dstIP,
+		DstPort:   dstPort,
+		SrcDev:    srcDev,
+	}
 }
 
 func (s *UDPSpec) InitICMP() {

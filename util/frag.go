@@ -13,10 +13,10 @@ type IPv4Fragment struct {
 }
 
 // GetMTUByIP 根据给定 IPv4/IPv6 源地址返回所属网卡 MTU，找不到返回 0
-func GetMTUByIP(srcIP net.IP) int {
+func GetMTUByIP(srcIP net.IP, srcDev string) int {
 	// 若已指定网卡名，直接取该网卡的 MTU
-	if SrcDev != "" {
-		if ifi, err := net.InterfaceByName(SrcDev); err == nil && ifi != nil {
+	if srcDev != "" {
+		if ifi, err := net.InterfaceByName(srcDev); err == nil && ifi != nil {
 			return ifi.MTU
 		}
 	}

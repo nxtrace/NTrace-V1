@@ -22,6 +22,7 @@ type UDPSpec struct {
 	SrcIP     net.IP
 	DstIP     net.IP
 	DstPort   int
+	SrcDev    string
 	icmp      net.PacketConn
 	addr      wd.Address
 	handle    wd.Handle

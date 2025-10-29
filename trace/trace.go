@@ -35,6 +35,7 @@ type Config struct {
 	ICMPMode         int
 	SrcAddr          string
 	SrcPort          int
+	SrcDevice        string
 	BeginHop         int
 	MaxHops          int
 	NumMeasurements  int
@@ -55,6 +56,7 @@ type Config struct {
 	AsyncPrinter     func(res *Result)
 	PktSize          int
 	Maptrace         bool
+	DisableMPLS      bool
 }
 
 type Method string
@@ -473,8 +475,8 @@ func (h *Hop) fetchIPData(c Config) error {
 	return <-ipGeoCh
 }
 
-func extractMPLS(msg internal.ReceivedMessage) []string {
-	if util.DisableMPLS {
+func extractMPLS(msg internal.ReceivedMessage, disableMPLS bool) []string {
+	if disableMPLS {
 		return nil
 	}
 

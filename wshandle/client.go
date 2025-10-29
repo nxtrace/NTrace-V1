@@ -28,6 +28,7 @@ type WsConn struct {
 	Interrupt    chan os.Signal  // 终端中止信号
 	Conn         *websocket.Conn // 主连接
 	ConnMux      sync.Mutex      // 连接互斥锁
+	PowProvider  string
 }
 
 var wsconn *WsConn
@@ -139,10 +140,11 @@ func (c *WsConn) recreateWsConn() {
 		// 无环境变量 token
 		if cacheToken == "" {
 			// 无cacheToken, 重新获取 token
-			if util.GetPowProvider() == "" {
+			provider := util.GetPowProvider(c.PowProvider)
+			if provider == "" {
 				jwtToken, err = pow.GetToken(fastIp, host, port)
 			} else {
-				jwtToken, err = pow.GetToken(util.GetPowProvider(), util.GetPowProvider(), port)
+				jwtToken, err = pow.GetToken(provider, provider, port)
 			}
 			if err != nil {
 				if util.EnvDevMode {
@@ -200,7 +202,7 @@ func (c *WsConn) recreateWsConn() {
 	go c.messageReceiveHandler()
 }
 
-func createWsConn() *WsConn {
+func createWsConn(powProviderOverride string) *WsConn {
 	proxyUrl := util.GetProxy()
 	//fmt.Println("正在连接 WS")
 	// 设置终端中断通道
@@ -220,11 +222,12 @@ func createWsConn() *WsConn {
 	}
 	jwtToken, ua := envToken, []string{"Privileged Client"}
 	err := error(nil)
+	powProviderHost := util.GetPowProvider(powProviderOverride)
 	if envToken == "" {
-		if util.GetPowProvider() == "" {
+		if powProviderHost == "" {
 			jwtToken, err = pow.GetToken(fastIp, host, port)
 		} else {
-			jwtToken, err = pow.GetToken(util.GetPowProvider(), util.GetPowProvider(), port)
+			jwtToken, err = pow.GetToken(powProviderHost, powProviderHost, port)
 		}
 		if err != nil {
 			if util.EnvDevMode {
@@ -238,6 +241,7 @@ func createWsConn() *WsConn {
 				MsgReceiveCh: make(chan string, 10),
 				Done:         make(chan struct{}),
 				Interrupt:    interrupt,
+				PowProvider:  powProviderHost,
 			}
 			go wsconn.keepAlive()
 			go wsconn.messageSendHandler()
@@ -272,6 +276,7 @@ func createWsConn() *WsConn {
 		MsgSendCh:    make(chan string, 10),
 		MsgReceiveCh: make(chan string, 10),
 		Interrupt:    interrupt,
+		PowProvider:  powProviderHost,
 	}
 
 	if err != nil {
@@ -294,7 +299,11 @@ func createWsConn() *WsConn {
 }
 
 func New() *WsConn {
-	return createWsConn()
+	return createWsConn("")
+}
+
+func NewWithPowProvider(powProvider string) *WsConn {
+	return createWsConn(powProvider)
 }
 
 func GetWsConn() *WsConn {

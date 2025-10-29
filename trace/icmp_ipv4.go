@@ -52,6 +52,10 @@ func (t *ICMPTracer) waitAllReady(ctx context.Context) {
 	<-time.After(100 * time.Millisecond)
 }
 
+func (t *ICMPTracer) randomSrcPort() bool {
+	return util.EnvRandomPort || t.SrcPort == -1
+}
+
 func (t *ICMPTracer) ttlComp(ttl int) bool {
 	idx := ttl - 1
 	t.res.lock.RLock()
@@ -269,7 +273,7 @@ func (t *ICMPTracer) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && SrcAddr == nil {
 		return nil, errors.New("invalid IPv4 SrcAddr:" + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "icmp")
+	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "icmp", t.randomSrcPort())
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv4 address")
 	}
@@ -349,7 +353,7 @@ func (t *ICMPTracer) Execute() (res *Result, err error) {
 }
 
 func (t *ICMPTracer) handleICMPMessage(msg internal.ReceivedMessage, finish time.Time, seq int) {
-	mpls := extractMPLS(msg)
+	mpls := extractMPLS(msg, t.DisableMPLS)
 
 	// 非阻塞投递；如果队列已满则直接丢弃该任务
 	select {

@@ -436,12 +436,17 @@ func Execute() {
 			&trace.Config{
 				OSType:          OSType,
 				DN42:            *dn42,
+				SrcAddr:         *srcAddr,
+				SrcPort:         *srcPort,
+				SrcDevice:       *srcDev,
 				NumMeasurements: *numMeasurements,
 				Lang:            *lang,
 				RDNS:            !*norDNS,
 				AlwaysWaitRDNS:  *alwaysrDNS,
 				IPGeoSource:     ipgeo.GetSource(*dataOrigin),
 				Timeout:         time.Duration(*timeout) * time.Millisecond,
+				Maptrace:        !*disableMaptrace,
+				DisableMPLS:     util.DisableMPLS || *disableMPLS,
 			},
 		)
 		return
@@ -495,6 +500,7 @@ func Execute() {
 		DN42:             *dn42,
 		SrcAddr:          *srcAddr,
 		SrcPort:          *srcPort,
+		SrcDevice:        *srcDev,
 		BeginHop:         *beginHop,
 		DstIP:            ip,
 		DstPort:          *port,
@@ -510,6 +516,8 @@ func Execute() {
 		IPGeoSource:      ipgeo.GetSource(*dataOrigin),
 		Timeout:          time.Duration(*timeout) * time.Millisecond,
 		PktSize:          *packetSize,
+		Maptrace:         !*disableMaptrace,
+		DisableMPLS:      util.DisableMPLS || *disableMPLS,
 	}
 
 	// 暂时弃用

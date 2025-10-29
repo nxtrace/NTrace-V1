@@ -22,8 +22,7 @@ import (
 	"github.com/nxtrace/NTrace-core/wshandle"
 )
 
-var traceMu sync.Mutex
-var leoConnMu sync.Mutex
+var leoConnLock sync.RWMutex
 
 type traceExecution struct {
 	Req          traceRequest
@@ -223,45 +222,19 @@ func traceHandler(c *gin.Context) {
 	log.Printf("[deploy] trace request target=%s proto=%s provider=%s lang=%s ipv4_only=%t ipv6_only=%t", setup.Target, setup.Protocol, setup.DataProvider, setup.Config.Lang, setup.Req.IPv4Only, setup.Req.IPv6Only)
 	log.Printf("[deploy] target resolved target=%s ip=%s via dot=%s", setup.Target, setup.IP, strings.ToLower(setup.Req.DotServer))
 
-	traceMu.Lock()
-	defer traceMu.Unlock()
-
-	prevSrcPort := util.SrcPort
-	prevDstIP := util.DstIP
-	prevSrcDev := util.SrcDev
-	prevDisableMPLS := util.DisableMPLS
-	prevPowProvider := util.PowProviderParam
-	defer func() {
-		util.SrcPort = prevSrcPort
-		util.DstIP = prevDstIP
-		util.SrcDev = prevSrcDev
-		util.DisableMPLS = prevDisableMPLS
-		util.PowProviderParam = prevPowProvider
-	}()
-
 	if setup.NeedsLeoWS {
-		if setup.PowProvider != "" {
+		providerHost := util.GetPowProvider(setup.PowProvider)
+		if providerHost != "" {
+			log.Printf("[deploy] LeoMoeAPI using PoW provider=%s", providerHost)
+		} else if setup.PowProvider != "" {
 			log.Printf("[deploy] LeoMoeAPI using custom PoW provider=%s", setup.PowProvider)
 		} else {
 			log.Printf("[deploy] LeoMoeAPI using default PoW provider")
 		}
-		util.PowProviderParam = setup.PowProvider
-		ensureLeoMoeConnection()
+		ensureLeoMoeConnection(setup.PowProvider)
 	} else if setup.PowProvider != "" {
 		log.Printf("[deploy] overriding PoW provider=%s", setup.PowProvider)
-		util.PowProviderParam = setup.PowProvider
-	} else {
-		util.PowProviderParam = ""
 	}
-
-	util.SrcPort = setup.Req.SourcePort
-	util.DstIP = setup.IP.String()
-	if setup.Req.SourceDevice != "" {
-		util.SrcDev = setup.Req.SourceDevice
-	} else {
-		util.SrcDev = ""
-	}
-	util.DisableMPLS = setup.Req.DisableMPLS
 
 	configured := setup.Config
 	log.Printf("[deploy] starting trace target=%s resolved=%s method=%s lang=%s queries=%d maxHops=%d", setup.Target, setup.IP.String(), string(setup.Method), configured.Lang, configured.NumMeasurements, configured.MaxHops)
@@ -358,6 +331,7 @@ func buildTraceConfig(req traceRequest, ip net.IP, dataProvider string, port int
 		ICMPMode:         req.ICMPMode,
 		SrcAddr:          req.SourceAddress,
 		SrcPort:          req.SourcePort,
+		SrcDevice:        req.SourceDevice,
 		BeginHop:         beginHop,
 		MaxHops:          maxHops,
 		NumMeasurements:  queries,
@@ -375,6 +349,7 @@ func buildTraceConfig(req traceRequest, ip net.IP, dataProvider string, port int
 		DN42:             req.DN42,
 		PktSize:          packetSize,
 		Maptrace:         !req.DisableMaptrace,
+		DisableMPLS:      req.DisableMPLS,
 	}
 }
 
@@ -543,21 +518,64 @@ func shouldGenerateMap(provider string) bool {
 	return false
 }
 
-func ensureLeoMoeConnection() {
-	leoConnMu.Lock()
-	defer leoConnMu.Unlock()
-
+func ensureLeoMoeConnection(powProvider string) {
+	leoConnLock.RLock()
 	conn := wshandle.GetWsConn()
-	if conn == nil || conn.MsgSendCh == nil || conn.MsgReceiveCh == nil {
-		log.Println("[deploy] establishing initial LeoMoeAPI websocket")
-		wshandle.New()
+	ready := isLeoConnReady(conn, powProvider)
+	leoConnLock.RUnlock()
+	if ready {
 		return
 	}
 
-	if !conn.Connected && !conn.Connecting {
-		log.Println("[deploy] reconnecting LeoMoeAPI websocket")
-		wshandle.New()
+	leoConnLock.Lock()
+	defer leoConnLock.Unlock()
+
+	conn = wshandle.GetWsConn()
+	if isLeoConnReady(conn, powProvider) {
+		return
 	}
+
+	providerHost := util.GetPowProvider(powProvider)
+	if providerHost != "" {
+		switch {
+		case conn == nil:
+			log.Printf("[deploy] establishing LeoMoeAPI websocket provider=%s", providerHost)
+		case !strings.EqualFold(conn.PowProvider, providerHost):
+			log.Printf("[deploy] switching LeoMoeAPI websocket provider=%s", providerHost)
+		case !conn.Connected:
+			log.Printf("[deploy] reconnecting LeoMoeAPI websocket provider=%s", providerHost)
+		}
+		wshandle.NewWithPowProvider(powProvider)
+		return
+	}
+
+	if conn == nil {
+		log.Println("[deploy] establishing initial LeoMoeAPI websocket")
+	} else {
+		log.Println("[deploy] reconnecting LeoMoeAPI websocket")
+	}
+	wshandle.New()
+}
+
+func isLeoConnReady(conn *wshandle.WsConn, powProvider string) bool {
+	if conn == nil || conn.MsgSendCh == nil || conn.MsgReceiveCh == nil {
+		return false
+	}
+	if !leoProviderMatches(conn, powProvider) {
+		return false
+	}
+	return conn.Connected || conn.Connecting
+}
+
+func leoProviderMatches(conn *wshandle.WsConn, powProvider string) bool {
+	expected := util.GetPowProvider(powProvider)
+	if expected == "" {
+		expected = strings.TrimSpace(powProvider)
+	}
+	if expected == "" {
+		return true
+	}
+	return strings.EqualFold(conn.PowProvider, expected)
 }
 
 func localizeGeo(src *ipgeo.IPGeoData, lang string) *ipgeo.IPGeoData {

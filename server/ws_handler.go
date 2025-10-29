@@ -254,45 +254,19 @@ func runMTRTrace(session *wsTraceSession, setup *traceExecution) {
 }
 
 func executeTrace(session *wsTraceSession, setup *traceExecution, configure func(*trace.Config)) (*trace.Result, time.Duration, error) {
-	traceMu.Lock()
-	defer traceMu.Unlock()
-
-	prevSrcPort := util.SrcPort
-	prevDstIP := util.DstIP
-	prevSrcDev := util.SrcDev
-	prevDisableMPLS := util.DisableMPLS
-	prevPowProvider := util.PowProviderParam
-	defer func() {
-		util.SrcPort = prevSrcPort
-		util.DstIP = prevDstIP
-		util.SrcDev = prevSrcDev
-		util.DisableMPLS = prevDisableMPLS
-		util.PowProviderParam = prevPowProvider
-	}()
-
 	if setup.NeedsLeoWS {
-		if setup.PowProvider != "" {
+		providerHost := util.GetPowProvider(setup.PowProvider)
+		if providerHost != "" {
+			log.Printf("[deploy] (ws) LeoMoeAPI using PoW provider=%s", providerHost)
+		} else if setup.PowProvider != "" {
 			log.Printf("[deploy] (ws) LeoMoeAPI using custom PoW provider=%s", setup.PowProvider)
 		} else {
 			log.Printf("[deploy] (ws) LeoMoeAPI using default PoW provider")
 		}
-		util.PowProviderParam = setup.PowProvider
-		ensureLeoMoeConnection()
+		ensureLeoMoeConnection(setup.PowProvider)
 	} else if setup.PowProvider != "" {
 		log.Printf("[deploy] (ws) overriding PoW provider=%s", setup.PowProvider)
-		util.PowProviderParam = setup.PowProvider
-	} else {
-		util.PowProviderParam = ""
 	}
-
-	util.SrcPort = setup.Req.SourcePort
-	util.DstIP = setup.IP.String()
-	if setup.Req.SourceDevice != "" {
-		util.SrcDev = setup.Req.SourceDevice
-	} else {
-		util.SrcDev = ""
-	}
-	util.DisableMPLS = setup.Req.DisableMPLS
 
 	config := setup.Config
 	if configure != nil {

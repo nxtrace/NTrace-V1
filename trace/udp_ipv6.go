@@ -54,6 +54,10 @@ func (t *UDPTracerIPv6) waitAllReady(ctx context.Context) {
 	<-time.After(100 * time.Millisecond)
 }
 
+func (t *UDPTracerIPv6) randomSrcPort() bool {
+	return util.EnvRandomPort || t.SrcPort == -1
+}
+
 func (t *UDPTracerIPv6) ttlComp(ttl int) bool {
 	idx := ttl - 1
 	t.res.lock.RLock()
@@ -259,7 +263,7 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && !util.IsIPv6(SrcAddr) {
 		return nil, errors.New("invalid IPv6 SrcAddr: " + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPortv6(t.DstIP, SrcAddr, "udp6")
+	t.SrcIP, _ = util.LocalIPPortv6(t.DstIP, SrcAddr, "udp6", t.randomSrcPort())
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv6 address")
 	}
@@ -270,6 +274,7 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 		t.SrcIP,
 		t.DstIP,
 		t.DstPort,
+		t.SrcDevice,
 	)
 
 	s.InitICMP()
@@ -340,7 +345,7 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 }
 
 func (t *UDPTracerIPv6) handleICMPMessage(msg internal.ReceivedMessage, finish time.Time, data []byte) {
-	mpls := extractMPLS(msg)
+	mpls := extractMPLS(msg, t.DisableMPLS)
 
 	header, err := util.GetICMPResponsePayload(data)
 	if err != nil {
@@ -397,10 +402,10 @@ func (t *UDPTracerIPv6) send(ctx context.Context, s *internal.UDPSpec, ttl, i in
 	seq := (ttl << 8) | (i & 0xFF)
 
 	_, SrcPort := func() (net.IP, int) {
-		if !util.RandomPortEnabled() && t.SrcPort > 0 {
+		if !t.randomSrcPort() && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
-		return util.LocalIPPortv6(t.DstIP, t.SrcIP, "udp6")
+		return util.LocalIPPortv6(t.DstIP, t.SrcIP, "udp6", t.randomSrcPort())
 	}()
 
 	ipHeader := &layers.IPv6{

@@ -14,8 +14,16 @@ import (
 	"github.com/nxtrace/NTrace-core/util"
 )
 
-func NewTCPSpec(IPVersion, ICMPMode int, srcIP, dstIP net.IP, dstPort int, pktSize int) *TCPSpec {
-	return &TCPSpec{IPVersion: IPVersion, ICMPMode: ICMPMode, SrcIP: srcIP, DstIP: dstIP, DstPort: dstPort, PktSize: pktSize}
+func NewTCPSpec(IPVersion, ICMPMode int, srcIP, dstIP net.IP, dstPort int, pktSize int, srcDev string) *TCPSpec {
+	return &TCPSpec{
+		IPVersion: IPVersion,
+		ICMPMode:  ICMPMode,
+		SrcIP:     srcIP,
+		DstIP:     dstIP,
+		DstPort:   dstPort,
+		PktSize:   pktSize,
+		SrcDev:    srcDev,
+	}
 }
 
 func (s *TCPSpec) InitICMP() {

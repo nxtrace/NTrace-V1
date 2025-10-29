@@ -49,10 +49,6 @@ func AddrIP(a net.Addr) net.IP {
 	}
 }
 
-func RandomPortEnabled() bool {
-	return EnvRandomPort || SrcPort == -1
-}
-
 func LookupAddr(addr string) ([]string, error) {
 	// 如果在缓存中找到，直接返回
 	if hostname, ok := rDNSCache.Load(addr); ok {
@@ -184,9 +180,9 @@ func getLocalIPPortv6(dstIP net.IP, srcIP net.IP, proto string) (net.IP, int) {
 }
 
 // LocalIPPort 根据目标 IPv4（以及可选的源 IPv4 与协议）返回本地 IP 与一个可用端口
-func LocalIPPort(dstIP net.IP, srcIP net.IP, proto string) (net.IP, int) {
+func LocalIPPort(dstIP net.IP, srcIP net.IP, proto string, forceRandom bool) (net.IP, int) {
 	// 若开启随机端口模式，每次直接计算并返回
-	if RandomPortEnabled() {
+	if forceRandom || EnvRandomPort {
 		return getLocalIPPort(dstIP, srcIP, proto)
 	}
 
@@ -202,9 +198,9 @@ func LocalIPPort(dstIP net.IP, srcIP net.IP, proto string) (net.IP, int) {
 }
 
 // LocalIPPortv6 根据目标 IPv6（以及可选的源 IPv6 与协议）返回本地 IP 与一个可用端口
-func LocalIPPortv6(dstIP net.IP, srcIP net.IP, proto string) (net.IP, int) {
+func LocalIPPortv6(dstIP net.IP, srcIP net.IP, proto string, forceRandom bool) (net.IP, int) {
 	// 若开启随机端口模式，每次直接计算并返回
-	if RandomPortEnabled() {
+	if forceRandom || EnvRandomPort {
 		return getLocalIPPortv6(dstIP, srcIP, proto)
 	}
 
@@ -325,17 +321,19 @@ func GetProxy() *url.URL {
 	return proxyURL
 }
 
-func GetPowProvider() string {
+func GetPowProvider(overrides ...string) string {
 	var powProvider string
-	if PowProviderParam == "" {
-		powProvider = EnvPowProvider
-	} else {
+	if len(overrides) > 0 && overrides[0] != "" {
+		powProvider = overrides[0]
+	} else if PowProviderParam != "" {
 		powProvider = PowProviderParam
+	} else {
+		powProvider = EnvPowProvider
 	}
-	if powProvider == "sakura" {
+	if strings.EqualFold(powProvider, "sakura") {
 		return "pow.nexttrace.owo.13a.com"
 	}
-	return ""
+	return strings.TrimSpace(powProvider)
 }
 
 func StringInSlice(val string, list []string) bool {

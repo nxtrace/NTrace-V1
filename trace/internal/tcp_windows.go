@@ -22,6 +22,7 @@ type TCPSpec struct {
 	SrcIP     net.IP
 	DstIP     net.IP
 	DstPort   int
+	SrcDev    string
 	icmp      net.PacketConn
 	PktSize   int
 	addr      wd.Address

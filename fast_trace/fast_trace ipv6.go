@@ -44,8 +44,10 @@ func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
 		IPGeoSource:      ipgeo.GetSource("LeoMoeAPI"),
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
+		SrcDevice:        f.ParamsFastTrace.SrcDev,
 		PktSize:          f.ParamsFastTrace.PktSize,
 		Lang:             f.ParamsFastTrace.Lang,
+		DisableMPLS:      util.DisableMPLS,
 	}
 
 	if oe {

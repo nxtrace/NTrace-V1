@@ -59,6 +59,10 @@ func (t *UDPTracer) waitAllReady(ctx context.Context) {
 	<-time.After(100 * time.Millisecond)
 }
 
+func (t *UDPTracer) randomSrcPort() bool {
+	return util.EnvRandomPort || t.SrcPort == -1
+}
+
 func (t *UDPTracer) ttlComp(ttl int) bool {
 	idx := ttl - 1
 	t.res.lock.RLock()
@@ -307,7 +311,7 @@ func (t *UDPTracer) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && SrcAddr == nil {
 		return nil, errors.New("invalid IPv4 SrcAddr:" + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "udp")
+	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "udp", t.randomSrcPort())
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv4 address")
 	}
@@ -318,6 +322,7 @@ func (t *UDPTracer) Execute() (res *Result, err error) {
 		t.SrcIP,
 		t.DstIP,
 		t.DstPort,
+		t.SrcDevice,
 	)
 
 	s.InitICMP()
@@ -404,7 +409,7 @@ func (t *UDPTracer) Execute() (res *Result, err error) {
 }
 
 func (t *UDPTracer) handleICMPMessage(msg internal.ReceivedMessage, finish time.Time, data []byte) {
-	mpls := extractMPLS(msg)
+	mpls := extractMPLS(msg, t.DisableMPLS)
 
 	seq, err := util.GetUDPSeq(data)
 	if err != nil {
@@ -461,10 +466,10 @@ func (t *UDPTracer) send(ctx context.Context, s *internal.UDPSpec, ttl, i int) e
 	seq := (ttl << 8) | (i & 0xFF)
 
 	_, SrcPort := func() (net.IP, int) {
-		if !util.RandomPortEnabled() && t.SrcPort > 0 {
+		if !t.randomSrcPort() && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
-		return util.LocalIPPort(t.DstIP, t.SrcIP, "udp")
+		return util.LocalIPPort(t.DstIP, t.SrcIP, "udp", t.randomSrcPort())
 	}()
 
 	ipHeader := &layers.IPv4{

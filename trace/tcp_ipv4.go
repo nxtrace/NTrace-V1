@@ -54,6 +54,10 @@ func (t *TCPTracer) waitAllReady(ctx context.Context) {
 	<-time.After(100 * time.Millisecond)
 }
 
+func (t *TCPTracer) randomSrcPort() bool {
+	return util.EnvRandomPort || t.SrcPort == -1
+}
+
 func (t *TCPTracer) ttlComp(ttl int) bool {
 	idx := ttl - 1
 	t.res.lock.RLock()
@@ -259,7 +263,7 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && SrcAddr == nil {
 		return nil, errors.New("invalid IPv4 SrcAddr:" + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "tcp")
+	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "tcp", t.randomSrcPort())
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv4 address")
 	}
@@ -271,6 +275,7 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 		t.DstIP,
 		t.DstPort,
 		t.PktSize,
+		t.SrcDevice,
 	)
 
 	s.InitICMP()
@@ -355,7 +360,7 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 }
 
 func (t *TCPTracer) handleICMPMessage(msg internal.ReceivedMessage, finish time.Time, data []byte) {
-	mpls := extractMPLS(msg)
+	mpls := extractMPLS(msg, t.DisableMPLS)
 
 	header, err := util.GetICMPResponsePayload(data)
 	if err != nil {
@@ -412,10 +417,10 @@ func (t *TCPTracer) send(ctx context.Context, s *internal.TCPSpec, ttl, i int) e
 	seq := (ttl << 24) | (i & 0xFFFFFF)
 
 	_, SrcPort := func() (net.IP, int) {
-		if !util.RandomPortEnabled() && t.SrcPort > 0 {
+		if !t.randomSrcPort() && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
-		return util.LocalIPPort(t.DstIP, t.SrcIP, "tcp")
+		return util.LocalIPPort(t.DstIP, t.SrcIP, "tcp", t.randomSrcPort())
 	}()
 
 	ipHeader := &layers.IPv4{
