@@ -279,7 +279,7 @@ function renderMeta(summary = {}) {
   if (summary.iteration) {
     rows.push(`${t('metaIterations')}：<strong>${escapeHTML(summary.iteration)}</strong>`);
   }
-  if (summary.trace_map_url) {
+  if (summary.trace_map_url && isSafeURL(summary.trace_map_url)) {
     // t('mapOpen') is assumed not user-supplied; escape only the URL
     rows.push(`${t('metaMap')}：<a href="${escapeHTML(summary.trace_map_url)}" target="_blank" rel="noreferrer">${t('mapOpen')}</a>`);
   }
@@ -576,6 +576,15 @@ function escapeHTML(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function isSafeURL(url) {
+  try {
+    const parsed = new URL(url, window.location.href);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function createMetaItem(label, value, allowHTML = false) {
