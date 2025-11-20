@@ -23,7 +23,11 @@ var winDivertDLL32 []byte
 //go:embed x86/WinDivert32.sys
 var winDivertSYS32 []byte
 
-// PrepareWinDivertRuntime 将内嵌的 WinDivert DLL/驱动解压到可执行文件同目录
+// PrepareWinDivertRuntime extracts the embedded WinDivert DLL and driver to the directory
+// containing the current executable. It selects 32- or 64-bit assets based on runtime.GOARCH
+// and writes them as WinDivert.dll and WinDivert32.sys or WinDivert64.sys, overwriting files
+// only when their contents differ; an error is returned if the executable path cannot be
+// determined, the architecture is unsupported, or writing the files fails.
 func PrepareWinDivertRuntime() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -44,18 +48,20 @@ func PrepareWinDivertRuntime() error {
 	}
 
 	// DLL
-	if err = writeIfChecksumDiff(filepath.Join(exeDir, "WinDivert.dll"), dllBytes); err != nil {
+	if err := writeIfChecksumDiff(filepath.Join(exeDir, "WinDivert.dll"), dllBytes); err != nil {
 		return err
 	}
 
 	// SYS
-	if err = writeIfChecksumDiff(filepath.Join(exeDir, sysName), sysBytes); err != nil {
+	if err := writeIfChecksumDiff(filepath.Join(exeDir, sysName), sysBytes); err != nil {
 		return err
 	}
 	return nil
 }
 
-// writeIfChecksumDiff 通过比较 SHA-256 来判断是否覆写目标文件
+// writeIfChecksumDiff writes data to dst only when the SHA-256 checksum of data differs from the existing file.
+// It creates or overwrites dst with file mode 0644 when the checksums differ or when dst cannot be read.
+// Returns any error encountered while reading the existing file or writing dst.
 func writeIfChecksumDiff(dst string, data []byte) error {
 	file, err := os.Open(dst)
 	if err != nil {
@@ -63,7 +69,7 @@ func writeIfChecksumDiff(dst string, data []byte) error {
 	}
 
 	hash := sha256.New()
-	if _, err = io.Copy(hash, file); err != nil {
+	if _, err := io.Copy(hash, file); err != nil {
 		_ = file.Close()                      // 先关再写，避免 Windows 共享冲突
 		return os.WriteFile(dst, data, 0o644) // 读失败，则尝试覆盖
 	}
