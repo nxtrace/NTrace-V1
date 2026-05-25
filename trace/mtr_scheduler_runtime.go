@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"sync/atomic"
 	"time"
+
+	"github.com/nxtrace/NTrace-core/ipgeo"
 )
 
 const (
@@ -29,36 +32,38 @@ const (
 )
 
 type mtrSchedulerRuntime struct {
-	ctx                  context.Context
-	metadataCtx          context.Context
-	metadataCancel       context.CancelFunc
-	doneCh               chan struct{}
-	prober               mtrTTLProber
-	agg                  *MTRAggregator
-	cfg                  mtrSchedulerConfig
-	onSnapshot           MTROnSnapshot
-	onProbe              func(result mtrProbeResult, iteration int, at time.Time)
-	beginHop             int
-	maxHops              int
-	parallelism          int
-	hopInterval          time.Duration
-	progressDelay        time.Duration
-	maxConsecErrs        int
-	maxInFlightHop       int
-	states               []mtrHopState
-	generation           uint64
-	knownFinalTTL        int32
-	inFlight             int
-	resultCh             chan mtrCompletedProbe
-	metadataCh           chan mtrMetadataResult
-	metadataGeoSlots     chan struct{}
-	metadataHostSlots    chan struct{}
-	metadataGeoInFlight  map[string]uint64
-	metadataHostInFlight map[string]uint64
-	metadataCache        map[string]mtrMetadataPatch
-	metadataGeoAttempts  map[string]int
-	metadataHostAttempts map[string]int
-	lastSnapshot         time.Time
+	ctx                   context.Context
+	metadataCtx           context.Context
+	metadataCancel        context.CancelFunc
+	doneCh                chan struct{}
+	prober                mtrTTLProber
+	agg                   *MTRAggregator
+	cfg                   mtrSchedulerConfig
+	onSnapshot            MTROnSnapshot
+	onProbe               func(result mtrProbeResult, iteration int, at time.Time)
+	beginHop              int
+	maxHops               int
+	parallelism           int
+	hopInterval           time.Duration
+	progressDelay         time.Duration
+	maxConsecErrs         int
+	maxInFlightHop        int
+	states                []mtrHopState
+	generation            uint64
+	knownFinalTTL         int32
+	inFlight              int
+	resultCh              chan mtrCompletedProbe
+	metadataCh            chan mtrMetadataResult
+	metadataGeoSlots      chan struct{}
+	metadataHostSlots     chan struct{}
+	metadataGeoInFlight   map[string]uint64
+	metadataHostInFlight  map[string]uint64
+	metadataGeoBatch      map[string]mtrProbeResult
+	metadataGeoBatchOrder []string
+	metadataCache         map[string]mtrMetadataPatch
+	metadataGeoAttempts   map[string]int
+	metadataHostAttempts  map[string]int
+	lastSnapshot          time.Time
 }
 
 type mtrMetadataResult struct {
@@ -150,6 +155,7 @@ func newMTRSchedulerRuntime(
 		metadataHostSlots:    make(chan struct{}, mtrAsyncMetadataHostConcurrency),
 		metadataGeoInFlight:  make(map[string]uint64),
 		metadataHostInFlight: make(map[string]uint64),
+		metadataGeoBatch:     make(map[string]mtrProbeResult),
 		metadataCache:        make(map[string]mtrMetadataPatch),
 		metadataGeoAttempts:  make(map[string]int),
 		metadataHostAttempts: make(map[string]int),
@@ -184,6 +190,7 @@ func (rt *mtrSchedulerRuntime) run() error {
 			}
 		case <-tick.C:
 			rt.handleReset()
+			rt.flushGeoMetadataBatch()
 			rt.scheduleReady()
 			if rt.isDone() {
 				rt.maybeSnapshot(true)
@@ -362,7 +369,8 @@ func (rt *mtrSchedulerRuntime) shouldFetchMetadataAsync(result mtrProbeResult) b
 	if rt.cfg.BaseConfig.IPGeoSource == nil && !rt.cfg.BaseConfig.RDNS {
 		return false
 	}
-	needsGeo := rt.cfg.BaseConfig.IPGeoSource != nil && result.Geo == nil
+	ip := mtrAddrString(result.Addr)
+	needsGeo := rt.cfg.BaseConfig.IPGeoSource != nil && !mtrGeoMetadataCompleteForIP(ip, result.Geo, rt.cfg.BaseConfig.DN42)
 	needsHost := rt.cfg.BaseConfig.RDNS && result.Hostname == ""
 	return needsGeo || needsHost
 }
@@ -392,7 +400,7 @@ func (rt *mtrSchedulerRuntime) maybeLaunchGeoMetadataLookup(
 	gen uint64,
 	allowDN42IPOnly bool,
 ) {
-	if cfg.IPGeoSource == nil || result.Geo != nil {
+	if cfg.IPGeoSource == nil || mtrGeoMetadataCompleteForIP(ip, result.Geo, cfg.DN42) {
 		return
 	}
 	if _, ok := rt.metadataGeoInFlight[ip]; ok {
@@ -409,6 +417,10 @@ func (rt *mtrSchedulerRuntime) maybeLaunchGeoMetadataLookup(
 	// DN42 的 Geo 查询会把 PTR 拼进 "ip,host"。RDNS 开启但 host 还没出来时，
 	// 先等 Host lookup 结束，避免异步拆分后把纯 IP 结果写入缓存。
 	if cfg.DN42 && cfg.RDNS && host == "" && !allowDN42IPOnly {
+		return
+	}
+	if rt.shouldBatchGeoMetadata(cfg) {
+		rt.queueGeoMetadataBatch(ip, result, gen)
 		return
 	}
 	rt.metadataGeoInFlight[ip] = gen
@@ -437,6 +449,119 @@ func (rt *mtrSchedulerRuntime) maybeLaunchHostMetadataLookup(ip string, result m
 	}, cfg)
 }
 
+func (rt *mtrSchedulerRuntime) shouldBatchGeoMetadata(cfg Config) bool {
+	return !cfg.DN42 && ipgeo.CanUseNextTraceAPIV4Batch(cfg.IPGeoSource)
+}
+
+func (rt *mtrSchedulerRuntime) queueGeoMetadataBatch(ip string, result mtrProbeResult, gen uint64) {
+	rt.metadataGeoInFlight[ip] = gen
+	rt.metadataGeoAttempts[ip]++
+	if _, ok := rt.metadataGeoBatch[ip]; !ok {
+		rt.metadataGeoBatchOrder = append(rt.metadataGeoBatchOrder, ip)
+	}
+	rt.metadataGeoBatch[ip] = result
+	if len(rt.metadataGeoBatch) >= 64 {
+		rt.flushGeoMetadataBatch()
+	}
+}
+
+func (rt *mtrSchedulerRuntime) flushGeoMetadataBatch() {
+	if len(rt.metadataGeoBatch) == 0 {
+		return
+	}
+	ips := rt.nextGeoMetadataBatchIPs()
+	if len(ips) == 0 {
+		return
+	}
+	cfg := rt.cfg.BaseConfig
+	cfg.GeoLookupOffset = rt.maxGeoMetadataBatchOffset(ips)
+	generationCtx := rt.metadataCtx
+	if generationCtx == nil {
+		generationCtx = rt.ctx
+	}
+	go rt.runGeoMetadataBatchLookup(generationCtx, rt.generation, ips, cfg)
+}
+
+func (rt *mtrSchedulerRuntime) nextGeoMetadataBatchIPs() []string {
+	limit := 64
+	if len(rt.metadataGeoBatchOrder) < limit {
+		limit = len(rt.metadataGeoBatchOrder)
+	}
+	ips := make([]string, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	remaining := rt.metadataGeoBatchOrder[:0]
+	for _, ip := range rt.metadataGeoBatchOrder {
+		if _, ok := rt.metadataGeoBatch[ip]; !ok {
+			continue
+		}
+		if len(ips) < limit {
+			if _, dup := seen[ip]; !dup {
+				ips = append(ips, ip)
+				seen[ip] = struct{}{}
+			}
+			delete(rt.metadataGeoBatch, ip)
+			continue
+		}
+		remaining = append(remaining, ip)
+	}
+	rt.metadataGeoBatchOrder = remaining
+	if len(ips) > 1 {
+		sort.Strings(ips)
+	}
+	return ips
+}
+
+func (rt *mtrSchedulerRuntime) maxGeoMetadataBatchOffset(ips []string) int {
+	offset := 0
+	for _, ip := range ips {
+		attempt := rt.metadataGeoAttempts[ip] - 1
+		if attempt > offset {
+			offset = attempt
+		}
+	}
+	return offset
+}
+
+func (rt *mtrSchedulerRuntime) runGeoMetadataBatchLookup(generationCtx context.Context, gen uint64, ips []string, cfg Config) {
+	if !rt.acquireMetadataSlot(generationCtx, rt.metadataGeoSlots) {
+		return
+	}
+	defer rt.releaseMetadataSlot(rt.metadataGeoSlots)
+
+	timeout := mtrMetadataLookupTimeout(mtrMetadataKindGeo, cfg.Timeout, cfg.NumMeasurements, cfg.GeoLookupOffset)
+	lookupCtx, cancel := context.WithTimeout(generationCtx, timeout)
+	defer cancel()
+	results, _, err := lookupMTRGeoBatch(lookupCtx, ips, timeout)
+	if generationCtx.Err() != nil {
+		return
+	}
+	if err != nil {
+		rt.publishGeoMetadataBatchFailure(generationCtx, gen, ips)
+		return
+	}
+	for _, result := range results {
+		patch := mtrMetadataPatch{ip: result.IP}
+		if result.OK {
+			patch.geo = result.Geo
+		}
+		if !rt.publishMetadataResult(generationCtx, mtrMetadataResult{patch: patch, kind: mtrMetadataKindGeo, gen: gen}) {
+			return
+		}
+	}
+}
+
+func (rt *mtrSchedulerRuntime) publishGeoMetadataBatchFailure(ctx context.Context, gen uint64, ips []string) {
+	for _, ip := range ips {
+		if !rt.publishMetadataResult(ctx, mtrMetadataResult{
+			patch: mtrMetadataPatch{ip: ip},
+			kind:  mtrMetadataKindGeo,
+			gen:   gen,
+		}) {
+			return
+		}
+	}
+}
+
 func (rt *mtrSchedulerRuntime) runMetadataLookup(
 	generationCtx context.Context,
 	gen uint64,
@@ -457,10 +582,17 @@ func (rt *mtrSchedulerRuntime) runMetadataLookup(
 	if generationCtx.Err() != nil {
 		return
 	}
+	rt.publishMetadataResult(generationCtx, mtrMetadataResult{patch: patch, kind: kind, gen: gen})
+}
+
+func (rt *mtrSchedulerRuntime) publishMetadataResult(ctx context.Context, result mtrMetadataResult) bool {
 	select {
-	case rt.metadataCh <- mtrMetadataResult{patch: patch, kind: kind, gen: gen}:
-	case <-generationCtx.Done():
+	case rt.metadataCh <- result:
+		return true
+	case <-ctx.Done():
+		return false
 	case <-rt.doneCh:
+		return false
 	}
 }
 
@@ -533,7 +665,7 @@ func (rt *mtrSchedulerRuntime) maybeLaunchDN42GeoAfterHostResult(result mtrMetad
 	}
 	ip := result.patch.ip
 	cached := rt.metadataCache[ip]
-	if ip == "" || cached.geo != nil {
+	if ip == "" || mtrGeoMetadataCompleteForIP(ip, cached.geo, cfg.DN42) {
 		return
 	}
 	if cached.host == "" && !rt.metadataHostRetriesExhausted(ip) {
@@ -588,7 +720,7 @@ func (rt *mtrSchedulerRuntime) maybeRetryMetadataLookup(result mtrMetadataResult
 func (rt *mtrSchedulerRuntime) metadataPatchNeedsRetry(kind mtrMetadataKind, patch mtrMetadataPatch) bool {
 	switch kind {
 	case mtrMetadataKindGeo:
-		return rt.cfg.BaseConfig.IPGeoSource != nil && patch.geo == nil
+		return rt.cfg.BaseConfig.IPGeoSource != nil && !mtrGeoMetadataCompleteForIP(patch.ip, patch.geo, rt.cfg.BaseConfig.DN42)
 	case mtrMetadataKindHost:
 		return rt.cfg.BaseConfig.RDNS && patch.host == ""
 	default:
@@ -617,8 +749,10 @@ func (rt *mtrSchedulerRuntime) cacheMetadataPatch(kind mtrMetadataKind, patch mt
 	switch kind {
 	case mtrMetadataKindGeo:
 		if patch.geo != nil {
-			delete(rt.metadataGeoAttempts, patch.ip)
-			if cached.geo == nil {
+			if mtrGeoMetadataCompleteForIP(patch.ip, patch.geo, rt.cfg.BaseConfig.DN42) {
+				delete(rt.metadataGeoAttempts, patch.ip)
+			}
+			if cached.geo == nil || !mtrGeoMetadataCompleteForIP(patch.ip, cached.geo, rt.cfg.BaseConfig.DN42) {
 				cached.geo = patch.geo
 			}
 		}
@@ -757,7 +891,7 @@ func (rt *mtrSchedulerRuntime) isDone() bool {
 	if rt.inFlight != 0 {
 		return false
 	}
-	return len(rt.metadataGeoInFlight) == 0 && len(rt.metadataHostInFlight) == 0
+	return len(rt.metadataGeoInFlight) == 0 && len(rt.metadataHostInFlight) == 0 && len(rt.metadataGeoBatch) == 0
 }
 
 func (rt *mtrSchedulerRuntime) handleReset() {
@@ -772,6 +906,8 @@ func (rt *mtrSchedulerRuntime) handleReset() {
 	}
 	clear(rt.metadataGeoInFlight)
 	clear(rt.metadataHostInFlight)
+	clear(rt.metadataGeoBatch)
+	rt.metadataGeoBatchOrder = nil
 	clear(rt.metadataCache)
 	clear(rt.metadataGeoAttempts)
 	clear(rt.metadataHostAttempts)

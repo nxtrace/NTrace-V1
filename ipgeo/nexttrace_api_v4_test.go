@@ -940,6 +940,148 @@ func TestNextTraceAPIV4ClientLookupBuildsRequestAndParsesResponse(t *testing.T) 
 	}
 }
 
+func TestNextTraceAPIV4ClientBatchLookupBuildsRequestAndParsesResponse(t *testing.T) {
+	expires := "2026-05-22T12:00:00Z"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/v4/ipGeo/batch" {
+			t.Fatalf("path = %q, want /v4/ipGeo/batch", r.URL.Path)
+		}
+		if r.URL.RawQuery != "" {
+			t.Fatalf("query = %q, want empty", r.URL.RawQuery)
+		}
+		if got := r.Header.Get(nextTraceAPIV4TokenHeader); got != "test-token" {
+			t.Fatalf("%s = %q, want test-token", nextTraceAPIV4TokenHeader, got)
+		}
+		if got := r.Header.Get("Accept"); got != "application/json" {
+			t.Fatalf("Accept = %q, want application/json", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("Content-Type = %q, want application/json", got)
+		}
+		if got := r.Header.Get("User-Agent"); got != util.UserAgent {
+			t.Fatalf("User-Agent = %q, want %q", got, util.UserAgent)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if string(body) != `{"ips":["1.1.1.1","8.8.8.8"]}` {
+			t.Fatalf("request body = %q, want ordered ips JSON", string(body))
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("X-NextTrace-Quota-Remaining", "993")
+		w.Header().Set("X-NextTrace-Quota-Expires-At", expires)
+		w.Header().Set("X-NextTrace-Quota-Cost", "7")
+		w.Header().Set("X-NextTrace-Quota-Source", "batch")
+		_, _ = w.Write([]byte(`{"results":[
+			{"ip":"1.1.1.1","ok":true,"data":{"ip":"1.1.1.1","asnumber":"13335","country":"美国","city":"Los Angeles","owner":"Cloudflare"}},
+			{"ip":"8.8.8.8","ok":false,"error":"upstream failed"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	client := NewNextTraceAPIV4Client(srv.URL+"/v4/ipGeo", "test-token", srv.Client())
+	results, quota, err := client.BatchLookup(context.Background(), []string{"1.1.1.1", "8.8.8.8"})
+	if err != nil {
+		t.Fatalf("BatchLookup() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(results))
+	}
+	if !results[0].OK || results[0].Geo == nil || results[0].Geo.Asnumber != "13335" || results[0].Geo.Owner != "Cloudflare" {
+		t.Fatalf("first result = %+v, want decoded geo", results[0])
+	}
+	if results[1].OK || results[1].Error != "upstream failed" || results[1].Geo != nil {
+		t.Fatalf("second result = %+v, want item error", results[1])
+	}
+	if !quota.HasRemaining || quota.Remaining != 993 || !quota.HasCost || quota.Cost != 7 || quota.Source != "batch" {
+		t.Fatalf("quota headers not parsed: %+v", quota)
+	}
+	if !quota.HasExpiresAt || quota.ExpiresAt.Format(time.RFC3339) != expires {
+		t.Fatalf("quota expires = %+v, want %s", quota, expires)
+	}
+}
+
+func TestNextTraceAPIV4ClientBatchLookupHTTPStatusesFail(t *testing.T) {
+	for _, statusCode := range []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+	} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			withNextTraceAPIV4RetryDelays(t, 0, 0)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(statusCode)
+				_, _ = w.Write([]byte(`{"error":{"message":"batch failed"}}`))
+			}))
+			defer srv.Close()
+
+			client := NewNextTraceAPIV4Client(srv.URL+"/v4/ipGeo", "secret-token", srv.Client())
+			_, _, err := client.BatchLookup(context.Background(), []string{"1.1.1.1"})
+			if err == nil {
+				t.Fatal("BatchLookup() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), "batch failed") {
+				t.Fatalf("error = %q, want batch failure message", err.Error())
+			}
+		})
+	}
+}
+
+func TestNextTraceAPIV4ClientBatchLookupRejectsSchemaErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing results", body: `{}`},
+		{name: "wrong length", body: `{"results":[]}`},
+		{name: "missing ip", body: `{"results":[{"ok":false,"error":"x"}]}`},
+		{name: "missing item error", body: `{"results":[{"ip":"1.1.1.1","ok":false}]}`},
+		{name: "missing data", body: `{"results":[{"ip":"1.1.1.1","ok":true}]}`},
+		{name: "bad data", body: `{"results":[{"ip":"1.1.1.1","ok":true,"data":{"router":1}}]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			client := NewNextTraceAPIV4Client(srv.URL+"/v4/ipGeo", "secret-token", srv.Client())
+			_, _, err := client.BatchLookup(context.Background(), []string{"1.1.1.1"})
+			if err == nil {
+				t.Fatal("BatchLookup() error = nil, want schema error")
+			}
+			if !strings.Contains(err.Error(), "batch returned invalid JSON") {
+				t.Fatalf("error = %q, want batch schema error", err.Error())
+			}
+		})
+	}
+}
+
+func TestNextTraceAPIV4ClientBatchLookupTimesOut(t *testing.T) {
+	withNextTraceAPIV4RetryDelays(t, 0, 0)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"results":[{"ip":"1.1.1.1","ok":true,"data":{"ip":"1.1.1.1"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewNextTraceAPIV4Client(srv.URL+"/v4/ipGeo", "secret-token", &http.Client{
+		Timeout:   20 * time.Millisecond,
+		Transport: srv.Client().Transport,
+	})
+	_, _, err := client.BatchLookup(context.Background(), []string{"1.1.1.1"})
+	if err == nil {
+		t.Fatal("BatchLookup() error = nil, want timeout")
+	}
+}
+
 func TestNewNextTraceAPIV4ClientDefaultsBoundedHTTPClient(t *testing.T) {
 	client := NewNextTraceAPIV4Client("", " test-token ", nil)
 	if client.httpClient == nil {

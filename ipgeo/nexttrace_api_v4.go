@@ -1,6 +1,7 @@
 package ipgeo
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,7 @@ const (
 	nextTraceAPIV4APIHost       = "api.nxtrace.org"
 	nextTraceAPIV4DefaultPort   = "443"
 	nextTraceAPIV4GeoPath       = "/v4/ipGeo"
+	nextTraceAPIV4GeoBatchPath  = "/v4/ipGeo/batch"
 	nextTraceAPIV4TokenHeader   = "X-NextTrace-Token"
 	nextTraceAPIV4MaxErrorBody  = 512
 	nextTraceAPIV4MaxGeoBody    = 1 << 20
@@ -62,6 +65,13 @@ type NextTraceAPIV4Quota struct {
 	Source       string
 }
 
+type NextTraceAPIV4BatchResult struct {
+	IP    string
+	OK    bool
+	Geo   *IPGeoData
+	Error string
+}
+
 type NextTraceAPIV4Client struct {
 	endpoint   string
 	token      string
@@ -91,6 +101,17 @@ func LeoMoeAPISource() Source {
 	return LeoIP
 }
 
+func CanUseNextTraceAPIV4Batch(source Source) bool {
+	return NextTraceAPIV4TokenConfigured() && sameNextTraceAPIV4Source(source, LeoIPNextTraceAPIV4HTTP)
+}
+
+func sameNextTraceAPIV4Source(a Source, b Source) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
+}
+
 func LeoIPNextTraceAPIV4HTTP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
 	_ = lang
 	_ = maptrace
@@ -101,6 +122,18 @@ func LeoIPNextTraceAPIV4HTTP(ip string, timeout time.Duration, lang string, mapt
 	client := cachedNextTraceAPIV4Client(nextTraceAPIV4GeoEndpoint, util.GetNextTraceAPIV4Token(), timeout)
 	geo, _, err := client.Lookup(ctx, ip)
 	return geo, err
+}
+
+func LookupNextTraceAPIV4Batch(ctx context.Context, ips []string, timeout time.Duration) ([]NextTraceAPIV4BatchResult, NextTraceAPIV4Quota, error) {
+	timeout = normalizeNextTraceAPIV4Timeout(timeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = prepareNextTraceAPIV4FastIP(ctx, nextTraceAPIV4GeoEndpoint, false)
+	client := cachedNextTraceAPIV4Client(nextTraceAPIV4GeoEndpoint, util.GetNextTraceAPIV4Token(), timeout)
+	return client.BatchLookup(ctx, ips)
 }
 
 func cachedNextTraceAPIV4Client(endpoint string, token string, timeout time.Duration) *NextTraceAPIV4Client {
@@ -310,6 +343,33 @@ func (c *NextTraceAPIV4Client) Lookup(ctx context.Context, ip string) (*IPGeoDat
 	return nil, NextTraceAPIV4Quota{}, lastErr
 }
 
+func (c *NextTraceAPIV4Client) BatchLookup(ctx context.Context, ips []string) ([]NextTraceAPIV4BatchResult, NextTraceAPIV4Quota, error) {
+	if c == nil {
+		return nil, NextTraceAPIV4Quota{}, errors.New("NextTrace API v4 GeoIP client is nil")
+	}
+	if len(ips) == 0 {
+		return nil, NextTraceAPIV4Quota{}, errors.New("NextTrace API v4 GeoIP batch requires at least one IP")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var lastErr error
+	for attempt := 0; attempt < nextTraceAPIV4MaxAttempts; attempt++ {
+		results, quota, err := c.batchLookupOnce(ctx, ips)
+		if err == nil {
+			return results, quota, nil
+		}
+		lastErr = err
+		if !shouldRetryNextTraceAPIV4Lookup(err) || attempt == nextTraceAPIV4MaxAttempts-1 || ctx.Err() != nil {
+			return nil, NextTraceAPIV4Quota{}, lastErr
+		}
+		if err := sleepBeforeNextTraceAPIV4Retry(ctx, nextTraceAPIV4RetryDelay(attempt)); err != nil {
+			return nil, NextTraceAPIV4Quota{}, lastErr
+		}
+	}
+	return nil, NextTraceAPIV4Quota{}, lastErr
+}
+
 func (c *NextTraceAPIV4Client) lookupOnce(ctx context.Context, ip string) (*IPGeoData, NextTraceAPIV4Quota, error) {
 	attemptCtx, cancel := c.lookupAttemptContext(ctx)
 	defer cancel()
@@ -346,6 +406,42 @@ func (c *NextTraceAPIV4Client) lookupOnce(ctx context.Context, ip string) (*IPGe
 	return geo, parseNextTraceAPIV4Quota(resp.Header), nil
 }
 
+func (c *NextTraceAPIV4Client) batchLookupOnce(ctx context.Context, ips []string) ([]NextTraceAPIV4BatchResult, NextTraceAPIV4Quota, error) {
+	attemptCtx, cancel := c.lookupAttemptContext(ctx)
+	defer cancel()
+
+	req, err := c.newBatchLookupRequest(attemptCtx, ips)
+	if err != nil {
+		return nil, NextTraceAPIV4Quota{}, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, NextTraceAPIV4Quota{}, retryableNextTraceAPIV4Error("NextTrace API v4 GeoIP batch request failed: %s", err, c.token)
+	}
+	defer resp.Body.Close()
+
+	bodyLimit := int64(nextTraceAPIV4MaxGeoBody)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyLimit = nextTraceAPIV4MaxErrorBody
+	}
+	body, truncated, err := readNextTraceAPIV4Body(resp.Body, bodyLimit)
+	if err != nil {
+		return nil, NextTraceAPIV4Quota{}, retryableNextTraceAPIV4Error("NextTrace API v4 GeoIP batch read failed: %s", err, c.token)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, NextTraceAPIV4Quota{}, c.httpError(resp.StatusCode, resp.Status, body, truncated)
+	}
+	if truncated {
+		return nil, NextTraceAPIV4Quota{}, fmt.Errorf("NextTrace API v4 GeoIP batch response body exceeds %d bytes", nextTraceAPIV4MaxGeoBody)
+	}
+
+	results, err := decodeNextTraceAPIV4Batch(body, len(ips))
+	if err != nil {
+		return nil, NextTraceAPIV4Quota{}, fmt.Errorf("NextTrace API v4 GeoIP batch returned invalid JSON: %w", err)
+	}
+	return results, parseNextTraceAPIV4Quota(resp.Header), nil
+}
+
 func (c *NextTraceAPIV4Client) lookupAttemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if c.httpClient == nil || c.httpClient.Timeout <= 0 {
 		return ctx, func() {}
@@ -370,6 +466,41 @@ func (c *NextTraceAPIV4Client) newLookupRequest(ctx context.Context, ip string) 
 	req.Header.Set("User-Agent", util.UserAgent)
 	req.Header.Set(nextTraceAPIV4TokenHeader, c.token)
 	return req, nil
+}
+
+func (c *NextTraceAPIV4Client) newBatchLookupRequest(ctx context.Context, ips []string) (*http.Request, error) {
+	endpoint, err := nextTraceAPIV4BatchEndpoint(c.endpoint)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(struct {
+		IPs []string `json:"ips"`
+	}{IPs: ips})
+	if err != nil {
+		return nil, fmt.Errorf("NextTrace API v4 GeoIP batch request encode failed: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("NextTrace API v4 GeoIP batch request build failed: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", util.UserAgent)
+	req.Header.Set(nextTraceAPIV4TokenHeader, c.token)
+	return req, nil
+}
+
+func nextTraceAPIV4BatchEndpoint(endpoint string) (string, error) {
+	u, err := url.Parse(normalizeNextTraceAPIV4Endpoint(endpoint))
+	if err != nil {
+		return "", fmt.Errorf("NextTrace API v4 GeoIP endpoint is invalid: %w", err)
+	}
+	u.Path = nextTraceAPIV4GeoBatchPath
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
 }
 
 func readNextTraceAPIV4Body(r io.Reader, limit int64) ([]byte, bool, error) {
@@ -557,6 +688,55 @@ func decodeNextTraceAPIV4Geo(body []byte) (*IPGeoData, error) {
 		Router:    router,
 		Source:    wire.Source,
 	}, nil
+}
+
+type nextTraceAPIV4BatchWire struct {
+	Results []nextTraceAPIV4BatchResultWire `json:"results"`
+}
+
+type nextTraceAPIV4BatchResultWire struct {
+	IP    string          `json:"ip"`
+	OK    bool            `json:"ok"`
+	Data  json.RawMessage `json:"data"`
+	Error string          `json:"error"`
+}
+
+func decodeNextTraceAPIV4Batch(body []byte, wantResults int) ([]NextTraceAPIV4BatchResult, error) {
+	var wire nextTraceAPIV4BatchWire
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return nil, err
+	}
+	if len(wire.Results) != wantResults {
+		return nil, fmt.Errorf("batch results length = %d, want %d", len(wire.Results), wantResults)
+	}
+
+	results := make([]NextTraceAPIV4BatchResult, len(wire.Results))
+	for i, item := range wire.Results {
+		ip := strings.TrimSpace(item.IP)
+		if ip == "" {
+			return nil, fmt.Errorf("batch result %d missing ip", i)
+		}
+		results[i] = NextTraceAPIV4BatchResult{
+			IP:    ip,
+			OK:    item.OK,
+			Error: item.Error,
+		}
+		if !item.OK {
+			if strings.TrimSpace(item.Error) == "" {
+				return nil, fmt.Errorf("batch result %d missing error", i)
+			}
+			continue
+		}
+		if len(item.Data) == 0 || strings.EqualFold(strings.TrimSpace(string(item.Data)), "null") {
+			return nil, fmt.Errorf("batch result %d missing data", i)
+		}
+		geo, err := decodeNextTraceAPIV4Geo(item.Data)
+		if err != nil {
+			return nil, fmt.Errorf("batch result %d data: %w", i, err)
+		}
+		results[i].Geo = geo
+	}
+	return results, nil
 }
 
 func decodeNextTraceAPIV4Router(raw json.RawMessage) (map[string][]string, error) {

@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
+	"github.com/nxtrace/NTrace-core/util"
 )
 
 // ---------------------------------------------------------------------------
@@ -1435,6 +1437,248 @@ func waitForMetadataGeo(t *testing.T, agg *MTRAggregator, asn string) {
 			t.Fatalf("metadata geo %q did not patch stats: %+v", asn, agg.Snapshot())
 		case <-tick.C:
 		}
+	}
+}
+
+func TestMTRGeoMetadataCompleteRequiresRealASNAndGeoText(t *testing.T) {
+	tests := []struct {
+		name string
+		geo  *ipgeo.IPGeoData
+		want bool
+	}{
+		{name: "complete", geo: &ipgeo.IPGeoData{Asnumber: "13335", Country: "美国"}, want: true},
+		{name: "placeholder asn", geo: &ipgeo.IPGeoData{Asnumber: "???", Country: "美国"}, want: false},
+		{name: "missing geo text", geo: &ipgeo.IPGeoData{Asnumber: "13335"}, want: false},
+		{name: "missing asn", geo: &ipgeo.IPGeoData{Country: "美国"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mtrGeoMetadataCompleteForIP("1.1.1.1", tt.geo, false); got != tt.want {
+				t.Fatalf("mtrGeoMetadataCompleteForIP() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScheduler_AsyncMetadataV4BatchMergesAndPatchesByIP(t *testing.T) {
+	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
+	oldLookupBatch := lookupMTRGeoBatch
+	defer func() { lookupMTRGeoBatch = oldLookupBatch }()
+
+	var gotBatches [][]string
+	lookupMTRGeoBatch = func(ctx context.Context, ips []string, timeout time.Duration) ([]ipgeo.NextTraceAPIV4BatchResult, ipgeo.NextTraceAPIV4Quota, error) {
+		gotBatches = append(gotBatches, append([]string(nil), ips...))
+		return []ipgeo.NextTraceAPIV4BatchResult{
+			{IP: "8.8.8.8", OK: true, Geo: &ipgeo.IPGeoData{IP: "8.8.8.8", Asnumber: "15169", Country: "美国", Owner: "Google"}},
+			{IP: "1.1.1.1", OK: true, Geo: &ipgeo.IPGeoData{IP: "1.1.1.1", Asnumber: "13335", Country: "美国", Owner: "Cloudflare"}},
+		}, ipgeo.NextTraceAPIV4Quota{Source: "batch"}, nil
+	}
+
+	rt, err := newMTRSchedulerRuntime(context.Background(), &mockTTLProber{}, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:         1,
+		MaxHops:          2,
+		HopInterval:      time.Millisecond,
+		ParallelRequests: 2,
+		ProgressThrottle: time.Millisecond,
+		FillGeo:          true,
+		AsyncMetadata:    true,
+		BaseConfig: Config{
+			IPGeoSource: ipgeo.LeoMoeAPISource(),
+			Timeout:     time.Second,
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("newMTRSchedulerRuntime error: %v", err)
+	}
+
+	first := mtrProbeResult{TTL: 1, Success: true, Addr: &net.IPAddr{IP: net.ParseIP("1.1.1.1")}, RTT: 5 * time.Millisecond}
+	second := mtrProbeResult{TTL: 2, Success: true, Addr: &net.IPAddr{IP: net.ParseIP("8.8.8.8")}, RTT: 6 * time.Millisecond}
+	rt.agg.Update(rt.singleProbeResult(1, first), 1)
+	rt.agg.Update(rt.singleProbeResult(2, second), 1)
+	rt.maybeLaunchMetadataLookup(first)
+	rt.maybeLaunchMetadataLookup(second)
+	rt.flushGeoMetadataBatch()
+	processMetadataResults(t, rt, 2)
+
+	if len(gotBatches) != 1 {
+		t.Fatalf("batch calls = %d, want 1", len(gotBatches))
+	}
+	if got, want := gotBatches[0], []string{"1.1.1.1", "8.8.8.8"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("batch ips = %#v, want %#v", got, want)
+	}
+	stats := rt.agg.Snapshot()
+	if len(stats) != 2 {
+		t.Fatalf("stats rows = %d, want 2", len(stats))
+	}
+	byIP := make(map[string]*ipgeo.IPGeoData)
+	for _, stat := range stats {
+		byIP[stat.IP] = stat.Geo
+	}
+	if byIP["1.1.1.1"] == nil || byIP["1.1.1.1"].Owner != "Cloudflare" {
+		t.Fatalf("1.1.1.1 geo = %+v, want Cloudflare", byIP["1.1.1.1"])
+	}
+	if byIP["8.8.8.8"] == nil || byIP["8.8.8.8"].Owner != "Google" {
+		t.Fatalf("8.8.8.8 geo = %+v, want Google", byIP["8.8.8.8"])
+	}
+}
+
+func TestScheduler_AsyncMetadataV4BatchDedupesDuplicateIP(t *testing.T) {
+	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
+	oldLookupBatch := lookupMTRGeoBatch
+	defer func() { lookupMTRGeoBatch = oldLookupBatch }()
+
+	var gotBatches [][]string
+	lookupMTRGeoBatch = func(ctx context.Context, ips []string, timeout time.Duration) ([]ipgeo.NextTraceAPIV4BatchResult, ipgeo.NextTraceAPIV4Quota, error) {
+		gotBatches = append(gotBatches, append([]string(nil), ips...))
+		return []ipgeo.NextTraceAPIV4BatchResult{
+			{IP: "1.1.1.1", OK: true, Geo: &ipgeo.IPGeoData{IP: "1.1.1.1", Asnumber: "13335", Country: "美国"}},
+		}, ipgeo.NextTraceAPIV4Quota{Source: "batch"}, nil
+	}
+
+	rt, err := newMTRSchedulerRuntime(context.Background(), &mockTTLProber{}, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:         1,
+		MaxHops:          2,
+		HopInterval:      time.Millisecond,
+		ParallelRequests: 2,
+		ProgressThrottle: time.Millisecond,
+		FillGeo:          true,
+		AsyncMetadata:    true,
+		BaseConfig: Config{
+			IPGeoSource: ipgeo.LeoMoeAPISource(),
+			Timeout:     time.Second,
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("newMTRSchedulerRuntime error: %v", err)
+	}
+
+	first := mtrProbeResult{TTL: 1, Success: true, Addr: &net.IPAddr{IP: net.ParseIP("1.1.1.1")}}
+	second := mtrProbeResult{TTL: 2, Success: true, Addr: &net.IPAddr{IP: net.ParseIP("1.1.1.1")}}
+	rt.agg.Update(rt.singleProbeResult(1, first), 1)
+	rt.agg.Update(rt.singleProbeResult(2, second), 1)
+	rt.maybeLaunchMetadataLookup(first)
+	rt.maybeLaunchMetadataLookup(second)
+	rt.flushGeoMetadataBatch()
+	processMetadataResults(t, rt, 1)
+
+	if len(gotBatches) != 1 {
+		t.Fatalf("batch calls = %d, want 1", len(gotBatches))
+	}
+	if got, want := gotBatches[0], []string{"1.1.1.1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("batch ips = %#v, want %#v", got, want)
+	}
+	for _, stat := range rt.agg.Snapshot() {
+		if stat.Geo == nil || stat.Geo.Asnumber != "13335" {
+			t.Fatalf("stat geo = %+v, want patched duplicate IP rows", stat.Geo)
+		}
+	}
+}
+
+func TestScheduler_AsyncMetadataV4BatchFailureDoesNotDeadlock(t *testing.T) {
+	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
+	oldLookupBatch := lookupMTRGeoBatch
+	defer func() { lookupMTRGeoBatch = oldLookupBatch }()
+
+	var batchCalls int32
+	lookupMTRGeoBatch = func(ctx context.Context, ips []string, timeout time.Duration) ([]ipgeo.NextTraceAPIV4BatchResult, ipgeo.NextTraceAPIV4Quota, error) {
+		atomic.AddInt32(&batchCalls, 1)
+		return nil, ipgeo.NextTraceAPIV4Quota{}, errors.New("batch unavailable")
+	}
+
+	prober := &mockTTLProber{
+		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
+			return mtrProbeResult{
+				TTL:     ttl,
+				Success: true,
+				Addr:    &net.IPAddr{IP: net.ParseIP("1.1.1.1")},
+				RTT:     5 * time.Millisecond,
+			}, nil
+		},
+	}
+	agg := NewMTRAggregator()
+	err := runMTRScheduler(context.Background(), prober, agg, mtrSchedulerConfig{
+		BeginHop:         1,
+		MaxHops:          1,
+		HopInterval:      time.Millisecond,
+		MaxPerHop:        1,
+		ParallelRequests: 1,
+		ProgressThrottle: time.Millisecond,
+		FillGeo:          true,
+		AsyncMetadata:    true,
+		BaseConfig: Config{
+			IPGeoSource: ipgeo.LeoMoeAPISource(),
+			Timeout:     time.Second,
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("runMTRScheduler error: %v", err)
+	}
+	if got, want := atomic.LoadInt32(&batchCalls), int32(mtrAsyncMetadataMaxRetries+1); got != want {
+		t.Fatalf("batch calls = %d, want %d retries then stop", got, want)
+	}
+	stats := agg.Snapshot()
+	if len(stats) != 1 || stats[0].Geo != nil {
+		t.Fatalf("stats after failed batch = %+v, want no geo and no deadlock", stats)
+	}
+}
+
+func TestScheduler_AsyncMetadataV4BatchIgnoresOldGenerationAfterReset(t *testing.T) {
+	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
+	oldLookupBatch := lookupMTRGeoBatch
+	defer func() { lookupMTRGeoBatch = oldLookupBatch }()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	lookupMTRGeoBatch = func(ctx context.Context, ips []string, timeout time.Duration) ([]ipgeo.NextTraceAPIV4BatchResult, ipgeo.NextTraceAPIV4Quota, error) {
+		close(started)
+		select {
+		case <-release:
+			return []ipgeo.NextTraceAPIV4BatchResult{
+				{IP: "1.1.1.1", OK: true, Geo: &ipgeo.IPGeoData{IP: "1.1.1.1", Asnumber: "13335", Country: "美国"}},
+			}, ipgeo.NextTraceAPIV4Quota{Source: "batch"}, nil
+		case <-ctx.Done():
+			return nil, ipgeo.NextTraceAPIV4Quota{}, ctx.Err()
+		}
+	}
+
+	rt, err := newMTRSchedulerRuntime(context.Background(), &mockTTLProber{}, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:         1,
+		MaxHops:          1,
+		HopInterval:      time.Millisecond,
+		ParallelRequests: 1,
+		ProgressThrottle: time.Millisecond,
+		FillGeo:          true,
+		AsyncMetadata:    true,
+		IsResetRequested: func() bool { return true },
+		BaseConfig: Config{
+			IPGeoSource: ipgeo.LeoMoeAPISource(),
+			Timeout:     time.Second,
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("newMTRSchedulerRuntime error: %v", err)
+	}
+
+	result := mtrProbeResult{TTL: 1, Success: true, Addr: &net.IPAddr{IP: net.ParseIP("1.1.1.1")}}
+	rt.agg.Update(rt.singleProbeResult(1, result), 1)
+	rt.maybeLaunchMetadataLookup(result)
+	rt.flushGeoMetadataBatch()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("batch lookup did not start")
+	}
+	rt.handleReset()
+	close(release)
+
+	select {
+	case stale := <-rt.metadataCh:
+		t.Fatalf("stale batch metadata result should be dropped after reset: %+v", stale)
+	case <-time.After(120 * time.Millisecond):
+	}
+	if len(rt.metadataGeoInFlight) != 0 || len(rt.metadataGeoBatch) != 0 {
+		t.Fatalf("metadata state after reset: inFlight=%d batch=%d, want empty", len(rt.metadataGeoInFlight), len(rt.metadataGeoBatch))
 	}
 }
 

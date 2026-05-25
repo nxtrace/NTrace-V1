@@ -3,6 +3,7 @@ package trace
 import (
 	"net"
 	"strings"
+	"unicode"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
 )
@@ -14,6 +15,7 @@ type mtrMetadataPatch struct {
 }
 
 var lookupMTRPTR = lookupPTR
+var lookupMTRGeoBatch = ipgeo.LookupNextTraceAPIV4Batch
 
 func lookupMTRMetadata(addr net.Addr, cfg Config) mtrMetadataPatch {
 	ipStr := strings.TrimSpace(mtrAddrString(addr))
@@ -74,4 +76,47 @@ func lookupMTRGeoMetadata(addr net.Addr, cfg Config, host string) mtrMetadataPat
 		ip:  ipStr,
 		geo: geo,
 	}
+}
+
+func mtrGeoMetadataCompleteForIP(ip string, geo *ipgeo.IPGeoData, dn42 bool) bool {
+	if geo == nil {
+		return false
+	}
+	if !dn42 {
+		if _, filtered := ipgeo.Filter(strings.TrimSpace(ip)); filtered {
+			return true
+		}
+	}
+	asn := strings.TrimSpace(geo.Asnumber)
+	if asn == "" {
+		return false
+	}
+	for _, r := range asn {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return mtrGeoMetadataText(geo) != ""
+}
+
+func mtrGeoMetadataText(geo *ipgeo.IPGeoData) string {
+	if geo == nil {
+		return ""
+	}
+	fields := []string{
+		geo.Country,
+		geo.CountryEn,
+		geo.Prov,
+		geo.ProvEn,
+		geo.City,
+		geo.CityEn,
+		geo.Owner,
+		geo.Isp,
+	}
+	for _, field := range fields {
+		if strings.TrimSpace(field) != "" {
+			return field
+		}
+	}
+	return ""
 }
