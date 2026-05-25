@@ -420,6 +420,9 @@ func (rt *mtrSchedulerRuntime) maybeLaunchGeoMetadataLookup(
 		return
 	}
 	if rt.shouldBatchGeoMetadata(cfg) {
+		if rt.patchFilteredGeoMetadata(ip, cfg) {
+			return
+		}
 		rt.queueGeoMetadataBatch(ip, result, gen)
 		return
 	}
@@ -429,6 +432,23 @@ func (rt *mtrSchedulerRuntime) maybeLaunchGeoMetadataLookup(
 	go rt.runMetadataLookup(generationCtx, gen, mtrMetadataKindGeo, rt.metadataGeoSlots, func(cfg Config) mtrMetadataPatch {
 		return lookupMTRGeoMetadata(result.Addr, cfg, host)
 	}, cfg)
+}
+
+func (rt *mtrSchedulerRuntime) patchFilteredGeoMetadata(ip string, cfg Config) bool {
+	if cfg.DN42 {
+		return false
+	}
+	geo, ok := ipgeo.Filter(ip)
+	if !ok {
+		return false
+	}
+
+	patch := mtrMetadataPatch{ip: ip, geo: geo}
+	rt.cacheMetadataPatch(mtrMetadataKindGeo, patch)
+	if rt.agg.patchMTRMetadataByIP(ip, "", geo, cfg.DN42) {
+		rt.maybeSnapshot(false)
+	}
+	return true
 }
 
 func (rt *mtrSchedulerRuntime) maybeLaunchHostMetadataLookup(ip string, result mtrProbeResult, cfg Config, generationCtx context.Context, gen uint64) {
@@ -649,7 +669,7 @@ func (rt *mtrSchedulerRuntime) processMetadataResult(result mtrMetadataResult) {
 	rt.cacheMetadataPatch(result.kind, result.patch)
 	rt.maybeRetryMetadataLookup(result)
 	rt.maybeLaunchDN42GeoAfterHostResult(result)
-	if !rt.agg.PatchMetadataByIP(ip, result.patch.host, result.patch.geo) {
+	if !rt.agg.patchMTRMetadataByIP(ip, result.patch.host, result.patch.geo, rt.cfg.BaseConfig.DN42) {
 		return
 	}
 	rt.maybeSnapshot(false)

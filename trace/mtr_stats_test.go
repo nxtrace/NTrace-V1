@@ -109,6 +109,31 @@ func TestSinglePath(t *testing.T) {
 	}
 }
 
+func TestPatchMTRMetadataByIPReplacesIncompleteGeo(t *testing.T) {
+	agg := NewMTRAggregator()
+	hop := mkHop(1, "1.1.1.1", 10*time.Millisecond)
+	hop.Geo = &ipgeo.IPGeoData{IP: "1.1.1.1", Asnumber: "???", Country: "美国"}
+	agg.Update(mkResult([]Hop{hop}), 1)
+
+	complete := &ipgeo.IPGeoData{IP: "1.1.1.1", Asnumber: "13335", Country: "美国", Owner: "Cloudflare"}
+	if !agg.patchMTRMetadataByIP("1.1.1.1", "", complete, false) {
+		t.Fatal("complete geo did not replace incomplete geo")
+	}
+
+	stats := agg.Snapshot()
+	if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "13335" {
+		t.Fatalf("stats geo = %+v, want complete geo", stats)
+	}
+
+	incomplete := &ipgeo.IPGeoData{IP: "1.1.1.1", Asnumber: "???", Country: "美国", Owner: "stale"}
+	if agg.patchMTRMetadataByIP("1.1.1.1", "", incomplete, false) {
+		t.Fatal("incomplete geo replaced complete geo")
+	}
+	if got := agg.Snapshot()[0].Geo; got == nil || got.Asnumber != "13335" || got.Owner != "Cloudflare" {
+		t.Fatalf("stats geo after stale patch = %+v, want Cloudflare complete geo", got)
+	}
+}
+
 func TestMultiPath(t *testing.T) {
 	agg := NewMTRAggregator()
 	res1 := mkResult(

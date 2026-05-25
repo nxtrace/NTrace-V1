@@ -183,6 +183,14 @@ func (agg *MTRAggregator) Snapshot() []MTRHopStat {
 // PatchMetadataByIP updates existing rows for the given IP with late-arriving
 // host/geo data without affecting sent/received/RTT statistics.
 func (agg *MTRAggregator) PatchMetadataByIP(ip, host string, geo *ipgeo.IPGeoData) bool {
+	return agg.patchMetadataByIP(ip, host, geo, false, false)
+}
+
+func (agg *MTRAggregator) patchMTRMetadataByIP(ip, host string, geo *ipgeo.IPGeoData, dn42 bool) bool {
+	return agg.patchMetadataByIP(ip, host, geo, true, dn42)
+}
+
+func (agg *MTRAggregator) patchMetadataByIP(ip, host string, geo *ipgeo.IPGeoData, replaceIncompleteGeo bool, dn42 bool) bool {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
 
@@ -202,7 +210,7 @@ func (agg *MTRAggregator) PatchMetadataByIP(ip, host string, geo *ipgeo.IPGeoDat
 				acc.host = host
 				changed = true
 			}
-			if geo != nil && acc.geo == nil {
+			if shouldPatchMTRMetadataGeo(ip, acc.geo, geo, replaceIncompleteGeo, dn42) {
 				geoCopy := *geo
 				acc.geo = &geoCopy
 				changed = true
@@ -210,6 +218,18 @@ func (agg *MTRAggregator) PatchMetadataByIP(ip, host string, geo *ipgeo.IPGeoDat
 		}
 	}
 	return changed
+}
+
+func shouldPatchMTRMetadataGeo(ip string, current, next *ipgeo.IPGeoData, replaceIncomplete bool, dn42 bool) bool {
+	if next == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	return replaceIncomplete &&
+		!mtrGeoMetadataCompleteForIP(ip, current, dn42) &&
+		mtrGeoMetadataCompleteForIP(ip, next, dn42)
 }
 
 func (agg *MTRAggregator) snapshotLocked() []MTRHopStat {
