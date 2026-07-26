@@ -540,6 +540,10 @@ func decodeNextTraceAPIV4Geo(body []byte) (*IPGeoData, error) {
 	if err != nil {
 		return nil, err
 	}
+	owner := wire.Domain
+	if owner == "" {
+		owner = wire.Owner
+	}
 	return &IPGeoData{
 		IP:        wire.IP,
 		Asnumber:  wire.Asnumber,
@@ -550,7 +554,7 @@ func decodeNextTraceAPIV4Geo(body []byte) (*IPGeoData, error) {
 		City:      wire.City,
 		CityEn:    wire.CityEn,
 		District:  wire.District,
-		Owner:     wire.Owner,
+		Owner:     owner,
 		Isp:       wire.Isp,
 		Domain:    wire.Domain,
 		Whois:     wire.Whois,

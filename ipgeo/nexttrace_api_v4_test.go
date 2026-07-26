@@ -1022,6 +1022,109 @@ func TestDecodeNextTraceAPIV4GeoAllowsMissingOrEmptyRouter(t *testing.T) {
 	}
 }
 
+func TestDecodeNextTraceAPIV4GeoPrefersDomainForOwner(t *testing.T) {
+	body := []byte(`{
+		"ip":"203.0.113.8",
+		"asnumber":"4808",
+		"country":"中国",
+		"country_en":"China",
+		"prov":"北京",
+		"prov_en":"Beijing",
+		"city":"北京",
+		"city_en":"Beijing",
+		"district":"海淀",
+		"owner":"中国联通",
+		"domain":"chinaunicom.cn 联通",
+		"isp":"联通",
+		"whois":"China Unicom Beijing Province Network",
+		"lat":39.9042,
+		"lng":116.4074,
+		"prefix":"203.0.113.0/24",
+		"router":{"4808":["4837"]},
+		"source":"nexttrace"
+	}`)
+
+	geo, err := decodeNextTraceAPIV4Geo(body)
+	if err != nil {
+		t.Fatalf("decodeNextTraceAPIV4Geo() error = %v", err)
+	}
+	want := &IPGeoData{
+		IP:        "203.0.113.8",
+		Asnumber:  "4808",
+		Country:   "中国",
+		CountryEn: "China",
+		Prov:      "北京",
+		ProvEn:    "Beijing",
+		City:      "北京",
+		CityEn:    "Beijing",
+		District:  "海淀",
+		Owner:     "chinaunicom.cn 联通",
+		Isp:       "联通",
+		Domain:    "chinaunicom.cn 联通",
+		Whois:     "China Unicom Beijing Province Network",
+		Lat:       39.9042,
+		Lng:       116.4074,
+		Prefix:    "203.0.113.0/24",
+		Router:    map[string][]string{"4808": {"4837"}},
+		Source:    "nexttrace",
+	}
+	if !reflect.DeepEqual(geo, want) {
+		t.Fatalf("geo = %+v, want %+v", geo, want)
+	}
+}
+
+func TestDecodeNextTraceAPIV4GeoFallsBackToRawOwner(t *testing.T) {
+	geo, err := decodeNextTraceAPIV4Geo([]byte(`{
+		"ip":"203.0.113.8",
+		"owner":"中国联通",
+		"domain":""
+	}`))
+	if err != nil {
+		t.Fatalf("decodeNextTraceAPIV4Geo() error = %v", err)
+	}
+	if geo.Owner != "中国联通" {
+		t.Fatalf("Owner = %q, want 中国联通", geo.Owner)
+	}
+	if geo.Domain != "" {
+		t.Fatalf("Domain = %q, want empty", geo.Domain)
+	}
+}
+
+func TestDecodeNextTraceAPIV4GeoOwnerMatchesV3(t *testing.T) {
+	const ip = "203.0.113.8"
+	raw := []byte(`{
+		"ip":"203.0.113.8",
+		"owner":"中国联通",
+		"domain":"chinaunicom.cn 联通"
+	}`)
+
+	ch := make(chan IPGeoData, 1)
+	IPPools.poolMux.Lock()
+	oldPool := IPPools.pool
+	IPPools.pool = map[string]chan IPGeoData{ip: ch}
+	IPPools.poolMux.Unlock()
+	defer func() {
+		IPPools.poolMux.Lock()
+		IPPools.pool = oldPool
+		IPPools.poolMux.Unlock()
+	}()
+
+	dispatchLeoMessage(string(raw))
+	var v3Geo IPGeoData
+	select {
+	case v3Geo = <-ch:
+	default:
+		t.Fatal("v3 parser did not deliver geo data")
+	}
+	v4Geo, err := decodeNextTraceAPIV4Geo(raw)
+	if err != nil {
+		t.Fatalf("decodeNextTraceAPIV4Geo() error = %v", err)
+	}
+	if v4Geo.Owner != v3Geo.Owner {
+		t.Fatalf("v4 Owner = %q, want v3 Owner %q", v4Geo.Owner, v3Geo.Owner)
+	}
+}
+
 func TestNextTraceAPIV4ClientLookupRetriesNetworkErrors(t *testing.T) {
 	withNextTraceAPIV4RetryDelays(t, 0, 0)
 	attempts := 0
