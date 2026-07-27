@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -227,15 +228,20 @@ func TestParseConfigCapturesShellCompletionWithoutExiting(t *testing.T) {
 	if !config.CompletionRequested {
 		t.Fatal("CompletionRequested = false")
 	}
+	wantItem := "--format"
+	if runtime.GOOS == "windows" {
+		// go-flags uses the native Windows option style for completion items.
+		wantItem = "/format"
+	}
 	found := false
 	for _, completion := range config.Completions {
-		if completion.Item == "--format" {
+		if completion.Item == wantItem {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("completions = %#v", config.Completions)
+		t.Fatalf("completions = %#v, want item %q", config.Completions, wantItem)
 	}
 }
 

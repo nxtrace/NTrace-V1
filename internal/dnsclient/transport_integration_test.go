@@ -203,7 +203,7 @@ func TestRunODoHTimeoutDoesNotCloseDuringExchange(t *testing.T) {
 	// Run has returned, but the exclusive DNS scope remains held until the
 	// in-flight q transport finishes and closes in sequence.
 	dnsClientGlobalMu.Lock()
-	dnsClientGlobalMu.Unlock()
+	defer dnsClientGlobalMu.Unlock()
 }
 
 func TestQPublicTransportAgainstLocalDNSCrypt(t *testing.T) {
@@ -313,7 +313,7 @@ func serveOneDoT(listener net.Listener) {
 	if err != nil {
 		return
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	dnsConnection := &dns.Conn{Conn: connection}
 	query, err := dnsConnection.ReadMsg()
 	if err != nil {

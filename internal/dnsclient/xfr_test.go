@@ -87,7 +87,7 @@ func TestTransferZoneCancellationClosesAndDrainsTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() { _ = listener.Close() })
 	firstEnvelopeSent := make(chan struct{})
 	serverResult := make(chan error, 1)
 	go func() {
@@ -96,7 +96,7 @@ func TestTransferZoneCancellationClosesAndDrainsTransfer(t *testing.T) {
 			serverResult <- err
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		dnsConnection := &dns.Conn{Conn: connection}
 		query, err := dnsConnection.ReadMsg()
 		if err != nil {

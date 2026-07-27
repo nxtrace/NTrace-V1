@@ -170,7 +170,7 @@ func loadQRC(homeDir string) ([]string, []string) {
 	if err != nil {
 		return nil, []string{fmt.Sprintf("could not open config file %s: %v", configPath, err)}
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var configArgs []string
 	scanner := bufio.NewScanner(file)

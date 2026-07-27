@@ -42,6 +42,9 @@ var (
 	serverWarningPattern = regexp.MustCompile(
 		`(?m)^(?:WARN Server |dns mode warning: skipping server ).*$`,
 	)
+	quicReceiveBufferWarningPattern = regexp.MustCompile(
+		`(?m)^(?:\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} )?failed to sufficiently increase receive buffer size \(was: \d+ kiB, wanted: \d+ kiB, got: \d+ kiB\)\. See https://github\.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details\.[ \t]*\r?$`,
+	)
 	recAXFRPathPattern = regexp.MustCompile(`example\.com_[^\s]+_recaxfr`)
 )
 
@@ -486,8 +489,17 @@ func normalizeParityOutput(value string) string {
 	value = prettyTimePattern.ReplaceAllString(value, ";; Time TIME")
 	value = prettyFromPattern.ReplaceAllString(value, "${1}DURATION")
 	value = serverWarningPattern.ReplaceAllString(value, "SERVER_WARNING")
+	value = quicReceiveBufferWarningPattern.ReplaceAllString(value, "")
 	value = recAXFRPathPattern.ReplaceAllString(value, "AXFR_DIR")
 	return strings.TrimSpace(value)
+}
+
+func TestNormalizeParityOutputIgnoresQUICReceiveBufferWarning(t *testing.T) {
+	warning := "2026/07/27 12:34:56 failed to sufficiently increase receive buffer size (was: 208 kiB, wanted: 7168 kiB, got: 416 kiB). See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details."
+	got := normalizeParityOutput(warning + "\nquery failed: timeout")
+	if got != "query failed: timeout" {
+		t.Fatalf("normalizeParityOutput() = %q", got)
+	}
 }
 
 func startParityMetadataServer(t *testing.T) string {
