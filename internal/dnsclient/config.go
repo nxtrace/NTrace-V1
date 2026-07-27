@@ -347,14 +347,14 @@ func setDefaultServer(opts *cli.Flags, lookupEnv func(string) (string, bool), re
 		opts.Server = []string{server}
 		return []string{fmt.Sprintf("Using %v from %s environment variable", opts.Server, defaultServerEnv)}
 	}
-	debugMessages := []string{fmt.Sprintf("No server specified or %s set, using /etc/resolv.conf", defaultServerEnv)}
 	if resolverConfigPath == "" {
 		resolverConfigPath = "/etc/resolv.conf"
 	}
+	debugMessages := []string{fmt.Sprintf("No server specified or %s set, using %s", defaultServerEnv, resolverConfigPath)}
 	config, err := dns.ClientConfigFromFile(resolverConfigPath)
 	if err == nil && len(config.Servers) > 0 {
 		opts.Server = []string{config.Servers[0]}
-		return append(debugMessages, fmt.Sprintf("found server %v from /etc/resolv.conf", opts.Server))
+		return append(debugMessages, fmt.Sprintf("found server %v from %s", opts.Server, resolverConfigPath))
 	}
 	opts.Server = []string{fallbackServer}
 	return append(debugMessages, fmt.Sprintf("no server set, using %v", opts.Server))

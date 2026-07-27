@@ -138,6 +138,31 @@ func TestNewTransportMapsQFlags(t *testing.T) {
 	require.True(t, quic.AddLengthPrefix)
 }
 
+func TestParseHTTPHeadersValidatesNamesAndValues(t *testing.T) {
+	t.Parallel()
+
+	headers, err := parseHTTPHeaders([]string{"X-Test: one", "invalid", "X-Test: two"})
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"X-Test": {"one", "two"}}, headers)
+
+	for _, test := range []struct {
+		name    string
+		header  string
+		wantErr string
+	}{
+		{name: "empty name", header: ": value", wantErr: `net/http: invalid header field name ""`},
+		{name: "space in name", header: "Bad Name: value", wantErr: `net/http: invalid header field name "Bad Name"`},
+		{name: "non ASCII name", header: "X-Ü: value", wantErr: `net/http: invalid header field name "X-Ü"`},
+		{name: "newline in value", header: "X-Test: one\r\nInjected: value", wantErr: `net/http: invalid header field value for "X-Test"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseHTTPHeaders([]string{test.header})
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+}
+
 func TestNewTransportODoHAndSafeClose(t *testing.T) {
 	t.Parallel()
 

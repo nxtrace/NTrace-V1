@@ -18,6 +18,7 @@ import (
 	"github.com/natesales/q/cli"
 	qtransport "github.com/natesales/q/transport"
 	qtls "github.com/natesales/q/util/tls"
+	"golang.org/x/net/http/httpguts"
 )
 
 var (
@@ -164,6 +165,10 @@ func NewTransport(server ParsedServer, opts cli.Flags, tlsConfig *tls.Config) (q
 			}}, nil
 		}
 		qlog.Debugf("Using HTTP(s) transport: %s", server.Address)
+		headers, err := parseHTTPHeaders(opts.HTTPHeaders)
+		if err != nil {
+			return nil, err
+		}
 		return &scopedHTTPTransport{inner: &qtransport.HTTP{
 			Common:    common,
 			TLSConfig: tlsConfig,
@@ -172,7 +177,7 @@ func NewTransport(server ParsedServer, opts cli.Flags, tlsConfig *tls.Config) (q
 			HTTP2:     opts.HTTP2,
 			HTTP3:     opts.HTTP3,
 			NoPMTUd:   !opts.PMTUD,
-			Headers:   parseHTTPHeaders(opts.HTTPHeaders),
+			Headers:   headers,
 		}}, nil
 	case qtransport.TypeQUIC:
 		if tlsConfig == nil {
@@ -240,7 +245,7 @@ func validateHTTPSURL(rawURL, label string) error {
 	return nil
 }
 
-func parseHTTPHeaders(values []string) map[string][]string {
+func parseHTTPHeaders(values []string) (map[string][]string, error) {
 	headers := make(map[string][]string)
 	for _, value := range values {
 		name, fieldValue, found := strings.Cut(value, ":")
@@ -250,10 +255,16 @@ func parseHTTPHeaders(values []string) map[string][]string {
 		}
 		name = strings.TrimSpace(name)
 		fieldValue = strings.TrimSpace(fieldValue)
+		if !httpguts.ValidHeaderFieldName(name) {
+			return nil, fmt.Errorf("net/http: invalid header field name %q", name)
+		}
+		if !httpguts.ValidHeaderFieldValue(fieldValue) {
+			return nil, fmt.Errorf("net/http: invalid header field value for %q", name)
+		}
 		headers[name] = append(headers[name], fieldValue)
 		qlog.Debugf("Added header %s: %s", name, fieldValue)
 	}
-	return headers
+	return headers, nil
 }
 
 func newDNSCryptTransport(common qtransport.Common, server ParsedServer, opts cli.Flags) (qtransport.Transport, error) {

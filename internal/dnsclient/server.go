@@ -62,11 +62,12 @@ func ParseServer(server string) (ParsedServer, error) {
 		normalized = stampURL
 	}
 
-	if !serverSchemePattern.MatchString(normalized) {
+	uriEncodedZone := serverSchemePattern.MatchString(normalized)
+	if !uriEncodedZone {
 		normalized = "plain://" + bracketBareIPv6(normalized)
 	}
 
-	withoutZone, zone, err := removeIPv6Zone(normalized)
+	withoutZone, zone, err := removeIPv6Zone(normalized, uriEncodedZone)
 	if err != nil {
 		return parsed, err
 	}
@@ -227,7 +228,7 @@ func bracketURLIPv6(serverURL string) string {
 	return serverURL[:start] + "[" + authority + "]" + rest[end:]
 }
 
-func removeIPv6Zone(serverURL string) (string, string, error) {
+func removeIPv6Zone(serverURL string, uriEncodedZone bool) (string, string, error) {
 	separator := strings.Index(serverURL, "://")
 	if separator < 0 {
 		return serverURL, "", nil
@@ -239,18 +240,51 @@ func removeIPv6Zone(serverURL string) (string, string, error) {
 		end = delimiter
 	}
 	authority := rest[:end]
-	percent := strings.Index(authority, "%")
-	if percent < 0 {
-		return serverURL, "", nil
+	hostStart := strings.LastIndex(authority, "@") + 1
+	hostPort := authority[hostStart:]
+
+	var address, encodedZone string
+	var zoneStart, zoneEnd int
+	if strings.HasPrefix(hostPort, "[") {
+		closeBracket := strings.Index(hostPort, "]")
+		if closeBracket < 0 {
+			return serverURL, "", nil
+		}
+		host := hostPort[1:closeBracket]
+		percent := strings.Index(host, "%")
+		if percent < 0 {
+			return serverURL, "", nil
+		}
+		address = host[:percent]
+		encodedZone = host[percent+1:]
+		zoneStart = hostStart + 1 + percent
+		zoneEnd = hostStart + closeBracket
+	} else {
+		percent := strings.Index(hostPort, "%")
+		if percent < 0 {
+			return serverURL, "", nil
+		}
+		address = hostPort[:percent]
+		if net.ParseIP(address) == nil || !strings.Contains(address, ":") {
+			return serverURL, "", nil
+		}
+		encodedZone = hostPort[percent+1:]
+		zoneStart = hostStart + percent
+		zoneEnd = len(authority)
 	}
-	zoneEnd := len(authority)
-	if closeBracket := strings.Index(authority[percent:], "]"); closeBracket >= 0 {
-		zoneEnd = percent + closeBracket
+	if net.ParseIP(address) == nil || !strings.Contains(address, ":") {
+		return "", "", fmt.Errorf("DNS server %q has a zone on a non-IPv6 host", serverURL)
 	}
-	zone := authority[percent+1 : zoneEnd]
+	if uriEncodedZone {
+		encodedZone = strings.TrimPrefix(encodedZone, "25")
+	}
+	zone, err := url.PathUnescape(encodedZone)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid IPv6 zone in DNS server %q: %w", serverURL, err)
+	}
 	if zone == "" || strings.ContainsAny(zone, "%[]:/?#") {
 		return "", "", fmt.Errorf("invalid IPv6 zone in DNS server %q", serverURL)
 	}
-	authority = authority[:percent] + authority[zoneEnd:]
+	authority = authority[:zoneStart] + authority[zoneEnd:]
 	return serverURL[:start] + authority + rest[end:], zone, nil
 }

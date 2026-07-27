@@ -350,6 +350,26 @@ func TestParseConfigDefaultServerEnvironmentAndFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("resolver config path debug", func(t *testing.T) {
+		resolverPath := filepath.Join(t.TempDir(), "custom-resolv.conf")
+		if err := os.WriteFile(resolverPath, []byte("nameserver 192.0.2.54\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		parseOpts := testParseOptions(t, nil)
+		parseOpts.ResolverConfigPath = resolverPath
+		config, err := ParseConfig([]string{"example.com", "A"}, parseOpts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		debugMessages := strings.Join(config.DebugMessages, "\n")
+		if !strings.Contains(debugMessages, resolverPath) {
+			t.Fatalf("DebugMessages = %q, want resolver path %q", debugMessages, resolverPath)
+		}
+		if strings.Contains(debugMessages, "/etc/resolv.conf") {
+			t.Fatalf("DebugMessages = %q, unexpectedly contains default resolver path", debugMessages)
+		}
+	})
+
 	t.Run("fallback", func(t *testing.T) {
 		parseOpts := testParseOptions(t, nil)
 		parseOpts.ResolverConfigPath = filepath.Join(t.TempDir(), "missing-resolv.conf")
