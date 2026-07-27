@@ -1196,6 +1196,9 @@ func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tab
 }
 
 func Execute() {
+	if handled, exitCode := maybeRunDNSMode(os.Args[1:], os.Stdout, os.Stderr); handled {
+		os.Exit(exitCode)
+	}
 	if handled, exitCode := maybeRunSpeedMode(os.Args[1:], os.Stdout, os.Stderr); handled {
 		os.Exit(exitCode)
 	}
@@ -1238,6 +1241,7 @@ func Execute() {
 	disableMPLS := parser.Flag("e", "disable-mpls", &argparse.Options{Help: "Disable MPLS"})
 	ver := parser.Flag("V", "version", &argparse.Options{Help: "Print version info and exit"})
 	setupNextTraceAPIV4Token := parser.Flag("x", "setup-api-v4-token", &argparse.Options{Help: "Store a session-only NextTrace API v4 token in a temporary file"})
+	dnsMode := registerDNSFlag(parser)
 	speedMode := registerSpeedFlag(parser)
 	naliMode := registerNaliFlag(parser)
 	srcAddr := parser.String("s", "source", &argparse.Options{Help: "Use source address src_addr for outgoing packets"})
@@ -1284,6 +1288,10 @@ func Execute() {
 		// This can also be done by passing -h or --help flags
 		fmt.Print(sanitizeUsagePositionalArgs(parser.Usage(err)))
 		return
+	}
+	if *dnsMode {
+		fmt.Fprintln(os.Stderr, "-l/--dns must be the first argument")
+		os.Exit(1)
 	}
 	if *setupNextTraceAPIV4Token {
 		if err := runNextTraceAPIV4TokenSetup(nextTraceAPIV4TokenSetupOptions{
