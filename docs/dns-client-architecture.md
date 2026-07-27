@@ -9,24 +9,24 @@
 
 ## 本地编排对应关系
 
-代码行数快照：2026-07-27，adapter code commit `40acbc4`，基于 `origin/main` `0bcc549`。
+代码行数快照：2026-07-27，adapter code commit `610d71e`，基于 `origin/main` `0bcc549`。
 
 | q root 职责 | NextTrace adapter | 生产代码行数 |
 | --- | --- | ---: |
-| qrc/env、flags、位置参数、RR type、IDNA、reverse/CHAOS | `config.go` | 387 |
+| qrc/env、flags、位置参数、RR type、IDNA、reverse/CHAOS | `config.go` | 388 |
 | DNS header、EDNS、DNSSEC、NSID、ECS、padding、cookie | `query.go` | 138 |
 | DNS Stamp、server URL、协议、默认端口 | `server.go` | 291 |
 | TLS 配置及 UDP/TCP/DoT/DoH/DoQ/ODoH/DNSCrypt factory | `transport.go` | 369 |
 | 多服务器、timeout、ID check、PTR、输出调度 | `runner.go` + `output.go` | 645 |
 | recursive AXFR | `xfr.go` | 253 |
 | flavor/CLI 接线 | `cmd/dns_mode*.go` | 98 |
-| **合计** |  | **2,181** |
+| **合计** |  | **2,182** |
 
-q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapter 为避免 q root 的全局状态、超时竞态、路径穿越和可预判 fatal 路径，额外维护 1,180 行。
+q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapter 为避免 q root 的全局状态、超时竞态、路径穿越和可预判 fatal 路径，额外维护 1,181 行。
 
 ## 依赖与体积
 
-测量快照：2026-07-27，Darwin/arm64，`go build -trimpath -ldflags '-s -w'`；adapter code commit `40acbc4` 对比 `origin/main` `0bcc549`。
+测量快照：2026-07-27，Darwin/arm64，`go build -trimpath -ldflags '-s -w'`；adapter code commit `610d71e` 对比 `origin/main` `0bcc549`。
 
 | flavor | 基线 bytes | 集成后 bytes | 增量 | 增幅 |
 | --- | ---: | ---: | ---: | ---: |
@@ -55,6 +55,7 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 
 - q `cli.Flags` 的字段名、字段类型和完整 struct tags 有 v0.19.12 反射快照；description 中的 default-true 语义也受门禁保护。
 - qrc、`Q_DEFAULT_SERVER`、`NO_COLOR`、`SSLKEYLOGFILE`、shell completion、位置参数、默认 RR types、IDNA、reverse、CHAOS。
+- 非 help go-flags 解析错误保留 q 的两行 stderr（裸 parser error 与终止错误）；差分语料覆盖 unknown option 和 missing value。
 - DNS header、DNSSEC/EDNS、NSID、ECS、padding、cookie、TCP fallback、TXT concat、TTL rounding、PTR cache、recursive AXFR 及取消后的连接关闭/drain。
 - 本地 UDP、TCP、DoT、DoH、DoQ、ODoH、DNSCrypt 服务；各 transport 的参数映射有字段断言。
 - pretty、column、raw、JSON、YAML 与官方 q v0.19.12 同语料的 stdout/stderr/退出码差分；语料还覆盖 verbose/trace、qrc/env、completion、多服务器、DNS Stamp、全部 transport、HTTP header、TLS key log、numeric RR、userinfo、parser error 和 recursive AXFR。
@@ -78,6 +79,7 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 - 可预判的 plus flag、TLS、URL、HTTP header、DNSCrypt、AXFR 错误会返回普通 error，不复刻 q root 的 `log.Fatal`；差分测试按消息语义规范化 fatal 前缀、耗时和平台网络错误。无效 HTTP header 会在建连前失败，q root 会交给 net/http 在发送时拒绝。
 - `--qid` 只接受 `-1` 或 `0..65535`；q root 会把其他整数静默截断为 `uint16`。ODoH target 会先解析 DNS Stamp 并接受解析结果为 HTTPS 的 DoH Stamp；q root 的字面 `https://` 检查会拒绝该组合。
 - q v0.19.12 的 plus flag helper 会跳过 `+aa`、`+ad`、`+cd`、`+ra`、`+rd`、`+t`、`+z`；adapter 按 `cli.Flags` 的公开 long tag 正确处理这些短名称，未定义的 `+tc` 仍报错。
+- adapter 将大小写不敏感的精确位置参数 `CH` 仅作为 CHAOS class marker，并继续解析后续 qname；q root 在 qname 为空时还会错误地把 `CH` 设为查询名。
 - adapter 按完整 question 与全部 OPT option 计算 EDNS padding，并按服务器数、RR query 数及实际 A/AAAA PTR follow-up 数配置整体 watchdog；q root 分别按空 header 计算 padding、只按服务器数计算整体 timeout。
 - adapter 正确区分 bare 数值 IPv6 scope 与 RFC 6874 `%25` zone、避免把 escaped userinfo 误判为 zone，并保留 DoH scoped IPv6 URL 的单层 `%25` 编码；同时以 `0600` 创建 TLS key log、验证 AXFR 文件组件与 root containment，并修正 q root 的 scoped IPv6 debug 格式。差分测试仅对锁定版本的该条错误 debug 行做窄归一化。
 
@@ -91,7 +93,7 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 - recursive AXFR 取消会主动关闭并 drain transfer；TLS/HTTP/QUIC/ODoH/DNSCrypt 仍无法提供严格的底层即时取消。
 - recursive AXFR 会拒绝非便携 label 并做词法 containment；它假设当前目录不受恶意本地进程并发修改，不防御本地 symlink TOCTOU。
 - 超时会禁止后续 stdout/stderr 写入，但若调用方提供的 writer 已在一次写入中永久阻塞，禁用操作本身也会等待；正常终端/文件路径未发现该问题。
-- 2,181 行本地编排高于 q root 1,001 行，升级时存在明显的双实现漂移成本。
+- 2,182 行本地编排高于 q root 1,001 行，升级时存在明显的双实现漂移成本。
 
 ## 升级协议
 
@@ -105,4 +107,4 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 
 ## Phase 2 acceptance
 
-DNSCrypt/ODoH 隔离 smoke 已完成。2026-07-27 已人工确认接受初始 1,892 行本地编排、full +3.189 MiB、上述语义差异，以及不可拦截 fatal/非统一取消风险，允许进入正式 PR review；review 修复后为 2,181 行、full +3.204 MiB。该确认不授权 Phase 3 resolver 替换。
+DNSCrypt/ODoH 隔离 smoke 已完成。2026-07-27 已人工确认接受初始 1,892 行本地编排、full +3.189 MiB、上述语义差异，以及不可拦截 fatal/非统一取消风险，允许进入正式 PR review；review 修复后为 2,182 行、full +3.204 MiB。该确认不授权 Phase 3 resolver 替换。
