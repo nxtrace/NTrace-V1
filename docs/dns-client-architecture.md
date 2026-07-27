@@ -9,7 +9,7 @@
 
 ## 本地编排对应关系
 
-代码行数快照：2026-07-27，adapter code commit `7a2f2bc`，基于 `origin/main` `0bcc549`。
+代码行数快照：2026-07-27，adapter code commit `40acbc4`，基于 `origin/main` `0bcc549`。
 
 | q root 职责 | NextTrace adapter | 生产代码行数 |
 | --- | --- | ---: |
@@ -26,7 +26,7 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 
 ## 依赖与体积
 
-测量快照：2026-07-27，Darwin/arm64，`go build -trimpath -ldflags '-s -w'`；adapter code commit `7a2f2bc` 对比 `origin/main` `0bcc549`。
+测量快照：2026-07-27，Darwin/arm64，`go build -trimpath -ldflags '-s -w'`；adapter code commit `40acbc4` 对比 `origin/main` `0bcc549`。
 
 | flavor | 基线 bytes | 集成后 bytes | 增量 | 增幅 |
 | --- | ---: | ---: | ---: | ---: |
