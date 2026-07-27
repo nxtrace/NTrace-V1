@@ -86,8 +86,8 @@ func TestBuildQueriesEDNSOptions(t *testing.T) {
 		t.Errorf("option[0] = %T, want NSID", opt.Option[0])
 	}
 	padding, ok := opt.Option[1].(*dns.EDNS0_PADDING)
-	if !ok || len(padding.Padding) != 116 {
-		t.Errorf("option[1] = %#v, want 116-byte padding", opt.Option[1])
+	if !ok || len(padding.Padding) != 57 {
+		t.Errorf("option[1] = %#v, want 57-byte padding", opt.Option[1])
 	}
 	subnet, ok := opt.Option[2].(*dns.EDNS0_SUBNET)
 	if !ok {
@@ -100,8 +100,12 @@ func TestBuildQueriesEDNSOptions(t *testing.T) {
 	if !ok || cookie.Cookie != "0011223344556677" {
 		t.Errorf("option[3] = %#v, want cookie", opt.Option[3])
 	}
-	if _, err := queries[0].Pack(); err != nil {
+	packed, err := queries[0].Pack()
+	if err != nil {
 		t.Fatalf("Pack() error = %v", err)
+	}
+	if len(packed)%128 != 0 {
+		t.Fatalf("packed query length = %d, want a multiple of 128", len(packed))
 	}
 }
 

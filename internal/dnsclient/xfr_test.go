@@ -52,6 +52,18 @@ func TestRunRecursiveAXFRToWalksEachZoneOnce(t *testing.T) {
 	}
 }
 
+func TestRecursiveAXFRRootUsesWindowsPortableTimestamp(t *testing.T) {
+	now := time.Date(2026, time.July, 27, 12, 34, 56, 0, time.UTC)
+	got := recursiveAXFRRoot("example.com", now)
+	const want = "example.com_Mon-Jul-27-12-34-56-UTC-2026_recaxfr"
+	if got != want {
+		t.Fatalf("recursiveAXFRRoot() = %q, want %q", got, want)
+	}
+	if strings.ContainsAny(got, `<>:"/\\|?*`) {
+		t.Fatalf("recursiveAXFRRoot() = %q, contains a Windows-invalid path character", got)
+	}
+}
+
 func TestRunRecursiveAXFRToHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

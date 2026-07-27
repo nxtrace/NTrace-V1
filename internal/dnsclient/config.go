@@ -191,13 +191,17 @@ func applyPlusFlags(opts *cli.Flags, args []string) error {
 	value := reflect.ValueOf(opts).Elem()
 	typ := value.Type()
 	for _, arg := range args {
-		if len(arg) <= 3 || arg[0] != '+' {
+		if len(arg) <= 1 || arg[0] != '+' {
 			continue
 		}
-		state := arg[1:3] != "no"
-		name := strings.ToLower(arg[3:])
-		if state {
-			name = strings.ToLower(arg[1:])
+		if strings.EqualFold(arg, "+no") {
+			continue
+		}
+		state := true
+		name := strings.ToLower(arg[1:])
+		if strings.HasPrefix(name, "no") {
+			state = false
+			name = strings.TrimPrefix(name, "no")
 		}
 
 		found := false
@@ -341,7 +345,7 @@ func setDefaultServer(opts *cli.Flags, lookupEnv func(string) (string, bool), re
 	}
 	if server, _ := lookupEnv(defaultServerEnv); server != "" {
 		opts.Server = []string{server}
-		return []string{fmt.Sprintf("Using %s from %s environment variable", opts.Server, defaultServerEnv)}
+		return []string{fmt.Sprintf("Using %v from %s environment variable", opts.Server, defaultServerEnv)}
 	}
 	debugMessages := []string{fmt.Sprintf("No server specified or %s set, using /etc/resolv.conf", defaultServerEnv)}
 	if resolverConfigPath == "" {
@@ -350,10 +354,10 @@ func setDefaultServer(opts *cli.Flags, lookupEnv func(string) (string, bool), re
 	config, err := dns.ClientConfigFromFile(resolverConfigPath)
 	if err == nil && len(config.Servers) > 0 {
 		opts.Server = []string{config.Servers[0]}
-		return append(debugMessages, fmt.Sprintf("found server %s from /etc/resolv.conf", opts.Server))
+		return append(debugMessages, fmt.Sprintf("found server %v from /etc/resolv.conf", opts.Server))
 	}
 	opts.Server = []string{fallbackServer}
-	return append(debugMessages, fmt.Sprintf("no server set, using %s", opts.Server))
+	return append(debugMessages, fmt.Sprintf("no server set, using %v", opts.Server))
 }
 
 func validateODoH(opts cli.Flags) error {

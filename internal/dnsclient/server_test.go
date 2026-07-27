@@ -3,8 +3,10 @@
 package dnsclient
 
 import (
+	"bytes"
 	"testing"
 
+	qlog "github.com/charmbracelet/log"
 	"github.com/jedisct1/go-dnsstamps"
 	qtransport "github.com/natesales/q/transport"
 	"github.com/stretchr/testify/require"
@@ -37,6 +39,7 @@ func TestParseServerCompatibility(t *testing.T) {
 		{name: "DoQ", input: "quic://dns.adguard.com", wantType: qtransport.TypeQUIC, wantAddr: "dns.adguard.com:853", wantHost: "dns.adguard.com", wantPort: "853"},
 		{name: "scoped IPv6", input: "fe80::1%en0", wantType: qtransport.TypePlain, wantAddr: "[fe80::1%en0]:53", wantHost: "fe80::1%en0", wantPort: "53"},
 		{name: "scoped IPv6 explicit", input: "plain://[fe80::1%en0]:53", wantType: qtransport.TypePlain, wantAddr: "[fe80::1%en0]:53", wantHost: "fe80::1%en0", wantPort: "53"},
+		{name: "DoH scoped IPv6", input: "https://[fe80::1%en0]/dns-query", wantType: qtransport.TypeHTTP, wantAddr: "https://[fe80::1%25en0]:443/dns-query", wantHost: "fe80::1%en0", wantPort: "443", wantPath: "/dns-query"},
 		{name: "DoH stamp", input: "sdns://AgcAAAAAAAAAAAAHOS45LjkuOQA", wantType: qtransport.TypeHTTP, wantAddr: "https://9.9.9.9:443/dns-query", wantHost: "9.9.9.9", wantPort: "443", wantPath: "/dns-query", wantStamp: true},
 		{name: "encoded path", input: "https://localhost/1%3A89%3D%3D%3A64fx", wantType: qtransport.TypeHTTP, wantAddr: "https://localhost:443/1%3A89%3D%3D%3A64fx", wantHost: "localhost", wantPort: "443", wantPath: "/1%3A89%3D%3D%3A64fx"},
 		{name: "literal colons in path", input: "https://localhost/1:89==:64fx", wantType: qtransport.TypeHTTP, wantAddr: "https://localhost:443/1:89==:64fx", wantHost: "localhost", wantPort: "443", wantPath: "/1:89==:64fx"},
@@ -56,6 +59,20 @@ func TestParseServerCompatibility(t *testing.T) {
 			require.Equal(t, test.wantStamp, got.FromStamp)
 		})
 	}
+}
+
+func TestParseServerFormatsScopedIPv6DebugLog(t *testing.T) {
+	original := qlog.Default()
+	var output bytes.Buffer
+	logger := qlog.New(&output)
+	logger.SetLevel(qlog.DebugLevel)
+	qlog.SetDefault(logger)
+	t.Cleanup(func() { qlog.SetDefault(original) })
+
+	_, err := ParseServer("plain://[fe80::1%en0]:53")
+	require.NoError(t, err)
+	require.Contains(t, output.String(), "Removed IPv6 scope ID %en0 from server plain://[fe80::1]:53")
+	require.NotContains(t, output.String(), "scope ID %s")
 }
 
 func TestParseServerDNSCryptStamp(t *testing.T) {

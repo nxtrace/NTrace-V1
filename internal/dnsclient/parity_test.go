@@ -45,6 +45,9 @@ var (
 	quicReceiveBufferWarningPattern = regexp.MustCompile(
 		`(?m)^(?:\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} )?failed to sufficiently increase receive buffer size \(was: \d+ kiB, wanted: \d+ kiB, got: \d+ kiB\)\. See https://github\.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details\.[ \t]*\r?$`,
 	)
+	qScopedIPv6LogPattern = regexp.MustCompile(
+		`(?m)^(DEBU Removed IPv6 scope ID )%s from server %s (%[A-Za-z0-9]+)=(\S+)$`,
+	)
 	recAXFRPathPattern = regexp.MustCompile(`example\.com_[^\s]+_recaxfr`)
 )
 
@@ -490,8 +493,17 @@ func normalizeParityOutput(value string) string {
 	value = prettyFromPattern.ReplaceAllString(value, "${1}DURATION")
 	value = serverWarningPattern.ReplaceAllString(value, "SERVER_WARNING")
 	value = quicReceiveBufferWarningPattern.ReplaceAllString(value, "")
+	value = qScopedIPv6LogPattern.ReplaceAllString(value, "${1}${2} from server ${3}")
 	value = recAXFRPathPattern.ReplaceAllString(value, "AXFR_DIR")
 	return strings.TrimSpace(value)
+}
+
+func TestNormalizeParityOutputCorrectsPinnedQScopedIPv6Log(t *testing.T) {
+	malformed := "DEBU Removed IPv6 scope ID %s from server %s %lo0=plain://[fe80::1]:1"
+	want := "DEBU Removed IPv6 scope ID %lo0 from server plain://[fe80::1]:1"
+	if got := normalizeParityOutput(malformed); got != want {
+		t.Fatalf("normalizeParityOutput() = %q, want %q", got, want)
+	}
 }
 
 func TestNormalizeParityOutputIgnoresQUICReceiveBufferWarning(t *testing.T) {

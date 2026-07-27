@@ -5,6 +5,7 @@ package dnsclient
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -99,6 +100,53 @@ func TestRunZeroTimeoutExpiresImmediately(t *testing.T) {
 	}, io.Discard, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "timeout after 0s") {
 		t.Fatalf("code/stderr = %d/%q", code, stderr.String())
+	}
+}
+
+func TestAggregateDNSWorkTimeout(t *testing.T) {
+	opts := &cli.Flags{Timeout: time.Second, Server: []string{"one", "two"}}
+	queries := make([]dns.Msg, 3)
+	if got := aggregateDNSWorkTimeout(opts, queries); got != 6*time.Second {
+		t.Fatalf("aggregateDNSWorkTimeout() = %s, want 6s", got)
+	}
+	opts.RecAXFR = true
+	if got := aggregateDNSWorkTimeout(opts, queries); got != 2*time.Second {
+		t.Fatalf("recaxfr aggregateDNSWorkTimeout() = %s, want 2s", got)
+	}
+}
+
+func TestRunBudgetsEachSerializedRRQuery(t *testing.T) {
+	isolateRunEnvironment(t)
+	server := startTestDNSServerWithDelay(t, "udp", 40*time.Millisecond, 1)
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"--server=" + server,
+		"--qname=example.com",
+		"--type=A",
+		"--type=AAAA",
+		"--type=TXT",
+		"--format=raw",
+		"--timeout=80ms",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run() code = %d, stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunExtendsBudgetForEachPTRFollowup(t *testing.T) {
+	isolateRunEnvironment(t)
+	server := startTestDNSServerWithDelay(t, "udp", 30*time.Millisecond, 2)
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"--server=" + server,
+		"--qname=example.com",
+		"--type=A",
+		"--resolve-ips",
+		"--format=raw",
+		"--timeout=60ms",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run() code = %d, stderr=%q", code, stderr.String())
 	}
 }
 
@@ -293,6 +341,39 @@ func TestRunTimedDNSWorkCoversPostQueryWork(t *testing.T) {
 	}
 }
 
+func TestRunTimedDNSWorkHonorsParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	stdoutScope := newDiscardableWriter(io.Discard)
+	stderrScope := newDiscardableWriter(io.Discard)
+	err := runTimedDNSWork(
+		ctx,
+		time.Second,
+		stdoutScope,
+		stderrScope,
+		func() { close(done) },
+		func(workCtx context.Context) error {
+			close(started)
+			<-workCtx.Done()
+			return workCtx.Err()
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled work did not clean up")
+	}
+}
+
 func isolateRunEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -303,17 +384,25 @@ func isolateRunEnvironment(t *testing.T) {
 }
 
 func startTestDNSServer(t *testing.T, network string) string {
+	return startTestDNSServerWithDelay(t, network, 0, 1)
+}
+
+func startTestDNSServerWithDelay(t *testing.T, network string, delay time.Duration, addressAnswers int) string {
 	t.Helper()
 	handler := dns.HandlerFunc(func(writer dns.ResponseWriter, request *dns.Msg) {
+		time.Sleep(delay)
 		reply := new(dns.Msg)
 		reply.SetReply(request)
 		if len(request.Question) > 0 {
 			switch request.Question[0].Qtype {
 			case dns.TypeA:
-				reply.Answer = []dns.RR{&dns.A{
-					Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 125},
-					A:   net.ParseIP("192.0.2.10"),
-				}}
+				reply.Answer = make([]dns.RR, 0, addressAnswers)
+				for i := 0; i < addressAnswers; i++ {
+					reply.Answer = append(reply.Answer, &dns.A{
+						Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 125},
+						A:   net.ParseIP(fmt.Sprintf("192.0.2.%d", 10+i)),
+					})
+				}
 			case dns.TypeTXT:
 				reply.Answer = []dns.RR{&dns.TXT{
 					Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},

@@ -27,6 +27,9 @@ const qCompatibilityVersion = "v0.19.12"
 
 var dnsClientGlobalMu sync.Mutex
 
+type dnsWorkTimeoutExtender func(time.Duration)
+type dnsWorkTimeoutExtenderKey struct{}
+
 type discardableWriter struct {
 	mu       sync.Mutex
 	out      io.Writer
@@ -133,10 +136,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	totalTimeout := opts.Timeout
-	if len(opts.Server) > 1 {
-		totalTimeout *= time.Duration(len(opts.Server))
-	}
+	totalTimeout := aggregateDNSWorkTimeout(opts, queries)
 	backgroundCleanup = true
 	err = runTimedDNSWork(
 		ctx,
@@ -166,7 +166,18 @@ func runTimedDNSWork(
 	cleanup func(),
 	work func(context.Context) error,
 ) error {
-	workCtx, cancel := context.WithTimeout(parent, totalTimeout)
+	baseCtx, cancel := context.WithCancel(parent)
+	defer cancel()
+	extensions := make(chan time.Duration)
+	workCtx := context.WithValue(baseCtx, dnsWorkTimeoutExtenderKey{}, dnsWorkTimeoutExtender(func(extension time.Duration) {
+		if extension <= 0 {
+			return
+		}
+		select {
+		case extensions <- extension:
+		case <-baseCtx.Done():
+		}
+	}))
 	result := make(chan error, 1)
 	go func() {
 		err := func() error {
@@ -176,15 +187,58 @@ func runTimedDNSWork(
 		result <- err
 	}()
 
-	select {
-	case err := <-result:
-		cancel()
-		return normalizeRunError(err, totalTimeout)
-	case <-workCtx.Done():
-		stdout.disable()
-		stderr.disable()
-		cancel()
-		return normalizeRunError(workCtx.Err(), totalTimeout)
+	timer := time.NewTimer(totalTimeout)
+	defer timer.Stop()
+	deadline := time.Now().Add(totalTimeout)
+	effectiveTimeout := totalTimeout
+	for {
+		select {
+		case err := <-result:
+			cancel()
+			return normalizeRunError(err, effectiveTimeout)
+		case extension := <-extensions:
+			effectiveTimeout += extension
+			deadline = deadline.Add(extension)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			remaining := time.Until(deadline)
+			if remaining < 0 {
+				remaining = 0
+			}
+			timer.Reset(remaining)
+		case <-timer.C:
+			stdout.disable()
+			stderr.disable()
+			cancel()
+			return normalizeRunError(context.DeadlineExceeded, effectiveTimeout)
+		case <-baseCtx.Done():
+			stdout.disable()
+			stderr.disable()
+			return normalizeRunError(baseCtx.Err(), effectiveTimeout)
+		}
+	}
+}
+
+func aggregateDNSWorkTimeout(opts *cli.Flags, queries []dns.Msg) time.Duration {
+	serverCount := len(opts.Server)
+	if serverCount == 0 {
+		serverCount = 1
+	}
+	queryCount := len(queries)
+	if queryCount == 0 || opts.RecAXFR {
+		queryCount = 1
+	}
+	return opts.Timeout * time.Duration(serverCount*queryCount)
+}
+
+func extendDNSWorkTimeout(ctx context.Context, extension time.Duration) {
+	extend, ok := ctx.Value(dnsWorkTimeoutExtenderKey{}).(dnsWorkTimeoutExtender)
+	if ok {
+		extend(extension)
 	}
 }
 
@@ -272,7 +326,7 @@ func logRuntimeConfig(config Config) {
 	for _, message := range config.DebugMessages {
 		qlog.Debug(message)
 	}
-	qlog.Debugf("Server(s): %s", opts.Server)
+	qlog.Debugf("Server(s): %v", opts.Server)
 	if opts.Chaos {
 		qlog.Debug("Flag set, using chaos class")
 	}
@@ -362,6 +416,7 @@ func queryServer(
 	postProcessReplies(replies, opts)
 	entry := &qoutput.Entry{Queries: queries, Replies: replies, Server: server.Address, Time: time.Since(start)}
 	if opts.ResolveIPs {
+		extendDNSWorkTimeout(ctx, opts.Timeout*time.Duration(ptrFollowupCount(replies)))
 		if err := loadPTRs(ctx, entry, txp); err != nil {
 			_ = txp.Close()
 			return nil, false, err
@@ -371,6 +426,18 @@ func queryServer(
 		return entry, false, fmt.Errorf("closing transport: %w", err)
 	}
 	return entry, false, nil
+}
+
+func ptrFollowupCount(replies []*dns.Msg) int {
+	count := 0
+	for _, reply := range replies {
+		for _, rr := range reply.Answer {
+			if addressRecordIP(rr) != "" {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func exchangeQueries(

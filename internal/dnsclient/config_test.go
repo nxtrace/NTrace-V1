@@ -104,6 +104,55 @@ func TestParseConfigQRCEnvironmentAndCommandLine(t *testing.T) {
 	}
 }
 
+func TestParseConfigShortPlusFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled func(Config) bool
+	}{
+		{name: "aa", enabled: func(config Config) bool { return config.Flags.AuthoritativeAnswer }},
+		{name: "ad", enabled: func(config Config) bool { return config.Flags.AuthenticData }},
+		{name: "cd", enabled: func(config Config) bool { return config.Flags.CheckingDisabled }},
+		{name: "ra", enabled: func(config Config) bool { return config.Flags.RecursionAvailable }},
+		{name: "rd", enabled: func(config Config) bool { return config.Flags.RecursionDesired }},
+		{name: "t", enabled: func(config Config) bool { return config.Flags.Truncated }},
+		{name: "z", enabled: func(config Config) bool { return config.Flags.Zero }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config, err := ParseConfig([]string{"--" + test.name + "=false", "+" + test.name, "example.com", "A", "@1.1.1.1"}, testParseOptions(t, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.enabled(config) {
+				t.Fatalf("+%s did not enable its query flag", test.name)
+			}
+
+			config, err = ParseConfig([]string{"--" + test.name + "=true", "+no" + test.name, "example.com", "A", "@1.1.1.1"}, testParseOptions(t, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.enabled(config) {
+				t.Fatalf("+no%s did not disable its query flag", test.name)
+			}
+		})
+	}
+
+	config, err := ParseConfig([]string{"+nord", "+rd", "example.com", "A", "@1.1.1.1"}, testParseOptions(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Flags.RecursionDesired {
+		t.Fatal("+rd did not restore recursion after +nord")
+	}
+}
+
+func TestParseConfigRejectsUnsupportedTCPlusAlias(t *testing.T) {
+	_, err := ParseConfig([]string{"+tc", "example.com", "A", "@1.1.1.1"}, testParseOptions(t, nil))
+	if err == nil || !strings.Contains(err.Error(), "unknown flag +tc") {
+		t.Fatalf("error = %v, want unknown +tc flag", err)
+	}
+}
+
 func TestParseConfigPositionalsIDNAAndChaos(t *testing.T) {
 	config, err := ParseConfig([]string{
 		"--qname", "_sip.例子.测试", "NS", "CH", "@9.9.9.9",

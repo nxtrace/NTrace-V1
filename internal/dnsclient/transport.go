@@ -86,7 +86,7 @@ func BuildTLSConfig(opts cli.Flags) (*tls.Config, func() error, error) {
 
 	if opts.TLSKeyLogFile != "" {
 		qlog.Warnf("TLS secret logging enabled")
-		keyLog, err := os.OpenFile(opts.TLSKeyLogFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
+		keyLog, err := os.OpenFile(opts.TLSKeyLogFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("open TLS key log: %w", err)
 		}

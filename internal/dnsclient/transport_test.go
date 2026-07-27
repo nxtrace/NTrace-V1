@@ -5,9 +5,12 @@ package dnsclient
 import (
 	"crypto/tls"
 	"encoding/hex"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -62,6 +65,11 @@ func TestBuildTLSConfigKeyLogCleanup(t *testing.T) {
 	config, cleanup, err := BuildTLSConfig(cli.Flags{TLSKeyLogFile: path})
 	require.NoError(t, err)
 	require.NotNil(t, config.KeyLogWriter)
+	if runtime.GOOS != "windows" {
+		info, statErr := os.Stat(path)
+		require.NoError(t, statErr)
+		require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+	}
 	require.NoError(t, cleanup())
 	_, err = config.KeyLogWriter.Write([]byte("closed"))
 	require.Error(t, err)

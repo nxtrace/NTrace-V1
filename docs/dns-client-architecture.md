@@ -11,16 +11,16 @@
 
 | q root 职责 | NextTrace adapter | 生产代码行数 |
 | --- | --- | ---: |
-| qrc/env、flags、位置参数、RR type、IDNA、reverse/CHAOS | `config.go` | 372 |
-| DNS header、EDNS、DNSSEC、NSID、ECS、padding、cookie | `query.go` | 118 |
-| DNS Stamp、server URL、协议、默认端口 | `server.go` | 263 |
+| qrc/env、flags、位置参数、RR type、IDNA、reverse/CHAOS | `config.go` | 376 |
+| DNS header、EDNS、DNSSEC、NSID、ECS、padding、cookie | `query.go` | 124 |
+| DNS Stamp、server URL、协议、默认端口 | `server.go` | 256 |
 | TLS 配置及 UDP/TCP/DoT/DoH/DoQ/ODoH/DNSCrypt factory | `transport.go` | 353 |
-| 多服务器、timeout、ID check、PTR、输出调度 | `runner.go` + `output.go` | 541 |
-| recursive AXFR | `xfr.go` | 163 |
+| 多服务器、timeout、ID check、PTR、输出调度 | `runner.go` + `output.go` | 608 |
+| recursive AXFR | `xfr.go` | 166 |
 | flavor/CLI 接线 | `cmd/dns_mode*.go` | 82 |
-| **合计** |  | **1,892** |
+| **合计** |  | **1,965** |
 
-q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapter 为避免 q root 的全局状态、超时竞态和可预判 fatal 路径，额外维护 891 行。
+q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapter 为避免 q root 的全局状态、超时竞态和可预判 fatal 路径，额外维护 964 行。
 
 ## 依赖与体积
 
@@ -74,6 +74,9 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 - 多 RR type/default RR type 的集合一致；adapter 固定参数顺序，q root 使用 map range，输出顺序本身不稳定。
 - `--version` 标识锁定的 q 版本及 `NextTrace adapter`，不冒充官方 q release build metadata。
 - 可预判的 plus flag、TLS、URL、DNSCrypt、AXFR 错误会返回普通 error，不复刻 q root 的 `log.Fatal`；差分测试按消息语义规范化 fatal 前缀、耗时和平台网络错误。
+- q v0.19.12 的 plus flag helper 会跳过 `+aa`、`+ad`、`+cd`、`+ra`、`+rd`、`+t`、`+z`；adapter 按 `cli.Flags` 的公开 long tag 正确处理这些短名称，未定义的 `+tc` 仍报错。
+- adapter 按完整 question 与全部 OPT option 计算 EDNS padding，并按服务器数、RR query 数及实际 A/AAAA PTR follow-up 数配置整体 watchdog；q root 分别按空 header 计算 padding、只按服务器数计算整体 timeout。
+- adapter 保留 DoH scoped IPv6 URL 的 `%25` 编码、以 `0600` 创建 TLS key log、使用 Windows 可用的 AXFR 时间戳，并修正 q root 的 scoped IPv6 debug 格式。差分测试仅对锁定版本的该条错误 debug 行做窄归一化。
 
 ## 剩余架构风险
 
@@ -84,7 +87,7 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 - `qutil.UseColor`、默认 charm logger、`net.DefaultResolver` 已在调用作用域内保存/恢复；JSON naming strategy 仍是 q output 的进程级全局写入，无法从公开 API 恢复。
 - recursive AXFR 取消会主动关闭并 drain transfer；TLS/HTTP/QUIC/ODoH/DNSCrypt 仍无法提供严格的底层即时取消。
 - 超时会禁止后续 stdout/stderr 写入，但若调用方提供的 writer 已在一次写入中永久阻塞，禁用操作本身也会等待；正常终端/文件路径未发现该问题。
-- 1,892 行本地编排高于 q root 1,001 行，升级时存在明显的双实现漂移成本。
+- 1,965 行本地编排高于 q root 1,001 行，升级时存在明显的双实现漂移成本。
 
 ## 升级协议
 
@@ -98,4 +101,4 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 
 ## Phase 2 acceptance
 
-DNSCrypt/ODoH 隔离 smoke 已完成。2026-07-27 已人工确认接受 1,892 行本地编排、full +3.189 MiB、上述语义差异，以及不可拦截 fatal/非统一取消风险，允许进入正式 PR review。该确认不授权 Phase 3 resolver 替换。
+DNSCrypt/ODoH 隔离 smoke 已完成。2026-07-27 已人工确认接受初始 1,892 行本地编排、full +3.189 MiB、上述语义差异，以及不可拦截 fatal/非统一取消风险，允许进入正式 PR review；review 修复后本地编排为 1,965 行。该确认不授权 Phase 3 resolver 替换。

@@ -18,11 +18,14 @@ import (
 type zoneTransferFunc func(context.Context, string, string, time.Duration) ([]dns.RR, error)
 
 func runRecursiveAXFR(ctx context.Context, label, server string, timeout time.Duration, out io.Writer) error {
-	root := fmt.Sprintf("%s_%s_recaxfr",
+	return runRecursiveAXFRTo(ctx, label, server, timeout, recursiveAXFRRoot(label, time.Now()), out, transferZone)
+}
+
+func recursiveAXFRRoot(label string, now time.Time) string {
+	return fmt.Sprintf("%s_%s_recaxfr",
 		strings.TrimPrefix(label, "."),
-		strings.ReplaceAll(time.Now().Format(time.UnixDate), " ", "-"),
+		strings.NewReplacer(" ", "-", ":", "-").Replace(now.Format(time.UnixDate)),
 	)
-	return runRecursiveAXFRTo(ctx, label, server, timeout, root, out, transferZone)
 }
 
 func runRecursiveAXFRTo(

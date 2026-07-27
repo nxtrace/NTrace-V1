@@ -71,7 +71,7 @@ func ParseServer(server string) (ParsedServer, error) {
 		return parsed, err
 	}
 	if zone != "" {
-		qlog.Debug("Removed IPv6 scope ID %s from server %s", "%"+zone, withoutZone)
+		qlog.Debugf("Removed IPv6 scope ID %s from server %s", "%"+zone, withoutZone)
 	}
 	withoutZone = bracketURLIPv6(withoutZone)
 
@@ -129,7 +129,7 @@ func ParseServer(server string) (ParsedServer, error) {
 
 	if transportType == qtransport.TypeHTTP {
 		u.Host = net.JoinHostPort(host, port)
-		parsed.Address = restoreURLZone(u.String(), zone)
+		parsed.Address = u.String()
 	} else if port == "" {
 		parsed.Address = host
 	} else {
@@ -253,11 +253,4 @@ func removeIPv6Zone(serverURL string) (string, string, error) {
 	}
 	authority = authority[:percent] + authority[zoneEnd:]
 	return serverURL[:start] + authority + rest[end:], zone, nil
-}
-
-func restoreURLZone(serverURL, zone string) string {
-	if zone == "" {
-		return serverURL
-	}
-	return strings.Replace(serverURL, "%25"+zone, "%"+zone, 1)
 }

@@ -39,6 +39,11 @@ func buildQuery(config Config, rrType uint16) (dns.Msg, error) {
 	request.Zero = opts.Zero
 	request.Truncated = opts.Truncated
 
+	request.Question = []dns.Question{{
+		Name:   dns.Fqdn(opts.Name),
+		Qtype:  rrType,
+		Qclass: opts.Class,
+	}}
 	opt, err := buildEDNS(request, config)
 	if err != nil {
 		return dns.Msg{}, err
@@ -46,11 +51,6 @@ func buildQuery(config Config, rrType uint16) (dns.Msg, error) {
 	if opt != nil && opts.EDNS {
 		request.Extra = append(request.Extra, opt)
 	}
-	request.Question = []dns.Question{{
-		Name:   dns.Fqdn(opts.Name),
-		Qtype:  rrType,
-		Qclass: opts.Class,
-	}}
 	return request, nil
 }
 
@@ -70,17 +70,10 @@ func buildEDNS(request dns.Msg, config Config) (*dns.OPT, error) {
 	if opts.NSID {
 		opt.Option = append(opt.Option, &dns.EDNS0_NSID{Code: dns.EDNS0NSID})
 	}
+	var padding *dns.EDNS0_PADDING
 	if opts.Pad {
-		messageLength := request.Len()
-		paddingLength := 128 - messageLength%128
-		if messageLength+paddingLength > int(opt.UDPSize()) {
-			paddingLength = int(opt.UDPSize()) - messageLength
-			if paddingLength < 0 {
-				paddingLength = 0
-			}
-		}
-		qlog.Debugf("Padding with %d bytes", paddingLength)
-		opt.Option = append(opt.Option, &dns.EDNS0_PADDING{Padding: make([]byte, paddingLength)})
+		padding = &dns.EDNS0_PADDING{}
+		opt.Option = append(opt.Option, padding)
 	}
 	if opts.ClientSubnet != "" {
 		subnet, err := parseClientSubnet(opts.ClientSubnet)
@@ -94,6 +87,19 @@ func buildEDNS(request dns.Msg, config Config) (*dns.OPT, error) {
 			Code:   dns.EDNS0COOKIE,
 			Cookie: opts.Cookie,
 		})
+	}
+	if padding != nil {
+		request.Extra = append(request.Extra, opt)
+		messageLength := request.Len()
+		paddingLength := 128 - messageLength%128
+		if messageLength+paddingLength > int(opt.UDPSize()) {
+			paddingLength = int(opt.UDPSize()) - messageLength
+			if paddingLength < 0 {
+				paddingLength = 0
+			}
+		}
+		qlog.Debugf("Padding with %d bytes", paddingLength)
+		padding.Padding = make([]byte, paddingLength)
 	}
 	return opt, nil
 }
