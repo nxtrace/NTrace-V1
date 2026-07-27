@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/akamensky/argparse v1.4.0
 	github.com/ameshkov/dnscrypt/v2 v2.4.0
-	github.com/charmbracelet/log v0.4.2
+	github.com/charmbracelet/log v1.0.0
 	github.com/fatih/color v1.19.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/gopacket v1.1.19
