@@ -57,6 +57,16 @@ jobs:
           sudo go env -w GOTOOLCHAIN=go1.26.4+auto
           sudo go test -v -covermode=count -coverprofile='coverage.out' ./...
 
+      - name: Verify q v0.19.12 adapter parity
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          go mod download github.com/natesales/q@v0.19.12
+          Q_SOURCE="$(go env GOMODCACHE)/github.com/natesales/q@v0.19.12"
+          (cd "${Q_SOURCE}" && go build -trimpath -o "${RUNNER_TEMP}/q-v0.19.12" .)
+          NEXTTRACE_Q_REFERENCE_BINARY="${RUNNER_TEMP}/q-v0.19.12" \
+            go test ./internal/dnsclient -run '^TestPinnedQ' -count=1
+
       - name: Smoke test nt_install.sh
         if: ${{ matrix.os != 'windows-latest' }}
         shell: bash

@@ -157,25 +157,46 @@ jobs:
             BUILD_ARGS+=( -o "dist/${NAME}" -ldflags "$LD_BASE" )
             echo "build => dist/${NAME}  (tags: ${TAGS:-none})"
             go build "${BUILD_ARGS[@]}"
-            if command -v upx >/dev/null 2>&1; then
-              case "${GOOS}-${GOARCH}-${GOARM:-}" in
-                linux-amd64-*|linux-386-*|linux-arm64-*|linux-arm-7) upx -9 "dist/${NAME}" ;;
-                *) ;;
-              esac
-            fi
           done
 
       - name: Verify tiny/ntr decoupling
         run: |
           set -Eeuo pipefail
+          for TAGS in "flavor_tiny" "flavor_ntr"; do
+            DEPS="$(go list -deps -tags "${TAGS}" .)"
+            if grep -qE '^github\.com/natesales/q($|/)' <<<"${DEPS}"; then
+              echo "FAIL: ${TAGS} compile dependency graph contains q"
+              exit 1
+            fi
+          done
           for BIN in "nexttrace-tiny" "ntr"; do
             FNAME="${BIN}_${PLATFORM}${EXT}${SOFT}"
-            if go version -m "dist/${FNAME}" 2>/dev/null | grep -qE 'github\.com/gin-gonic/gin|github\.com/jsdelivr/globalping-cli'; then
-              echo "FAIL: ${FNAME} contains gin or globalping-cli dependency"
+            if ! BUILD_INFO="$(go version -m "dist/${FNAME}" 2>&1)"; then
+              echo "FAIL: unable to read Go build info from ${FNAME}"
+              echo "${BUILD_INFO}"
+              exit 1
+            fi
+            if grep -qE 'github\.com/gin-gonic/gin|github\.com/jsdelivr/globalping-cli|github\.com/natesales/q' <<<"${BUILD_INFO}"; then
+              echo "FAIL: ${FNAME} contains gin, globalping-cli, or q dependency"
               exit 1
             fi
           done
           echo "Decoupling check passed"
+
+      - name: Compress selected Linux artifacts
+        if: >
+          matrix.goos == 'linux' && (
+            matrix.goarch == 'amd64' ||
+            matrix.goarch == '386'   ||
+            matrix.goarch == 'arm64' ||
+            (matrix.goarch == 'arm' && matrix.goarm == '7')
+          )
+        run: |
+          set -Eeuo pipefail
+          for BIN in "nexttrace" "nexttrace-tiny" "ntr"; do
+            FNAME="${BIN}_${PLATFORM}${EXT}${SOFT}"
+            upx -9 "dist/${FNAME}"
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -265,10 +286,22 @@ jobs:
       - name: Verify tiny/ntr decoupling
         run: |
           set -Eeuo pipefail
+          for TAGS in "flavor_tiny" "flavor_ntr"; do
+            DEPS="$(go list -deps -tags "${TAGS}" .)"
+            if grep -qE '^github\.com/natesales/q($|/)' <<<"${DEPS}"; then
+              echo "FAIL: ${TAGS} compile dependency graph contains q"
+              exit 1
+            fi
+          done
           for BIN in "nexttrace-tiny" "ntr"; do
             FNAME="${BIN}_${GOOS}_${GOARCH}"
-            if go version -m "dist/${FNAME}" 2>/dev/null | grep -qE 'github\.com/gin-gonic/gin|github\.com/jsdelivr/globalping-cli'; then
-              echo "FAIL: ${FNAME} contains gin or globalping-cli dependency"
+            if ! BUILD_INFO="$(go version -m "dist/${FNAME}" 2>&1)"; then
+              echo "FAIL: unable to read Go build info from ${FNAME}"
+              echo "${BUILD_INFO}"
+              exit 1
+            fi
+            if grep -qE 'github\.com/gin-gonic/gin|github\.com/jsdelivr/globalping-cli|github\.com/natesales/q' <<<"${BUILD_INFO}"; then
+              echo "FAIL: ${FNAME} contains gin, globalping-cli, or q dependency"
               exit 1
             fi
           done
