@@ -249,6 +249,7 @@ func collectRRTypes(opts *cli.Flags, args []string) ([]uint16, error) {
 		}
 		if strings.EqualFold(arg, "ch") {
 			opts.Chaos = true
+			continue
 		}
 		rrType, typeFound := dns.StringToType[strings.ToUpper(arg)]
 		if typeFound {

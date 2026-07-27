@@ -175,6 +175,25 @@ func TestParseConfigPositionalsIDNAAndChaos(t *testing.T) {
 	}
 }
 
+func TestParseConfigChaosMarkerBeforeQName(t *testing.T) {
+	config, err := ParseConfig([]string{
+		"CH", "example.com", "TXT", "@9.9.9.9",
+	}, testParseOptions(t, nil))
+	if err != nil {
+		t.Fatalf("ParseConfig() error = %v", err)
+	}
+
+	if config.Flags.Name != "example.com" {
+		t.Errorf("Name = %q, want example.com", config.Flags.Name)
+	}
+	if config.Flags.Class != dns.ClassCHAOS {
+		t.Errorf("Class = %d, want CHAOS", config.Flags.Class)
+	}
+	if !reflect.DeepEqual(config.RRTypes, []uint16{dns.TypeTXT}) {
+		t.Errorf("RRTypes = %v, want TXT", config.RRTypes)
+	}
+}
+
 func TestParseConfigReverse(t *testing.T) {
 	config, err := ParseConfig([]string{
 		"--reverse", "--qname=192.0.2.1", "--type=PTR", "@1.1.1.1",
