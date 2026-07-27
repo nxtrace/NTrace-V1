@@ -9,7 +9,7 @@
 
 ## 本地编排对应关系
 
-代码行数快照：2026-07-27，adapter code commit `db66667`，基于 `origin/main` `0bcc549`。
+代码行数快照：2026-07-27，adapter code commit `7a2f2bc`，基于 `origin/main` `0bcc549`。
 
 | q root 职责 | NextTrace adapter | 生产代码行数 |
 | --- | --- | ---: |
@@ -17,16 +17,16 @@
 | DNS header、EDNS、DNSSEC、NSID、ECS、padding、cookie | `query.go` | 138 |
 | DNS Stamp、server URL、协议、默认端口 | `server.go` | 290 |
 | TLS 配置及 UDP/TCP/DoT/DoH/DoQ/ODoH/DNSCrypt factory | `transport.go` | 369 |
-| 多服务器、timeout、ID check、PTR、输出调度 | `runner.go` + `output.go` | 639 |
+| 多服务器、timeout、ID check、PTR、输出调度 | `runner.go` + `output.go` | 645 |
 | recursive AXFR | `xfr.go` | 253 |
 | flavor/CLI 接线 | `cmd/dns_mode*.go` | 98 |
-| **合计** |  | **2,174** |
+| **合计** |  | **2,180** |
 
-q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapter 为避免 q root 的全局状态、超时竞态、路径穿越和可预判 fatal 路径，额外维护 1,173 行。
+q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapter 为避免 q root 的全局状态、超时竞态、路径穿越和可预判 fatal 路径，额外维护 1,179 行。
 
 ## 依赖与体积
 
-测量快照：2026-07-27，Darwin/arm64，`go build -trimpath -ldflags '-s -w'`；adapter code commit `db66667` 对比 `origin/main` `0bcc549`。
+测量快照：2026-07-27，Darwin/arm64，`go build -trimpath -ldflags '-s -w'`；adapter code commit `7a2f2bc` 对比 `origin/main` `0bcc549`。
 
 | flavor | 基线 bytes | 集成后 bytes | 增量 | 增幅 |
 | --- | ---: | ---: | ---: | ---: |
@@ -91,7 +91,7 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 - recursive AXFR 取消会主动关闭并 drain transfer；TLS/HTTP/QUIC/ODoH/DNSCrypt 仍无法提供严格的底层即时取消。
 - recursive AXFR 会拒绝非便携 label 并做词法 containment；它假设当前目录不受恶意本地进程并发修改，不防御本地 symlink TOCTOU。
 - 超时会禁止后续 stdout/stderr 写入，但若调用方提供的 writer 已在一次写入中永久阻塞，禁用操作本身也会等待；正常终端/文件路径未发现该问题。
-- 2,174 行本地编排高于 q root 1,001 行，升级时存在明显的双实现漂移成本。
+- 2,180 行本地编排高于 q root 1,001 行，升级时存在明显的双实现漂移成本。
 
 ## 升级协议
 
@@ -105,4 +105,4 @@ q v0.19.12 的 `main.go`、`resolver.go`、`xfr.go` 合计 1,001 行。本 adapt
 
 ## Phase 2 acceptance
 
-DNSCrypt/ODoH 隔离 smoke 已完成。2026-07-27 已人工确认接受初始 1,892 行本地编排、full +3.189 MiB、上述语义差异，以及不可拦截 fatal/非统一取消风险，允许进入正式 PR review；review 修复后为 2,174 行、full +3.204 MiB。该确认不授权 Phase 3 resolver 替换。
+DNSCrypt/ODoH 隔离 smoke 已完成。2026-07-27 已人工确认接受初始 1,892 行本地编排、full +3.189 MiB、上述语义差异，以及不可拦截 fatal/非统一取消风险，允许进入正式 PR review；review 修复后为 2,180 行、full +3.204 MiB。该确认不授权 Phase 3 resolver 替换。
