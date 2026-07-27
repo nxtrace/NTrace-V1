@@ -18,7 +18,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/natesales/q v0.19.12
 	github.com/oschwald/maxminddb-golang v1.13.1
-	github.com/quic-go/quic-go v0.59.1
+	github.com/quic-go/quic-go v0.61.0
 	github.com/rodaine/table v1.3.1
 	github.com/spf13/viper v1.21.0
 	github.com/sthorne/odoh-go v1.0.4
