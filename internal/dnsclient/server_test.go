@@ -113,6 +113,7 @@ func TestParseServerRejectsInvalidInput(t *testing.T) {
 		"plain://user%40name@1.1.1.1",
 		"plain://[fe80::1%25]:53",
 		"plain://[fe80::1%25en%ZZ]:53",
+		"plain://[fe80::1%25en%0A]:53",
 		"1.1.1.1:70000",
 		"sdns://invalid",
 		doqStamp,

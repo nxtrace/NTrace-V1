@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 
 	qlog "github.com/charmbracelet/log"
 	"github.com/jedisct1/go-dnsstamps"
@@ -282,7 +283,7 @@ func removeIPv6Zone(serverURL string, uriEncodedZone bool) (string, string, erro
 	if err != nil {
 		return "", "", fmt.Errorf("invalid IPv6 zone in DNS server %q: %w", serverURL, err)
 	}
-	if zone == "" || strings.ContainsAny(zone, "%[]:/?#") {
+	if zone == "" || strings.ContainsAny(zone, "%[]:/?#") || strings.IndexFunc(zone, unicode.IsControl) >= 0 {
 		return "", "", fmt.Errorf("invalid IPv6 zone in DNS server %q", serverURL)
 	}
 	authority = authority[:zoneStart] + authority[zoneEnd:]
