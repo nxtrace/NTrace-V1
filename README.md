@@ -217,6 +217,8 @@ go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
 
+On macOS, source builds require Xcode Command Line Tools and cgo because TCP/UDP packet capture links against the system `libpcap`. For a native build, `go env CGO_ENABLED` must report `1`. If it reports `0`, remove any persistent override with `go env -u CGO_ENABLED`, ensure `xcode-select -p` succeeds, and build with `CGO_ENABLED=1`.
+
 Cross-compile example:
 
 ```bash

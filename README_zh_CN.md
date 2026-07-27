@@ -218,6 +218,8 @@ go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
 
+macOS 源码编译需要 Xcode Command Line Tools 和 cgo，因为 TCP/UDP 抓包会链接系统 `libpcap`。原生编译时，`go env CGO_ENABLED` 必须输出 `1`；若输出 `0`，请用 `go env -u CGO_ENABLED` 清除持久化覆盖，确认 `xcode-select -p` 成功后，再以 `CGO_ENABLED=1` 编译。
+
 交叉编译示例：
 
 ```bash
