@@ -46,38 +46,54 @@ func loadPTRs(ctx context.Context, entry *qoutput.Entry, txp transport.Transport
 	if entry.PTRs == nil {
 		entry.PTRs = make(map[string]string)
 	}
-	for _, reply := range entry.Replies {
+	for _, ip := range uniqueAddressRecordIPs(entry.Replies) {
+		if _, resolved := entry.PTRs[ip]; resolved {
+			continue
+		}
+		qname, err := dns.ReverseAddr(ip)
+		if err != nil {
+			return fmt.Errorf("reverse PTR address %s: %w", ip, err)
+		}
+		query := new(dns.Msg)
+		query.SetQuestion(qname, dns.TypePTR)
+		response, err := exchangeWithContext(ctx, txp, query)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			qlog.Warnf("error resolving PTR record: %s", err)
+			continue
+		}
+		if response == nil {
+			continue
+		}
+		for _, answer := range response.Answer {
+			if ptr, ok := answer.(*dns.PTR); ok {
+				entry.PTRs[ip] = ptr.Ptr
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func uniqueAddressRecordIPs(replies []*dns.Msg) []string {
+	seen := make(map[string]struct{})
+	var addresses []string
+	for _, reply := range replies {
 		for _, rr := range reply.Answer {
 			ip := addressRecordIP(rr)
 			if ip == "" {
 				continue
 			}
-			qname, err := dns.ReverseAddr(ip)
-			if err != nil {
-				return fmt.Errorf("reverse PTR address %s: %w", ip, err)
-			}
-			query := new(dns.Msg)
-			query.SetQuestion(qname, dns.TypePTR)
-			response, err := exchangeWithContext(ctx, txp, query)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				qlog.Warnf("error resolving PTR record: %s", err)
+			if _, exists := seen[ip]; exists {
 				continue
 			}
-			if response == nil {
-				continue
-			}
-			for _, answer := range response.Answer {
-				if ptr, ok := answer.(*dns.PTR); ok {
-					entry.PTRs[ip] = ptr.Ptr
-					break
-				}
-			}
+			seen[ip] = struct{}{}
+			addresses = append(addresses, ip)
 		}
 	}
-	return nil
+	return addresses
 }
 
 func addressRecordIP(rr dns.RR) string {

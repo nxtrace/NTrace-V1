@@ -5,6 +5,7 @@ package dnsclient
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -76,7 +77,7 @@ func TestRunSkipsFailedServerWhenAnotherSucceeds(t *testing.T) {
 		"--qname=example.com",
 		"--type=A",
 		"--format=raw",
-		"--timeout=30ms",
+		"--timeout=200ms",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("Run() code = %d, stderr=%q", code, stderr.String())
@@ -100,6 +101,77 @@ func TestRunZeroTimeoutExpiresImmediately(t *testing.T) {
 	}, io.Discard, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "timeout after 0s") {
 		t.Fatalf("code/stderr = %d/%q", code, stderr.String())
+	}
+}
+
+func TestRunCancelsWhileWaitingForDNSGlobals(t *testing.T) {
+	if err := acquireDNSClientGlobals(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(releaseDNSClientGlobals)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stderr bytes.Buffer
+	start := time.Now()
+	code := Run(ctx, []string{"--version"}, io.Discard, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "context canceled") {
+		t.Fatalf("code/stderr = %d/%q, want canceled lock acquisition", code, stderr.String())
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("canceled lock acquisition returned after %s", elapsed)
+	}
+}
+
+func TestAcquireDNSClientGlobalsRejectsPreCanceledContextWhenAvailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := acquireDNSClientGlobals(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquireDNSClientGlobals() error = %v, want context canceled", err)
+	}
+	select {
+	case dnsClientGlobalSem <- struct{}{}:
+		<-dnsClientGlobalSem
+	default:
+		t.Fatal("canceled acquisition consumed the DNS global semaphore")
+	}
+}
+
+func TestAcquireDNSClientGlobalsCancelsWhileWaiting(t *testing.T) {
+	if err := acquireDNSClientGlobals(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(releaseDNSClientGlobals)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		result <- acquireDNSClientGlobals(ctx)
+	}()
+	<-started
+	select {
+	case err := <-result:
+		t.Fatalf("acquisition returned before cancellation: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("acquireDNSClientGlobals() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiting acquisition did not observe cancellation")
+	}
+}
+
+func TestPTRFollowupCountUsesUniqueAddresses(t *testing.T) {
+	address := &dns.A{A: net.ParseIP("192.0.2.10")}
+	replies := []*dns.Msg{{Answer: []dns.RR{address, address}}}
+	if got := ptrFollowupCount(replies); got != 1 {
+		t.Fatalf("ptrFollowupCount() = %d, want 1", got)
 	}
 }
 

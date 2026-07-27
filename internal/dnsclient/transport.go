@@ -313,7 +313,9 @@ func (t *scopedHTTPTransport) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 	defer func() { http.DefaultTransport = original }()
 
 	reply, err := t.inner.Exchange(msg)
-	t.initialized = true
+	if err == nil {
+		t.initialized = true
+	}
 	return reply, err
 }
 
@@ -323,8 +325,10 @@ func (t *scopedHTTPTransport) Close() error {
 	return t.inner.Close()
 }
 
-// q's ODoH Close assumes Exchange initialized its client. Avoid the otherwise
-// possible nil dereference when setup fails before the first exchange.
+// q's ODoH Close assumes Exchange initialized its client. NewTransport
+// prevalidates the target and proxy URLs, after which q initializes the client
+// before every recoverable Exchange error. Delegate Close after Exchange
+// returns so failed requests do not leak idle connections.
 type safeODoHTransport struct {
 	mu        sync.Mutex
 	inner     *qtransport.ODoH
@@ -334,8 +338,9 @@ type safeODoHTransport struct {
 func (t *safeODoHTransport) Exchange(msg *dns.Msg) (*dns.Msg, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	reply, err := t.inner.Exchange(msg)
 	t.exchanged = true
-	return t.inner.Exchange(msg)
+	return reply, err
 }
 
 func (t *safeODoHTransport) Close() error {

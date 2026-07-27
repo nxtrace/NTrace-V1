@@ -10,6 +10,8 @@ import (
 	"github.com/miekg/dns"
 )
 
+const maxDNSQueryID = 1<<16 - 1
+
 // BuildQueries constructs one q-compatible DNS message per requested RR type.
 func BuildQueries(config Config) ([]dns.Msg, error) {
 	queries := make([]dns.Msg, 0, len(config.RRTypes))
@@ -26,11 +28,11 @@ func BuildQueries(config Config) ([]dns.Msg, error) {
 func buildQuery(config Config, rrType uint16) (dns.Msg, error) {
 	opts := config.Flags
 	request := dns.Msg{}
-	if opts.ID == -1 {
-		request.Id = dns.Id()
-	} else {
-		request.Id = uint16(opts.ID)
+	queryID, err := normalizedQueryID(opts.ID)
+	if err != nil {
+		return dns.Msg{}, err
 	}
+	request.Id = queryID
 	request.Authoritative = opts.AuthoritativeAnswer
 	request.AuthenticatedData = opts.AuthenticData
 	request.CheckingDisabled = opts.CheckingDisabled
@@ -54,8 +56,20 @@ func buildQuery(config Config, rrType uint16) (dns.Msg, error) {
 	return request, nil
 }
 
+func normalizedQueryID(value int) (uint16, error) {
+	if value == -1 {
+		return dns.Id(), nil
+	}
+	if value < 0 || value > maxDNSQueryID {
+		return 0, fmt.Errorf("query ID must be -1 or between 0 and %d (got %d)", maxDNSQueryID, value)
+	}
+	return uint16(value), nil
+}
+
 func buildEDNS(request dns.Msg, config Config) (*dns.OPT, error) {
 	opts := config.Flags
+	// Match q v0.19.12: validate requested EDNS options even when EDNS is
+	// disabled, then omit the completed OPT record in buildQuery.
 	if !opts.EDNS && !opts.DNSSEC && !opts.NSID && !opts.Pad && opts.ClientSubnet == "" && opts.Cookie == "" {
 		return nil, nil
 	}

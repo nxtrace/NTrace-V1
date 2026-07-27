@@ -708,18 +708,9 @@ func assertPinnedQAXFRParity(t *testing.T, reference, server string) {
 	args := []string{"--recaxfr", "example.com", "@tcp://" + server, "--timeout=1s"}
 	adapterDir := t.TempDir()
 	referenceDir := t.TempDir()
-	previousDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(adapterDir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(adapterDir)
 	var adapterOut, adapterErr bytes.Buffer
 	adapterCode := Run(context.Background(), args, &adapterOut, &adapterErr)
-	if err := os.Chdir(previousDir); err != nil {
-		t.Fatal(err)
-	}
 	referenceOut, referenceErr, referenceCode := runReferenceQInDir(t, reference, args, referenceDir)
 	if adapterCode != referenceCode || normalizeParityOutput(adapterOut.String()) != normalizeParityOutput(referenceOut) || normalizeParityOutput(adapterErr.String()) != normalizeParityOutput(referenceErr) {
 		t.Fatalf("AXFR differs\nadapter code/stdout/stderr: %d/%q/%q\nreference code/stdout/stderr: %d/%q/%q", adapterCode, adapterOut.String(), adapterErr.String(), referenceCode, referenceOut, referenceErr)

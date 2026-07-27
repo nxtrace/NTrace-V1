@@ -368,9 +368,20 @@ func validateODoH(opts cli.Flags) error {
 		return fmt.Errorf("ODoH proxy must use HTTPS")
 	}
 	for _, server := range opts.Server {
-		if !strings.HasPrefix(server, "https://") {
+		if !isHTTPSODoHTarget(server) {
 			return fmt.Errorf("ODoH target must use HTTPS")
 		}
 	}
 	return nil
+}
+
+func isHTTPSODoHTarget(server string) bool {
+	if strings.HasPrefix(server, "https://") {
+		return true
+	}
+	if !strings.HasPrefix(server, "sdns://") {
+		return false
+	}
+	parsed, err := ParseServer(server)
+	return err == nil && parsed.Scheme == "https"
 }

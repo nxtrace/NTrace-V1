@@ -258,6 +258,22 @@ func TestParseConfigReturnsErrorsInsteadOfExiting(t *testing.T) {
 	}
 }
 
+func TestParseConfigAcceptsDoHStampAsODoHTarget(t *testing.T) {
+	const dohStamp = "sdns://AgcAAAAAAAAAAAAHOS45LjkuOQA"
+	config, err := ParseConfig([]string{
+		"--odoh-proxy=https://proxy.example/dns-query",
+		"@" + dohStamp,
+		"example.com",
+		"A",
+	}, testParseOptions(t, nil))
+	if err != nil {
+		t.Fatalf("ParseConfig() error = %v", err)
+	}
+	if !reflect.DeepEqual(config.Flags.Server, []string{dohStamp}) {
+		t.Fatalf("Server = %v, want DoH stamp", config.Flags.Server)
+	}
+}
+
 func TestParseConfigHelpRemainsDetectable(t *testing.T) {
 	_, err := ParseConfig([]string{"--help"}, testParseOptions(t, nil))
 	var flagErr *flags.Error

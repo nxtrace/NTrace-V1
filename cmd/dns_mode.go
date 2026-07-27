@@ -22,6 +22,10 @@ func maybeRunDNSModeWithAvailability(
 	stdout, stderr io.Writer,
 	runner dnsModeRunner,
 ) (bool, int) {
+	if !enabled && containsDNSModeMarker(rawArgs) {
+		_, _ = fmt.Fprintf(stderr, "-l/--dns is not available in %s; please use the full nexttrace build\n", appBinName)
+		return true, 1
+	}
 	if len(rawArgs) == 0 || !isDNSModeMarker(rawArgs[0]) {
 		return false, 0
 	}
@@ -34,4 +38,16 @@ func maybeRunDNSModeWithAvailability(
 
 func isDNSModeMarker(arg string) bool {
 	return arg == "-l" || arg == "--dns"
+}
+
+func containsDNSModeMarker(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if isDNSModeMarker(arg) {
+			return true
+		}
+	}
+	return false
 }

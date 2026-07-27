@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -152,6 +153,30 @@ func TestNewTransportODoHAndSafeClose(t *testing.T) {
 	require.NoError(t, txp.Close())
 }
 
+func TestSafeODoHTransportClosesAfterPostInitializationError(t *testing.T) {
+	t.Parallel()
+
+	target := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("invalid ODoH configs"))
+	}))
+	defer target.Close()
+
+	tlsConfig := target.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	txp, err := NewTransport(mustParseServer(t, target.URL+"/dns-query"), cli.Flags{
+		ODoHProxy: "https://proxy.example/proxy",
+		ReuseConn: true,
+	}, tlsConfig)
+	require.NoError(t, err)
+
+	odoh := txp.(*safeODoHTransport)
+	query := new(dns.Msg)
+	query.SetQuestion("example.com.", dns.TypeA)
+	_, err = odoh.Exchange(query)
+	require.Error(t, err)
+	require.True(t, odoh.exchanged)
+	require.NoError(t, odoh.Close())
+}
+
 func TestNewTransportDNSCrypt(t *testing.T) {
 	t.Parallel()
 
@@ -221,7 +246,12 @@ func TestScopedHTTPTransportRestoresDefaultTransport(t *testing.T) {
 		base.TLSClientConfig = originalTLS
 	})
 
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			http.Error(writer, "temporary failure", http.StatusServiceUnavailable)
+			return
+		}
 		query := new(dns.Msg)
 		wire, err := query.Pack()
 		if err != nil {
@@ -229,7 +259,6 @@ func TestScopedHTTPTransportRestoresDefaultTransport(t *testing.T) {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		_ = request
 		writer.Header().Set("Content-Type", "application/dns-message")
 		if _, err = writer.Write(wire); err != nil {
 			t.Errorf("write DNS response: %v", err)
@@ -240,11 +269,18 @@ func TestScopedHTTPTransportRestoresDefaultTransport(t *testing.T) {
 	parsed := mustParseServer(t, server.URL)
 	txp, err := NewTransport(parsed, cli.Flags{HTTPMethod: http.MethodGet, ReuseConn: true}, &tls.Config{ServerName: "dns.example"})
 	require.NoError(t, err)
+	httpAdapter := txp.(*scopedHTTPTransport)
 	query := new(dns.Msg)
 	query.SetQuestion("example.com.", dns.TypeA)
+	_, err = txp.Exchange(query)
+	require.Error(t, err)
+	require.False(t, httpAdapter.initialized)
+	require.Same(t, original, http.DefaultTransport)
+	require.Same(t, sentinelTLS, base.TLSClientConfig)
 	for range 2 {
 		_, err = txp.Exchange(query)
 		require.NoError(t, err)
+		require.True(t, httpAdapter.initialized)
 		require.Same(t, original, http.DefaultTransport)
 		require.Same(t, sentinelTLS, base.TLSClientConfig)
 	}

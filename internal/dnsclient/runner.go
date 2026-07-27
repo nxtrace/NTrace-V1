@@ -25,7 +25,7 @@ import (
 
 const qCompatibilityVersion = "v0.19.12"
 
-var dnsClientGlobalMu sync.Mutex
+var dnsClientGlobalSem = make(chan struct{}, 1)
 
 type dnsWorkTimeoutExtender func(time.Duration)
 type dnsWorkTimeoutExtenderKey struct{}
@@ -61,7 +61,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	dnsClientGlobalMu.Lock()
+	if err := acquireDNSClientGlobals(ctx); err != nil {
+		_, _ = fmt.Fprintf(stderr, "dns mode error: %v\n", err)
+		return 1
+	}
 	backgroundCleanup := false
 	stdoutScope := newDiscardableWriter(stdout)
 	stderrScope := newDiscardableWriter(stderr)
@@ -75,7 +78,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		restoreResolver()
 		qutil.UseColor = previousColor
 		qlog.SetDefault(previousLogger)
-		dnsClientGlobalMu.Unlock()
+		releaseDNSClientGlobals()
 	}
 	defer func() {
 		if !backgroundCleanup {
@@ -157,6 +160,26 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func acquireDNSClientGlobals(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case dnsClientGlobalSem <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			releaseDNSClientGlobals()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseDNSClientGlobals() {
+	<-dnsClientGlobalSem
 }
 
 func runTimedDNSWork(
@@ -429,15 +452,7 @@ func queryServer(
 }
 
 func ptrFollowupCount(replies []*dns.Msg) int {
-	count := 0
-	for _, reply := range replies {
-		for _, rr := range reply.Answer {
-			if addressRecordIP(rr) != "" {
-				count++
-			}
-		}
-	}
-	return count
+	return len(uniqueAddressRecordIPs(replies))
 }
 
 func exchangeQueries(

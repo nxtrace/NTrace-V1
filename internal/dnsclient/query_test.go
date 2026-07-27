@@ -52,6 +52,33 @@ func TestBuildQueriesHeaderAndQuestion(t *testing.T) {
 	}
 }
 
+func TestBuildQueriesRejectsOutOfRangeQueryID(t *testing.T) {
+	for _, id := range []int{-2, maxDNSQueryID + 1} {
+		_, err := BuildQueries(Config{
+			Flags:   cli.Flags{Name: "example.com", Class: dns.ClassINET, ID: id},
+			RRTypes: []uint16{dns.TypeA},
+		})
+		if err == nil || !strings.Contains(err.Error(), "query ID must be -1 or between 0 and 65535") {
+			t.Fatalf("ID %d: error = %v", id, err)
+		}
+	}
+}
+
+func TestBuildQueriesAcceptsQueryIDBoundaries(t *testing.T) {
+	for _, id := range []int{0, maxDNSQueryID} {
+		queries, err := BuildQueries(Config{
+			Flags:   cli.Flags{Name: "example.com", Class: dns.ClassINET, ID: id},
+			RRTypes: []uint16{dns.TypeA},
+		})
+		if err != nil {
+			t.Fatalf("ID %d: BuildQueries() error = %v", id, err)
+		}
+		if queries[0].Id != uint16(id) {
+			t.Fatalf("ID %d: query ID = %d", id, queries[0].Id)
+		}
+	}
+}
+
 func TestBuildQueriesEDNSOptions(t *testing.T) {
 	config := Config{
 		Flags: cli.Flags{
@@ -152,6 +179,22 @@ func TestBuildQueriesEDNSDisabledDropsOPT(t *testing.T) {
 	}
 	if opt := queries[0].IsEdns0(); opt != nil {
 		t.Fatalf("OPT = %+v with EDNS disabled", opt)
+	}
+}
+
+func TestBuildQueriesEDNSDisabledStillValidatesOptions(t *testing.T) {
+	_, err := BuildQueries(Config{
+		Flags: cli.Flags{
+			Name:         "example.com",
+			Class:        dns.ClassINET,
+			ID:           1,
+			EDNS:         false,
+			ClientSubnet: "not-a-subnet",
+		},
+		RRTypes: []uint16{dns.TypeA},
+	})
+	if err == nil || !strings.Contains(err.Error(), "parsing subnet") {
+		t.Fatalf("error = %v, want q-compatible subnet validation", err)
 	}
 }
 

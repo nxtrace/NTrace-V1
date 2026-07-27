@@ -18,14 +18,27 @@ import (
 type zoneTransferFunc func(context.Context, string, string, time.Duration) ([]dns.RR, error)
 
 func runRecursiveAXFR(ctx context.Context, label, server string, timeout time.Duration, out io.Writer) error {
-	return runRecursiveAXFRTo(ctx, label, server, timeout, recursiveAXFRRoot(label, time.Now()), out, transferZone)
+	root, err := recursiveAXFRRoot(label, time.Now())
+	if err != nil {
+		return err
+	}
+	return runRecursiveAXFRTo(ctx, label, server, timeout, root, out, transferZone)
 }
 
-func recursiveAXFRRoot(label string, now time.Time) string {
-	return fmt.Sprintf("%s_%s_recaxfr",
-		strings.TrimPrefix(label, "."),
+func recursiveAXFRRoot(label string, now time.Time) (string, error) {
+	component, err := portableAXFRLabel(label)
+	if err != nil {
+		return "", err
+	}
+	name := fmt.Sprintf("%s_%s_recaxfr",
+		component,
 		strings.NewReplacer(" ", "-", ":", "-").Replace(now.Format(time.UnixDate)),
 	)
+	root, err := containedAXFRPath(".", name)
+	if err != nil {
+		return "", fmt.Errorf("build recursive AXFR directory: %w", err)
+	}
+	return root, nil
 }
 
 func runRecursiveAXFRTo(
@@ -80,6 +93,9 @@ func (s *recursiveAXFRState) walk(label string) error {
 		return err
 	}
 	label = dns.Fqdn(label)
+	if _, err := zoneFilePath(s.root, label); err != nil {
+		return err
+	}
 	if s.queried[label] {
 		return nil
 	}
@@ -108,6 +124,10 @@ func (s *recursiveAXFRState) walk(label string) error {
 }
 
 func writeZoneFile(root, label string, rrs []dns.RR) error {
+	path, err := zoneFilePath(root, label)
+	if err != nil {
+		return err
+	}
 	if len(rrs) == 0 {
 		return nil
 	}
@@ -116,11 +136,78 @@ func writeZoneFile(root, label string, rrs []dns.RR) error {
 		zone.WriteString(rr.String())
 		zone.WriteByte('\n')
 	}
-	name := strings.TrimSuffix(label, ".") + ".zone"
-	if err := os.WriteFile(filepath.Join(root, name), []byte(zone.String()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(zone.String()), 0o644); err != nil {
 		return fmt.Errorf("write AXFR zone file: %w", err)
 	}
 	return nil
+}
+
+func zoneFilePath(root, label string) (string, error) {
+	component, err := portableAXFRLabel(label)
+	if err != nil {
+		return "", err
+	}
+	path, err := containedAXFRPath(root, component+".zone")
+	if err != nil {
+		return "", fmt.Errorf("build AXFR zone path for %q: %w", label, err)
+	}
+	return path, nil
+}
+
+func portableAXFRLabel(label string) (string, error) {
+	if strings.TrimSpace(label) == "" {
+		return "", fmt.Errorf("unsafe AXFR zone label %q", label)
+	}
+	if _, ok := dns.IsDomainName(label); !ok {
+		return "", fmt.Errorf("unsafe AXFR zone label %q", label)
+	}
+	component := strings.TrimSuffix(dns.Fqdn(label), ".")
+	if component == "" {
+		return "!root", nil
+	}
+	for i := 0; i < len(component); i++ {
+		if !isPortableAXFRLabelByte(component[i]) {
+			return "", fmt.Errorf("unsafe AXFR zone label %q", label)
+		}
+	}
+	if isWindowsReservedAXFRName(component) {
+		return "", fmt.Errorf("unsafe AXFR zone label %q", label)
+	}
+	return component, nil
+}
+
+func isPortableAXFRLabelByte(value byte) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9' ||
+		value == '.' || value == '-' || value == '_'
+}
+
+func isWindowsReservedAXFRName(component string) bool {
+	firstLabel, _, _ := strings.Cut(component, ".")
+	upper := strings.ToUpper(firstLabel)
+	switch upper {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	return len(upper) == 4 && (strings.HasPrefix(upper, "COM") || strings.HasPrefix(upper, "LPT")) &&
+		upper[3] >= '1' && upper[3] <= '9'
+}
+
+func containedAXFRPath(root, name string) (string, error) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\\`) {
+		return "", fmt.Errorf("unsafe AXFR path component %q", name)
+	}
+	cleanRoot := filepath.Clean(root)
+	path := filepath.Join(cleanRoot, name)
+	relative, err := filepath.Rel(cleanRoot, path)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("AXFR path %q escapes root %q", path, cleanRoot)
+	}
+	return path, nil
 }
 
 func transferZone(ctx context.Context, label, server string, timeout time.Duration) ([]dns.RR, error) {

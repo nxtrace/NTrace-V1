@@ -202,8 +202,12 @@ func TestRunODoHTimeoutDoesNotCloseDuringExchange(t *testing.T) {
 	close(releaseProxy)
 	// Run has returned, but the exclusive DNS scope remains held until the
 	// in-flight q transport finishes and closes in sequence.
-	dnsClientGlobalMu.Lock()
-	defer dnsClientGlobalMu.Unlock()
+	waitCtx, cancel := context.WithTimeout(context.Background(), testCommandTimeout)
+	defer cancel()
+	if err := acquireDNSClientGlobals(waitCtx); err != nil {
+		t.Fatalf("wait for exclusive DNS scope: %v", err)
+	}
+	defer releaseDNSClientGlobals()
 }
 
 func TestQPublicTransportAgainstLocalDNSCrypt(t *testing.T) {

@@ -54,13 +54,110 @@ func TestRunRecursiveAXFRToWalksEachZoneOnce(t *testing.T) {
 
 func TestRecursiveAXFRRootUsesWindowsPortableTimestamp(t *testing.T) {
 	now := time.Date(2026, time.July, 27, 12, 34, 56, 0, time.UTC)
-	got := recursiveAXFRRoot("example.com", now)
+	got, err := recursiveAXFRRoot("example.com", now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const want = "example.com_Mon-Jul-27-12-34-56-UTC-2026_recaxfr"
 	if got != want {
 		t.Fatalf("recursiveAXFRRoot() = %q, want %q", got, want)
 	}
 	if strings.ContainsAny(got, `<>:"/\\|?*`) {
 		t.Fatalf("recursiveAXFRRoot() = %q, contains a Windows-invalid path character", got)
+	}
+}
+
+func TestRecursiveAXFRPathsAcceptPortableDNSLabels(t *testing.T) {
+	now := time.Date(2026, time.July, 27, 12, 34, 56, 0, time.UTC)
+	root, err := recursiveAXFRRoot("_sip.xn--fsqu00a.xn--0zwm56d.", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantRoot = "_sip.xn--fsqu00a.xn--0zwm56d_Mon-Jul-27-12-34-56-UTC-2026_recaxfr"
+	if root != wantRoot {
+		t.Fatalf("recursiveAXFRRoot() = %q, want %q", root, wantRoot)
+	}
+
+	path, err := zoneFilePath(t.TempDir(), "_sip.xn--fsqu00a.xn--0zwm56d.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "_sip.xn--fsqu00a.xn--0zwm56d.zone" {
+		t.Fatalf("zoneFilePath() = %q", path)
+	}
+}
+
+func TestRecursiveAXFRPathsRejectUnsafeLabels(t *testing.T) {
+	for _, label := range []string{
+		"../../outside",
+		`..\outside`,
+		"/absolute/path",
+		`C:\outside`,
+		"example.com:53",
+		"example.com?query",
+		"example.com\nforged",
+		"CON",
+		"com1.",
+	} {
+		t.Run(label, func(t *testing.T) {
+			if _, err := recursiveAXFRRoot(label, time.Now()); err == nil {
+				t.Fatalf("recursiveAXFRRoot(%q) succeeded", label)
+			}
+			if _, err := zoneFilePath(t.TempDir(), label); err == nil {
+				t.Fatalf("zoneFilePath(%q) succeeded", label)
+			}
+		})
+	}
+}
+
+func TestRecursiveAXFRRejectsEscapedDNSLabelEvenWhenDNSValid(t *testing.T) {
+	const label = `mi\k.nl.`
+	if _, ok := dns.IsDomainName(label); !ok {
+		t.Fatal("test requires a DNS-valid escaped label")
+	}
+	if _, err := zoneFilePath(t.TempDir(), label); err == nil {
+		t.Fatalf("zoneFilePath(%q) accepted a non-portable escaped label", label)
+	}
+}
+
+func TestWriteZoneFileRejectsTraversalWithoutBasenameFallback(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "zones")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rrs := []dns.RR{mustRR(t, "example.com. 60 IN A 192.0.2.1")}
+	if err := writeZoneFile(root, "../outside.", rrs); err == nil {
+		t.Fatal("writeZoneFile() accepted traversal label")
+	}
+	if _, err := os.Stat(filepath.Join(parent, "outside.zone")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside zone file stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "outside.zone")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("basename fallback zone file stat error = %v", err)
+	}
+}
+
+func TestRunRecursiveAXFRToRejectsUnsafeNSOwnerBeforeTransfer(t *testing.T) {
+	root := t.TempDir()
+	calls := 0
+	transfer := func(_ context.Context, label, _ string, _ time.Duration) ([]dns.RR, error) {
+		calls++
+		if label != "example.com." {
+			t.Fatalf("unexpected transfer for unsafe label %q", label)
+		}
+		return []dns.RR{&dns.NS{
+			Hdr: dns.RR_Header{Name: "../outside.", Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 60},
+			Ns:  "ns.example.com.",
+		}}, nil
+	}
+
+	err := runRecursiveAXFRTo(context.Background(), "example.com", "127.0.0.1:53", time.Second, root, &bytes.Buffer{}, transfer)
+	if err == nil || !strings.Contains(err.Error(), "unsafe AXFR zone label") {
+		t.Fatalf("runRecursiveAXFRTo() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("transfer calls = %d, want 1", calls)
 	}
 }
 

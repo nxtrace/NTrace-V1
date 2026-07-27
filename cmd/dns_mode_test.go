@@ -40,13 +40,25 @@ func TestMaybeRunDNSModeOnlyRecognizesFirstArgument(t *testing.T) {
 }
 
 func TestMaybeRunDNSModeDisabledReportsUnavailable(t *testing.T) {
-	var stderr bytes.Buffer
-	handled, code := maybeRunDNSModeWithAvailability(false, []string{"-l", "example.com"}, io.Discard, &stderr, nil)
-	if !handled || code != 1 {
-		t.Fatalf("handled/code = %v/%d, want true/1", handled, code)
+	for _, args := range [][]string{
+		{"-l", "example.com"},
+		{"example.com", "--dns"},
+	} {
+		var stderr bytes.Buffer
+		handled, code := maybeRunDNSModeWithAvailability(false, args, io.Discard, &stderr, nil)
+		if !handled || code != 1 {
+			t.Fatalf("args %q: handled/code = %v/%d, want true/1", args, handled, code)
+		}
+		if !strings.Contains(stderr.String(), "not available") {
+			t.Fatalf("args %q: stderr = %q", args, stderr.String())
+		}
 	}
-	if !strings.Contains(stderr.String(), "not available") {
-		t.Fatalf("stderr = %q", stderr.String())
+}
+
+func TestMaybeRunDNSModeDisabledIgnoresMarkerAfterDoubleDash(t *testing.T) {
+	handled, code := maybeRunDNSModeWithAvailability(false, []string{"example.com", "--", "--dns"}, io.Discard, io.Discard, nil)
+	if handled || code != 0 {
+		t.Fatalf("handled/code = %v/%d, want false/0", handled, code)
 	}
 }
 

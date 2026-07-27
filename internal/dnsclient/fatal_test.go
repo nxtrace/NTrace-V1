@@ -30,7 +30,9 @@ func TestOutputFatalPathRunsInSubprocess(t *testing.T) {
 	}
 
 	server := startTestDNSServer(t, "udp")
-	command := exec.Command(os.Args[0], "-test.run=^TestOutputFatalPathRunsInSubprocess$")
+	ctx, cancel := context.WithTimeout(context.Background(), testCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOutputFatalPathRunsInSubprocess$")
 	command.Env = append(os.Environ(),
 		fatalHelperEnv+"=1",
 		"NEXTTRACE_DNS_FATAL_SERVER="+server,
@@ -39,6 +41,9 @@ func TestOutputFatalPathRunsInSubprocess(t *testing.T) {
 		"SSLKEYLOGFILE=",
 	)
 	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("helper timed out: %v, output=%q", ctx.Err(), output)
+	}
 	var exitError *exec.ExitError
 	if !errors.As(err, &exitError) || exitError.ExitCode() == 0 {
 		t.Fatalf("helper error = %v, output=%q", err, output)
@@ -62,7 +67,9 @@ func TestDNSCryptFatalPathRunsInSubprocess(t *testing.T) {
 	}
 
 	server := startTestDNSServer(t, "udp")
-	command := exec.Command(os.Args[0], "-test.run=^TestDNSCryptFatalPathRunsInSubprocess$")
+	ctx, cancel := context.WithTimeout(context.Background(), testCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDNSCryptFatalPathRunsInSubprocess$")
 	command.Env = append(os.Environ(),
 		dnsCryptFatalHelperEnv+"=1",
 		"NEXTTRACE_DNSCRYPT_FATAL_SERVER="+server,
@@ -71,6 +78,9 @@ func TestDNSCryptFatalPathRunsInSubprocess(t *testing.T) {
 		"SSLKEYLOGFILE=",
 	)
 	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("helper timed out: %v, output=%q", ctx.Err(), output)
+	}
 	var exitError *exec.ExitError
 	if !errors.As(err, &exitError) || exitError.ExitCode() == 0 {
 		t.Fatalf("helper error = %v, output=%q", err, output)

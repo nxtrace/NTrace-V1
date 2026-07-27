@@ -61,6 +61,7 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
         shell: bash
         run: |
+          export GOTOOLCHAIN=go1.26.4+auto
           go mod download github.com/natesales/q@v0.19.12
           Q_SOURCE="$(go env GOMODCACHE)/github.com/natesales/q@v0.19.12"
           (cd "${Q_SOURCE}" && go build -trimpath -o "${RUNNER_TEMP}/q-v0.19.12" .)
