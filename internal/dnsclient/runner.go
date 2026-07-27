@@ -189,6 +189,12 @@ func runTimedDNSWork(
 	cleanup func(),
 	work func(context.Context) error,
 ) error {
+	if totalTimeout <= 0 {
+		stdout.disable()
+		stderr.disable()
+		cleanup()
+		return normalizeRunError(context.DeadlineExceeded, totalTimeout)
+	}
 	baseCtx, cancel := context.WithCancel(parent)
 	defer cancel()
 	extensions := make(chan time.Duration)
