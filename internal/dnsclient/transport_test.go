@@ -3,6 +3,7 @@
 package dnsclient
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/hex"
 	"io/fs"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	qlog "github.com/charmbracelet/log"
 	"github.com/jedisct1/go-dnsstamps"
 	"github.com/miekg/dns"
 	"github.com/natesales/q/cli"
@@ -138,6 +140,21 @@ func TestNewTransportMapsQFlags(t *testing.T) {
 	require.True(t, quic.AddLengthPrefix)
 }
 
+func TestNewTransportQUICPreservesTLSALPNWithoutOverride(t *testing.T) {
+	t.Parallel()
+
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"custom-doq"},
+	}
+	quicServer := mustParseServer(t, "quic://dns.example")
+	txp, err := NewTransport(quicServer, cli.Flags{}, tlsConfig)
+	require.NoError(t, err)
+	quic := txp.(*qtransport.QUIC)
+	require.NotSame(t, tlsConfig, quic.TLSConfig)
+	require.Equal(t, []string{"custom-doq"}, quic.TLSConfig.NextProtos)
+}
+
 func TestParseHTTPHeadersValidatesNamesAndValues(t *testing.T) {
 	t.Parallel()
 
@@ -161,6 +178,43 @@ func TestParseHTTPHeadersValidatesNamesAndValues(t *testing.T) {
 			require.EqualError(t, err, test.wantErr)
 		})
 	}
+}
+
+func TestParseHTTPHeadersRedactsSensitiveValues(t *testing.T) {
+	original := qlog.Default()
+	var output bytes.Buffer
+	logger := qlog.New(&output)
+	logger.SetLevel(qlog.DebugLevel)
+	qlog.SetDefault(logger)
+	t.Cleanup(func() { qlog.SetDefault(original) })
+
+	_, err := parseHTTPHeaders([]string{
+		"Authorization: auth-secret",
+		"Proxy-Authorization: proxy-secret",
+		"Cookie: cookie-secret",
+		"Set-Cookie: set-cookie-secret",
+		"API-Key: api-key-secret",
+		"X-Goog-API-Key: google-secret",
+		"X-Auth-Token: auth-token-secret",
+		"X-Access-Token: access-token-secret",
+		"X-Test: visible-value",
+	})
+	require.NoError(t, err)
+	logs := output.String()
+	for _, secret := range []string{
+		"auth-secret",
+		"proxy-secret",
+		"cookie-secret",
+		"set-cookie-secret",
+		"api-key-secret",
+		"google-secret",
+		"auth-token-secret",
+		"access-token-secret",
+	} {
+		require.NotContains(t, logs, secret)
+	}
+	require.Contains(t, logs, "Added header Authorization")
+	require.Contains(t, logs, "Added header X-Test: visible-value")
 }
 
 func TestNewTransportODoHAndSafeClose(t *testing.T) {

@@ -119,19 +119,19 @@ func buildEDNS(request dns.Msg, config Config) (*dns.OPT, error) {
 }
 
 func parseClientSubnet(value string) (*dns.EDNS0_SUBNET, error) {
-	ip, network, err := net.ParseCIDR(value)
+	_, network, err := net.ParseCIDR(value)
 	if err != nil {
 		return nil, fmt.Errorf("parsing subnet %s: %w", value, err)
 	}
 	mask, _ := network.Mask.Size()
-	qlog.Debugf("EDNS0 client subnet %s/%d", ip, mask)
+	qlog.Debugf("EDNS0 client subnet %s/%d", network.IP, mask)
 	family := uint16(1)
-	if ip.To4() == nil {
+	if network.IP.To4() == nil {
 		family = 2
 	}
 	return &dns.EDNS0_SUBNET{
 		Code:          dns.EDNS0SUBNET,
-		Address:       ip,
+		Address:       network.IP,
 		Family:        family,
 		SourceNetmask: uint8(mask),
 	}, nil

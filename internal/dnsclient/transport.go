@@ -184,7 +184,9 @@ func NewTransport(server ParsedServer, opts cli.Flags, tlsConfig *tls.Config) (q
 			return nil, fmt.Errorf("QUIC transport requires a TLS configuration")
 		}
 		quicTLS := tlsConfig.Clone()
-		quicTLS.NextProtos = append([]string(nil), opts.QUICALPNTokens...)
+		if len(opts.QUICALPNTokens) > 0 {
+			quicTLS.NextProtos = append([]string(nil), opts.QUICALPNTokens...)
+		}
 		qlog.Debugf("Using QUIC transport: %s", server.Address)
 		return &qtransport.QUIC{
 			Common:          common,
@@ -262,9 +264,23 @@ func parseHTTPHeaders(values []string) (map[string][]string, error) {
 			return nil, fmt.Errorf("net/http: invalid header field value for %q", name)
 		}
 		headers[name] = append(headers[name], fieldValue)
-		qlog.Debugf("Added header %s: %s", name, fieldValue)
+		if isSensitiveHTTPHeader(name) {
+			qlog.Debugf("Added header %s", name)
+		} else {
+			qlog.Debugf("Added header %s: %s", name, fieldValue)
+		}
 	}
 	return headers, nil
+}
+
+func isSensitiveHTTPHeader(name string) bool {
+	name = strings.ToLower(name)
+	switch name {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-auth-token", "x-access-token", "apikey", "x-apikey":
+		return true
+	default:
+		return name == "api-key" || strings.HasSuffix(name, "-api-key")
+	}
 }
 
 func newDNSCryptTransport(common qtransport.Common, server ParsedServer, opts cli.Flags) (qtransport.Transport, error) {

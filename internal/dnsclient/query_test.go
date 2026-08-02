@@ -120,7 +120,7 @@ func TestBuildQueriesEDNSOptions(t *testing.T) {
 	if !ok {
 		t.Fatalf("option[2] = %T, want subnet", opt.Option[2])
 	}
-	if subnet.Family != 1 || subnet.SourceNetmask != 24 || !subnet.Address.Equal(net.ParseIP("192.0.2.129")) {
+	if subnet.Family != 1 || subnet.SourceNetmask != 24 || !subnet.Address.Equal(net.ParseIP("192.0.2.0")) {
 		t.Errorf("subnet = %+v", subnet)
 	}
 	cookie, ok := opt.Option[3].(*dns.EDNS0_COOKIE)
@@ -153,7 +153,7 @@ func TestBuildQueriesIPv6ClientSubnet(t *testing.T) {
 		t.Fatal(err)
 	}
 	subnet := queries[0].IsEdns0().Option[0].(*dns.EDNS0_SUBNET)
-	if subnet.Family != 2 || subnet.SourceNetmask != 56 || !subnet.Address.Equal(net.ParseIP("2001:db8::1")) {
+	if subnet.Family != 2 || subnet.SourceNetmask != 56 || !subnet.Address.Equal(net.ParseIP("2001:db8::")) {
 		t.Errorf("subnet = %+v", subnet)
 	}
 }
