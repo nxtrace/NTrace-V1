@@ -327,7 +327,7 @@ func installBootstrapResolver(opts cli.Flags) (func(), error) {
 	net.DefaultResolver = &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			dialer := net.Dialer{Timeout: opts.BootstrapTimeout}
+			dialer := net.Dialer{Timeout: opts.BootstrapTimeout, Resolver: previous}
 			return dialer.DialContext(ctx, network, server)
 		},
 	}

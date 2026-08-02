@@ -189,7 +189,7 @@ func TestAggregateDNSWorkTimeout(t *testing.T) {
 
 func TestRunBudgetsEachSerializedRRQuery(t *testing.T) {
 	isolateRunEnvironment(t)
-	server := startTestDNSServerWithDelay(t, "udp", 40*time.Millisecond, 1)
+	server := startTestDNSServerWithDelay(t, "udp", 30*time.Millisecond, 1)
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{
 		"--server=" + server,
@@ -197,8 +197,10 @@ func TestRunBudgetsEachSerializedRRQuery(t *testing.T) {
 		"--type=A",
 		"--type=AAAA",
 		"--type=TXT",
+		"--type=MX",
+		"--type=NS",
 		"--format=raw",
-		"--timeout=80ms",
+		"--timeout=120ms",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("Run() code = %d, stderr=%q", code, stderr.String())
@@ -207,7 +209,7 @@ func TestRunBudgetsEachSerializedRRQuery(t *testing.T) {
 
 func TestRunExtendsBudgetForEachPTRFollowup(t *testing.T) {
 	isolateRunEnvironment(t)
-	server := startTestDNSServerWithDelay(t, "udp", 30*time.Millisecond, 2)
+	server := startTestDNSServerWithDelay(t, "udp", 30*time.Millisecond, 4)
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{
 		"--server=" + server,
@@ -215,7 +217,7 @@ func TestRunExtendsBudgetForEachPTRFollowup(t *testing.T) {
 		"--type=A",
 		"--resolve-ips",
 		"--format=raw",
-		"--timeout=60ms",
+		"--timeout=120ms",
 	}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("Run() code = %d, stderr=%q", code, stderr.String())
@@ -317,6 +319,43 @@ func TestRunRestoresQProcessGlobals(t *testing.T) {
 				t.Fatal("default resolver was not restored")
 			}
 		})
+	}
+}
+
+func TestInstallBootstrapResolverUsesPreviousResolverForHostname(t *testing.T) {
+	server := startTestDNSServer(t, "udp")
+	_, port, err := net.SplitHostPort(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalResolver := net.DefaultResolver
+	previousResolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "udp", server)
+		},
+	}
+	net.DefaultResolver = previousResolver
+	t.Cleanup(func() { net.DefaultResolver = originalResolver })
+
+	restore, err := installBootstrapResolver(cli.Flags{
+		BootstrapServer:  net.JoinHostPort("bootstrap.test", port),
+		BootstrapTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupHost(ctx, "example.com")
+	if err != nil {
+		t.Fatalf("LookupHost() error = %v", err)
+	}
+	if len(addresses) != 1 || addresses[0] != "192.0.2.10" {
+		t.Fatalf("LookupHost() = %v, want [192.0.2.10]", addresses)
 	}
 }
 
@@ -470,9 +509,13 @@ func startTestDNSServerWithDelay(t *testing.T, network string, delay time.Durati
 			case dns.TypeA:
 				reply.Answer = make([]dns.RR, 0, addressAnswers)
 				for i := 0; i < addressAnswers; i++ {
+					address := net.ParseIP(fmt.Sprintf("192.0.2.%d", 10+i))
+					if request.Question[0].Name == "bootstrap.test." {
+						address = net.ParseIP("127.0.0.1")
+					}
 					reply.Answer = append(reply.Answer, &dns.A{
 						Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 125},
-						A:   net.ParseIP(fmt.Sprintf("192.0.2.%d", 10+i)),
+						A:   address,
 					})
 				}
 			case dns.TypeTXT:
