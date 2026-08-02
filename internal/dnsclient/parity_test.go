@@ -540,14 +540,27 @@ func startParityMetadataServer(t *testing.T) string {
 
 func startParityFallbackServer(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	var listener net.Listener
+	var packetConn net.PacketConn
+	var lastErr error
+	for range 10 {
+		candidatePacketConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		candidateListener, err := net.Listen("tcp", candidatePacketConn.LocalAddr().String())
+		if err != nil {
+			lastErr = err
+			_ = candidatePacketConn.Close()
+			continue
+		}
+		listener = candidateListener
+		packetConn = candidatePacketConn
+		break
 	}
-	packetConn, err := net.ListenPacket("udp", listener.Addr().String())
-	if err != nil {
-		_ = listener.Close()
-		t.Fatal(err)
+	if listener == nil {
+		t.Fatalf("failed to bind matching TCP and UDP ports: %v", lastErr)
 	}
 	handler := dns.HandlerFunc(func(writer dns.ResponseWriter, request *dns.Msg) {
 		reply := testParityAReply(request)
@@ -618,8 +631,10 @@ func startParityDoTServer(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	done := make(chan struct{})
 	go func() {
-		for range 2 {
+		defer close(done)
+		for {
 			connection, err := listener.Accept()
 			if err != nil {
 				return
@@ -632,7 +647,10 @@ func startParityDoTServer(t *testing.T) string {
 			_ = connection.Close()
 		}
 	}()
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-done
+	})
 	return listener.Addr().String()
 }
 
@@ -646,10 +664,11 @@ func startParityDoQServer(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), testCommandTimeout)
-		defer cancel()
-		for range 2 {
+		defer close(done)
+		for {
 			connection, err := listener.Accept(ctx)
 			if err != nil {
 				return
@@ -679,7 +698,11 @@ func startParityDoQServer(t *testing.T) string {
 			_ = stream.Close()
 		}
 	}()
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() {
+		cancel()
+		_ = listener.Close()
+		<-done
+	})
 	return listener.Addr().String()
 }
 
