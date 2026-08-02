@@ -183,6 +183,7 @@ Document Language: [English](README.md) | 简体中文
 | ----------------------- | :-------------------: | :--------------: | :--------: |
 | 常规 traceroute         |          ✅           |        ✅        |     —      |
 | 独立 MTU（`--mtu`）     |          ✅           |        ✅        |     —      |
+| DNS 客户端（`-l` / `--dns`） |       ✅           |        —         |     —      |
 | CDN 测速（`--speed`）   |          ✅           |        —         |     —      |
 | IP 文本标注（`--nali`） |          ✅           |        —         |     —      |
 | MTR TUI                 |          ✅           |        —         | ✅（默认） |
@@ -199,24 +200,26 @@ Document Language: [English](README.md) | 简体中文
 
 ### 功能对比
 
-- **`nexttrace`** — 完整版。包含 traceroute、独立 MTU、CDN 测速、IP 文本标注、MTR、Globalping、Fast Trace、WebUI（`--deploy`）与 MCP（`--deploy --mcp`）。
-- **`nexttrace-tiny`** — 精简版。保留常规 traceroute、独立 MTU 和 Fast Trace；不含 CDN 测速 / IP 文本标注 / MTR / Globalping / WebUI / MCP。适合嵌入式或极简环境。
-- **`ntr`** — MTR 专用版。默认启动 MTR TUI。不含常规 traceroute、独立 `--mtu`、CDN 测速、IP 文本标注、Globalping、Fast Trace、WebUI 或 MCP。
+- **`nexttrace`** — 完整版。包含 traceroute、独立 DNS 客户端与 MTU 模式、CDN 测速、IP 文本标注、MTR、Globalping、Fast Trace、WebUI（`--deploy`）与 MCP（`--deploy --mcp`）。
+- **`nexttrace-tiny`** — 精简版。保留常规 traceroute、独立 MTU 和 Fast Trace；不含 DNS 客户端 / CDN 测速 / IP 文本标注 / MTR / Globalping / WebUI / MCP。适合嵌入式或极简环境。
+- **`ntr`** — MTR 专用版。默认启动 MTR TUI。不含常规 traceroute、独立 DNS 客户端或 `--mtu`、CDN 测速、IP 文本标注、Globalping、Fast Trace、WebUI 或 MCP。
 
 ### 手动编译
 
-需要 Go 1.22+ 环境：
+需要 Go 1.26.5+ 环境：
 
 ```bash
 # 完整版（所有功能）
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
-# 精简版（无 MTR、无 Globalping、无 WebUI）
+# 精简版（无 DNS 客户端、无 MTR、无 Globalping、无 WebUI）
 go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 
 # MTR 专用版
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
+
+macOS 源码编译需要 Xcode Command Line Tools 和 cgo，因为 TCP/UDP 抓包会链接系统 `libpcap`。原生编译时，`go env CGO_ENABLED` 必须输出 `1`；若输出 `0`，请用 `go env -u CGO_ENABLED` 清除持久化覆盖，确认 `xcode-select -p` 成功后，再以 `CGO_ENABLED=1` 编译。
 
 交叉编译示例：
 
@@ -226,7 +229,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny_linux_arm64 -ldflags "-w -s" .
 ```
 
-`tiny` 和 `ntr` 版本通过 **编译期 build tags** 裁剪模块——不是运行时开关。可通过 `go version -m <binary>` 验证 `nexttrace-tiny` 和 `ntr` 中不包含 `gin` 与 `globalping-cli`。
+`tiny` 和 `ntr` 版本通过 **编译期 build tags** 裁剪模块——不是运行时开关。可通过 `go version -m <binary>` 验证 `nexttrace-tiny` 和 `ntr` 中不包含 `gin`、`globalping-cli` 与 `github.com/natesales/q`。
 
 `.cross_compile.sh` 脚本支持按版本构建：
 
@@ -365,6 +368,31 @@ nexttrace --udp --port 5353 1.0.0.1
 # TCP/UDP Trace 可以自行指定源端口，默认使用随机一个固定的端口(如需每次发包随机使用不同的源端口，请设置`ENV` `NEXTTRACE_RANDOMPORT`)
 nexttrace --tcp --source-port 14514 www.bing.com
 ```
+
+#### `NextTrace` 也支持独立 DNS 客户端模式
+
+完整版 `nexttrace` 通过 NextTrace 自有 adapter 组合 [natesales/q v0.19.12](https://github.com/natesales/q/releases/tag/v0.19.12) 的公开子包，提供兼容 q 使用方式的 DNS 客户端。`-l` / `--dns` 必须作为第一个参数；其后的参数使用 q 风格的 flags 与位置参数。
+
+```bash
+# 通过指定的普通 DNS 服务器查询 MX 记录
+nexttrace -l example.com MX @1.1.1.1
+
+# 通过 DNS-over-TLS 查询 A 记录
+nexttrace --dns example.com A @tls://one.one.one.one
+
+# 通过 DNS-over-HTTPS 查询并输出 JSON
+nexttrace --dns example.com A @https://cloudflare-dns.com/dns-query --format=json
+
+# 查看 DNS 客户端专属帮助
+nexttrace --dns --help
+```
+
+- 传输协议：UDP/TCP、DoT、DoH、DoQ、ODoH 与 DNSCrypt；plain DNS、DoT、DoH 与 DNSCrypt 支持 DNS Stamp 服务器格式。
+- 输出格式：`pretty`、`column`、`raw`、`json` 与 `yaml`。
+- 查询能力包括多服务器、多 RR 类型、反向解析、DNSSEC/EDNS、NSID、为 A/AAAA 应答补查 PTR 与递归 AXFR。
+- 配置沿用 q 的 `~/.qrc`、`Q_DEFAULT_SERVER`、`NO_COLOR` 与 `SSLKEYLOGFILE` 约定。
+- 该模式仅存在于完整版 `nexttrace`；`nexttrace-tiny` 与 `ntr` 不包含也不注册此功能。
+- 这是独立的 CLI 工作流，不会替换 traceroute、GeoIP/RDNS、WebUI、MCP 或其它 service 路径使用的 DNS resolver。
 
 #### `NextTrace` 也支持独立的路径 MTU 探测模式
 
@@ -674,7 +702,7 @@ export GLOBALPING_TOKEN=your_token_here
 
 ### 环境变量总览
 
-NextTrace 当前会读取下列环境变量。对于布尔开关，只识别 `1` 和 `0`，其他值会回退到内置默认值。为了避免混淆，修改后建议重启 NextTrace。
+NextTrace 当前会读取下列环境变量。对于 `NEXTTRACE_*` 布尔开关，只识别 `1` 和 `0`，其他值会回退到内置默认值。为了避免混淆，修改后建议重启 NextTrace。
 
 #### 核心运行 / 网络
 
@@ -717,6 +745,16 @@ NextTrace 当前会读取下列环境变量。对于布尔开关，只识别 `1`
 | `IPDBONE_API_KEY` | 未设置 | IPDB.One API Key。 |
 | `GLOBALPING_TOKEN` | 未设置 | Globalping 鉴权 token；设置后可提升匿名用户的每小时测试额度。 |
 
+#### 独立 DNS 客户端（仅完整版）
+
+下列 q 兼容环境变量仅对独立 DNS 客户端模式生效。
+
+| 变量名 | 默认值 | 说明 |
+| --- | --- | --- |
+| `Q_DEFAULT_SERVER` | 未设置 | 当命令行和 `~/.qrc` 均未指定服务器时使用的默认 DNS 服务器。 |
+| `NO_COLOR` | 未设置 | 设置为任意非空值时禁用 DNS 客户端输出颜色。 |
+| `SSLKEYLOGFILE` | 未设置 | 未传入 `--tls-key-log-file` 时，将 TLS 会话密钥写入该文件；文件包含敏感密钥材料。 |
+
 #### 配置文件搜索
 
 | 变量名 | 默认值 | 说明 |
@@ -727,7 +765,7 @@ NextTrace 当前会读取下列环境变量。对于布尔开关，只识别 `1`
 
 ```shell
 Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
-                 [-U|--udp] [--speed] [--nali] [-F|--fast-trace]
+                 [-U|--udp] [-l|--dns] [--speed] [--nali] [-F|--fast-trace]
                  [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
                  [--max-attempts <integer>] [--parallel-requests <integer>]
                  [-m|--max-hops <integer>] [-d|--data-provider
@@ -752,6 +790,8 @@ Arguments:
   -h  --help                         Print help information
       --init                         Windows ONLY: Extract WinDivert runtime to
                                      executable directory
+  -l  --dns                          Run DNS client mode. See `nexttrace --dns
+                                     --help` for details
       --speed                        Run CDN speed test mode. See `nexttrace
                                      --speed --help` for details
       --nali                         Annotate IP literals in text using

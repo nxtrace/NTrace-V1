@@ -182,6 +182,7 @@ Starting from this release, NextTrace is published in **three flavors** under th
 | --------------------- | :----------------: | :--------------: | :----------: |
 | Normal traceroute     |         ✅         |        ✅        |      —       |
 | Standalone MTU (`--mtu`) |      ✅         |        ✅        |      —       |
+| DNS client (`-l` / `--dns`) |     ✅       |        —         |      —       |
 | CDN Speed (`--speed`) |         ✅         |        —         |      —       |
 | IP annotation (`--nali`) |       ✅       |        —         |      —       |
 | MTR TUI               |         ✅         |        —         | ✅ (default) |
@@ -198,24 +199,26 @@ Starting from this release, NextTrace is published in **three flavors** under th
 
 ### Feature Matrix
 
-- **`nexttrace`** — Full-featured build. Includes traceroute, standalone MTU, CDN speed test, IP annotation, MTR, Globalping, Fast Trace, WebUI, and deploy MCP.
-- **`nexttrace-tiny`** — Lightweight build. Keeps normal traceroute, standalone MTU, and Fast Trace. No CDN speed test / IP annotation / MTR / Globalping / WebUI / MCP. Suitable for embedded or minimal environments.
-- **`ntr`** — MTR-focused build. Runs MTR TUI by default. No normal traceroute mode, standalone `--mtu`, CDN speed test, IP annotation, Globalping, Fast Trace, WebUI, or MCP.
+- **`nexttrace`** — Full-featured build. Includes traceroute, the standalone DNS client and MTU modes, CDN speed test, IP annotation, MTR, Globalping, Fast Trace, WebUI, and deploy MCP.
+- **`nexttrace-tiny`** — Lightweight build. Keeps normal traceroute, standalone MTU, and Fast Trace. No DNS client / CDN speed test / IP annotation / MTR / Globalping / WebUI / MCP. Suitable for embedded or minimal environments.
+- **`ntr`** — MTR-focused build. Runs MTR TUI by default. No normal traceroute mode, standalone DNS client or `--mtu`, CDN speed test, IP annotation, Globalping, Fast Trace, WebUI, or MCP.
 
 ### Manual Build
 
-Build from source with Go 1.22+ installed:
+Build from source with Go 1.26.5+ installed:
 
 ```bash
 # Full (all features)
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
-# Tiny (no MTR, no Globalping, no WebUI)
+# Tiny (no DNS client, no MTR, no Globalping, no WebUI)
 go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 
 # NTR (MTR-only)
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
+
+On macOS, source builds require Xcode Command Line Tools and cgo because TCP/UDP packet capture links against the system `libpcap`. For a native build, `go env CGO_ENABLED` must report `1`. If it reports `0`, remove any persistent override with `go env -u CGO_ENABLED`, ensure `xcode-select -p` succeeds, and build with `CGO_ENABLED=1`.
 
 Cross-compile example:
 
@@ -225,7 +228,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny_linux_arm64 -ldflags "-w -s" .
 ```
 
-The `tiny` and `ntr` flavors use **compile-time build tags** to exclude modules — this is not a runtime switch. You can verify with `go version -m <binary>` that `gin` and `globalping-cli` are absent from `nexttrace-tiny` and `ntr`.
+The `tiny` and `ntr` flavors use **compile-time build tags** to exclude modules — this is not a runtime switch. You can verify with `go version -m <binary>` that `gin`, `globalping-cli`, and `github.com/natesales/q` are absent from `nexttrace-tiny` and `ntr`.
 
 The `.cross_compile.sh` script supports building flavors:
 
@@ -366,6 +369,31 @@ nexttrace --udp --port 5353 1.0.0.1
 # (If you need to use a different random source port for each packet, please set the ENV variable NEXTTRACE_RANDOMPORT, or set the source port to -1)
 nexttrace --tcp --source-port 14514 www.bing.com
 ```
+
+#### `NextTrace` also supports a standalone DNS client mode
+
+The full `nexttrace` flavor provides a q-compatible DNS client through a NextTrace-owned adapter over the public packages of [natesales/q v0.19.12](https://github.com/natesales/q/releases/tag/v0.19.12). `-l` / `--dns` must be the first argument; everything after it uses q-style flags and positional arguments.
+
+```bash
+# Query MX records through an explicit plain DNS server
+nexttrace -l example.com MX @1.1.1.1
+
+# Query A records over DNS-over-TLS
+nexttrace --dns example.com A @tls://one.one.one.one
+
+# Query over DNS-over-HTTPS and emit JSON
+nexttrace --dns example.com A @https://cloudflare-dns.com/dns-query --format=json
+
+# Show the dedicated DNS client help
+nexttrace --dns --help
+```
+
+- Transports: UDP/TCP, DoT, DoH, DoQ, ODoH, and DNSCrypt; DNS Stamp server forms are supported for plain DNS, DoT, DoH, and DNSCrypt.
+- Output formats: `pretty`, `column`, `raw`, `json`, and `yaml`.
+- Query features include multiple servers and RR types, reverse lookup, DNSSEC/EDNS, NSID, PTR lookups for A/AAAA answers, and recursive AXFR.
+- Configuration follows q conventions for `~/.qrc`, `Q_DEFAULT_SERVER`, `NO_COLOR`, and `SSLKEYLOGFILE`.
+- This mode exists only in the full `nexttrace` flavor. `nexttrace-tiny` and `ntr` do not include or register it.
+- It is a standalone CLI workflow: it does not replace the DNS resolver used by traceroute, GeoIP/RDNS, WebUI, MCP, or other service paths.
 
 #### `NextTrace` also supports standalone path-MTU discovery mode
 
@@ -698,7 +726,7 @@ All NextTrace IP geolocation `API DEMO` can refer to [here](https://github.com/n
 
 ### Environment Variables
 
-NextTrace currently reads the following environment variables. For boolean switches, only `1` and `0` are recognized; other values fall back to the built-in default. For consistency, restart NextTrace after changing them.
+NextTrace currently reads the following environment variables. For `NEXTTRACE_*` boolean switches, only `1` and `0` are recognized; other values fall back to the built-in default. For consistency, restart NextTrace after changing them.
 
 #### Core Runtime / Network
 
@@ -741,6 +769,16 @@ NextTrace currently reads the following environment variables. For boolean switc
 | `IPDBONE_API_KEY` | unset | IPDB.One API key. |
 | `GLOBALPING_TOKEN` | unset | Authentication token for Globalping; raises the anonymous hourly limit when provided. |
 
+#### Standalone DNS Client (full flavor only)
+
+These q-compatible variables apply only to the standalone DNS client mode.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `Q_DEFAULT_SERVER` | unset | Default DNS server when neither the command line nor `~/.qrc` selects one. |
+| `NO_COLOR` | unset | Disable color in DNS client output when set to any non-empty value. |
+| `SSLKEYLOGFILE` | unset | Write TLS session secrets to this file when `--tls-key-log-file` is not set. The file contains sensitive key material. |
+
 #### Config Discovery
 
 | Variable | Default | Description |
@@ -751,7 +789,7 @@ NextTrace currently reads the following environment variables. For boolean switc
 
 ```shell
 Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
-                 [-U|--udp] [--speed] [--nali] [-F|--fast-trace]
+                 [-U|--udp] [-l|--dns] [--speed] [--nali] [-F|--fast-trace]
                  [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
                  [--max-attempts <integer>] [--parallel-requests <integer>]
                  [-m|--max-hops <integer>] [-d|--data-provider
@@ -776,6 +814,8 @@ Arguments:
   -h  --help                         Print help information
       --init                         Windows ONLY: Extract WinDivert runtime to
                                      executable directory
+  -l  --dns                          Run DNS client mode. See `nexttrace --dns
+                                     --help` for details
       --speed                        Run CDN speed test mode. See `nexttrace
                                      --speed --help` for details
       --nali                         Annotate IP literals in text using
