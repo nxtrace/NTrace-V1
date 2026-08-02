@@ -206,7 +206,7 @@ Document Language: [English](README.md) | 简体中文
 
 ### 手动编译
 
-需要 Go 1.22+ 环境：
+需要 Go 1.26.5+ 环境：
 
 ```bash
 # 完整版（所有功能）

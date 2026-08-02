@@ -205,7 +205,7 @@ Starting from this release, NextTrace is published in **three flavors** under th
 
 ### Manual Build
 
-Build from source with Go 1.22+ installed:
+Build from source with Go 1.26.5+ installed:
 
 ```bash
 # Full (all features)
