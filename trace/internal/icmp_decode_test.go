@@ -98,39 +98,59 @@ func TestClassifySocketICMPResponse(t *testing.T) {
 		ipVersion  int
 		message    icmp.Message
 		wantKind   ICMPResponseKind
+		wantDetail string
 		wantMarker string
 	}{
 		{
-			name:      "IPv4 transit",
-			ipVersion: 4,
-			message:   icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Code: 0, Body: &icmp.TimeExceeded{}},
-			wantKind:  ICMPResponseTransit,
+			name:       "IPv4 transit",
+			ipVersion:  4,
+			message:    icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Code: 0, Body: &icmp.TimeExceeded{}},
+			wantKind:   ICMPResponseTransit,
+			wantDetail: "ICMP Time Exceeded",
+		},
+		{
+			name:       "IPv4 fragment reassembly transit",
+			ipVersion:  4,
+			message:    icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Code: 1, Body: &icmp.TimeExceeded{}},
+			wantKind:   ICMPResponseTransit,
+			wantDetail: "ICMP Time Exceeded",
 		},
 		{
 			name:       "IPv4 host unreachable",
 			ipVersion:  4,
 			message:    icmp.Message{Type: ipv4.ICMPTypeDestinationUnreachable, Code: 1, Body: &icmp.DstUnreach{}},
 			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMP Host Unreachable",
 			wantMarker: "!H",
 		},
 		{
-			name:      "IPv4 port unreachable",
-			ipVersion: 4,
-			message:   icmp.Message{Type: ipv4.ICMPTypeDestinationUnreachable, Code: 3, Body: &icmp.DstUnreach{}},
-			wantKind:  ICMPResponsePortUnreachable,
+			name:       "IPv4 port unreachable",
+			ipVersion:  4,
+			message:    icmp.Message{Type: ipv4.ICMPTypeDestinationUnreachable, Code: 3, Body: &icmp.DstUnreach{}},
+			wantKind:   ICMPResponsePortUnreachable,
+			wantDetail: "ICMP Port Unreachable",
 		},
 		{
 			name:       "IPv6 administratively prohibited",
 			ipVersion:  6,
 			message:    icmp.Message{Type: ipv6.ICMPTypeDestinationUnreachable, Code: 1, Body: &icmp.DstUnreach{}},
 			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMPv6 Administratively Prohibited",
 			wantMarker: "!X",
+		},
+		{
+			name:       "IPv6 fragment reassembly transit",
+			ipVersion:  6,
+			message:    icmp.Message{Type: ipv6.ICMPTypeTimeExceeded, Code: 1, Body: &icmp.TimeExceeded{}},
+			wantKind:   ICMPResponseTransit,
+			wantDetail: "ICMPv6 Time Exceeded",
 		},
 		{
 			name:       "IPv6 packet too big",
 			ipVersion:  6,
 			message:    icmp.Message{Type: ipv6.ICMPTypePacketTooBig, Code: 0, Body: &icmp.PacketTooBig{MTU: 1280}},
 			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMPv6 Packet Too Big",
 			wantMarker: "!F-1280",
 		},
 	}
@@ -143,8 +163,8 @@ func TestClassifySocketICMPResponse(t *testing.T) {
 				t.Fatalf("parseSocketICMPMessage() ok = false")
 			}
 			got := classifySocketICMPResponse(tt.ipVersion, rm, raw)
-			if got.Kind != tt.wantKind || got.Marker != tt.wantMarker {
-				t.Fatalf("classifySocketICMPResponse() = (%v, %q), want (%v, %q)", got.Kind, got.Marker, tt.wantKind, tt.wantMarker)
+			if got.Kind != tt.wantKind || got.Description != tt.wantDetail || got.Marker != tt.wantMarker {
+				t.Fatalf("classifySocketICMPResponse() = (%v, %q, %q), want (%v, %q, %q)", got.Kind, got.Description, got.Marker, tt.wantKind, tt.wantDetail, tt.wantMarker)
 			}
 		})
 	}

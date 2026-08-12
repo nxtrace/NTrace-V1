@@ -111,17 +111,18 @@ const (
 
 type probeResponse struct {
 	kind   probeResponseKind
+	detail string
 	marker string
 }
 
 func probeResponseFromICMP(response internal.ICMPResponse) probeResponse {
 	switch response.Kind {
 	case internal.ICMPResponseTransit:
-		return probeResponse{kind: probeResponseTransit}
+		return probeResponse{kind: probeResponseTransit, detail: response.Description}
 	case internal.ICMPResponseEchoReply, internal.ICMPResponsePortUnreachable:
-		return probeResponse{kind: probeResponseDestination}
+		return probeResponse{kind: probeResponseDestination, detail: response.Description}
 	case internal.ICMPResponseUnreachable:
-		return probeResponse{kind: probeResponseUnreachable, marker: response.Marker}
+		return probeResponse{kind: probeResponseUnreachable, detail: response.Description, marker: response.Marker}
 	default:
 		return probeResponse{}
 	}
@@ -341,9 +342,10 @@ type Result struct {
 }
 
 type StopReason struct {
-	Hop     int
-	Reason  string
-	Details []string `json:",omitempty"`
+	Hop       int
+	Reason    string
+	Responses []string `json:",omitempty"`
+	Details   []string `json:",omitempty"`
 }
 
 const (
@@ -483,14 +485,18 @@ func (s *Result) stopAfterTTL(ttl, maxHops int) bool {
 	hasDestination := false
 	hasUnreachable := false
 	markers := make(map[string]struct{})
+	destinationDetails := make(map[string]struct{})
+	unreachableDetails := make(map[string]struct{})
 	for _, response := range s.responses[ttl] {
 		switch response.kind {
 		case probeResponseTransit:
 			hasTransit = true
 		case probeResponseDestination:
 			hasDestination = true
+			addResponseDetail(destinationDetails, response)
 		case probeResponseUnreachable:
 			hasUnreachable = true
+			addResponseDetail(unreachableDetails, response)
 			if response.marker != "" {
 				markers[response.marker] = struct{}{}
 			}
@@ -499,17 +505,21 @@ func (s *Result) stopAfterTTL(ttl, maxHops int) bool {
 
 	switch {
 	case hasDestination:
-		s.StopReason = &StopReason{Hop: ttl, Reason: StopReasonDestination}
+		s.StopReason = &StopReason{
+			Hop:       ttl,
+			Reason:    StopReasonDestination,
+			Responses: sortedResponseDetails(destinationDetails),
+		}
 		return true
 	case hasTransit && ttl < maxHops:
 		return false
 	case !hasTransit && hasUnreachable:
-		details := make([]string, 0, len(markers))
-		for marker := range markers {
-			details = append(details, marker)
+		s.StopReason = &StopReason{
+			Hop:       ttl,
+			Reason:    StopReasonUnreachable,
+			Responses: sortedResponseDetails(unreachableDetails),
+			Details:   sortedResponseDetails(markers),
 		}
-		sort.Strings(details)
-		s.StopReason = &StopReason{Hop: ttl, Reason: StopReasonUnreachable, Details: details}
 		return true
 	case ttl >= maxHops:
 		s.StopReason = &StopReason{Hop: ttl, Reason: StopReasonMaxHops}
@@ -517,6 +527,26 @@ func (s *Result) stopAfterTTL(ttl, maxHops int) bool {
 	default:
 		return false
 	}
+}
+
+func addResponseDetail(details map[string]struct{}, response probeResponse) {
+	if response.detail == "" {
+		return
+	}
+	detail := response.detail
+	if response.marker != "" {
+		detail = fmt.Sprintf("%s (%s)", detail, response.marker)
+	}
+	details[detail] = struct{}{}
+}
+
+func sortedResponseDetails(details map[string]struct{}) []string {
+	result := make([]string, 0, len(details))
+	for detail := range details {
+		result = append(result, detail)
+	}
+	sort.Strings(result)
+	return result
 }
 
 type Hop struct {

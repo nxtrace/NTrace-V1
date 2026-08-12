@@ -23,8 +23,9 @@ const (
 )
 
 type ICMPResponse struct {
-	Kind   ICMPResponseKind
-	Marker string
+	Kind        ICMPResponseKind
+	Description string
+	Marker      string
 }
 
 func parseSocketICMPMessage(ipVersion int, raw []byte) (*icmp.Message, bool) {
@@ -77,34 +78,53 @@ func classifyICMPResponse(ipVersion, typeID, code, info int) ICMPResponse {
 		switch {
 		case typeID == 0:
 			response.Kind = ICMPResponseEchoReply
-		case typeID == 11 && code == 0:
+			response.Description = "ICMP Echo Reply"
+		case typeID == 11:
 			response.Kind = ICMPResponseTransit
+			response.Description = "ICMP Time Exceeded"
 		case typeID == 3 && code == 3:
 			response.Kind = ICMPResponsePortUnreachable
+			response.Description = "ICMP Port Unreachable"
 		case typeID == 3:
 			response.Kind = ICMPResponseUnreachable
 			response.Marker = ipv4UnreachableMarker(code, info)
+			response.Description = ipv4UnreachableDescription(code, info)
+		case typeID == 12:
+			response.Kind = ICMPResponseUnreachable
+			response.Description = "ICMP Parameter Problem"
+			response.Marker = fmt.Sprintf("!<%d-%d>", typeID, code)
 		default:
 			response.Kind = ICMPResponseUnreachable
 			response.Marker = fmt.Sprintf("!<%d-%d>", typeID, code)
+			response.Description = fmt.Sprintf("ICMP Type %d Code %d", typeID, code)
 		}
 	case 6:
 		switch {
 		case typeID == 129:
 			response.Kind = ICMPResponseEchoReply
-		case typeID == 3 && code == 0:
+			response.Description = "ICMPv6 Echo Reply"
+		case typeID == 3:
 			response.Kind = ICMPResponseTransit
+			response.Description = "ICMPv6 Time Exceeded"
 		case typeID == 1 && code == 4:
 			response.Kind = ICMPResponsePortUnreachable
+			response.Description = "ICMPv6 Port Unreachable"
 		case typeID == 1:
 			response.Kind = ICMPResponseUnreachable
 			response.Marker = ipv6UnreachableMarker(code)
+			response.Description = ipv6UnreachableDescription(code)
 		case typeID == 2:
 			response.Kind = ICMPResponseUnreachable
 			response.Marker = fragmentationMarker(info)
+			response.Description = "ICMPv6 Packet Too Big"
+		case typeID == 4:
+			response.Kind = ICMPResponseUnreachable
+			response.Description = "ICMPv6 Parameter Problem"
+			response.Marker = fmt.Sprintf("!<%d-%d>", typeID, code)
 		default:
 			response.Kind = ICMPResponseUnreachable
 			response.Marker = fmt.Sprintf("!<%d-%d>", typeID, code)
+			response.Description = fmt.Sprintf("ICMPv6 Type %d Code %d", typeID, code)
 		}
 	}
 	return response
@@ -144,6 +164,29 @@ func ipv4UnreachableMarker(code, info int) string {
 	}
 }
 
+func ipv4UnreachableDescription(code, info int) string {
+	switch code {
+	case 0, 6, 8, 11:
+		return "ICMP Network Unreachable"
+	case 1, 7, 12:
+		return "ICMP Host Unreachable"
+	case 2:
+		return "ICMP Protocol Unreachable"
+	case 4:
+		return fmt.Sprintf("ICMP Fragmentation Needed (MTU %d)", info)
+	case 5:
+		return "ICMP Source Route Failed"
+	case 9, 10, 13:
+		return "ICMP Administratively Prohibited"
+	case 14:
+		return "ICMP Host Precedence Violation"
+	case 15:
+		return "ICMP Precedence Cutoff"
+	default:
+		return fmt.Sprintf("ICMP Destination Unreachable (Code %d)", code)
+	}
+}
+
 func ipv6UnreachableMarker(code int) string {
 	switch code {
 	case 0:
@@ -154,6 +197,19 @@ func ipv6UnreachableMarker(code int) string {
 		return "!H"
 	default:
 		return fmt.Sprintf("!<%d>", code)
+	}
+}
+
+func ipv6UnreachableDescription(code int) string {
+	switch code {
+	case 0:
+		return "ICMPv6 No Route to Destination"
+	case 1:
+		return "ICMPv6 Administratively Prohibited"
+	case 2, 3:
+		return "ICMPv6 Address Unreachable"
+	default:
+		return fmt.Sprintf("ICMPv6 Destination Unreachable (Code %d)", code)
 	}
 }
 

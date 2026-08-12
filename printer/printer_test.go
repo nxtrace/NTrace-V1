@@ -25,23 +25,28 @@ func TestPrintTraceStopReason(t *testing.T) {
 	}{
 		{name: "nil"},
 		{
-			name:   "destination",
-			reason: &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination},
-			want:   "Trace Stopped: Destination Reached at Hop 5",
+			name: "destination",
+			reason: &trace.StopReason{
+				Hop:       5,
+				Reason:    trace.StopReasonDestination,
+				Responses: []string{"ICMP Echo Reply"},
+			},
+			want: "Trace Stopped: Destination Reached at Hop 5 (ICMP Echo Reply)",
 		},
 		{
 			name: "unreachable",
 			reason: &trace.StopReason{
-				Hop:     7,
-				Reason:  trace.StopReasonUnreachable,
-				Details: []string{"!H", "!N"},
+				Hop:       7,
+				Reason:    trace.StopReasonUnreachable,
+				Responses: []string{"ICMP Host Unreachable (!H)", "ICMP Network Unreachable (!N)"},
+				Details:   []string{"!H", "!N"},
 			},
-			want: "Trace Stopped: No Continuing Route Observed at Hop 7 (!H, !N)",
+			want: "Trace Stopped: No Continuing Route Observed at Hop 7 (ICMP Host Unreachable (!H), ICMP Network Unreachable (!N))",
 		},
 		{
 			name:   "max hops",
 			reason: &trace.StopReason{Hop: 30, Reason: trace.StopReasonMaxHops},
-			want:   "Trace Stopped: Maximum Hops Reached at Hop 30",
+			want:   "Trace Stopped: Maximum Hops Reached at Hop 30 (No Destination Response)",
 		},
 	}
 

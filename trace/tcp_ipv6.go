@@ -307,7 +307,7 @@ func (t *TCPTracerIPv6) Execute() (res *Result, err error) {
 			select {
 			case t.matchQ <- matchTask{
 				srcPort: srcPort, seq: seq, ack: ack, peer: peer, finish: finish, mpls: nil,
-				response: probeResponse{kind: probeResponseDestination},
+				response: probeResponse{kind: probeResponseDestination, detail: "TCP Response"},
 			}:
 			default:
 				// 丢弃以避免阻塞抓包循环

@@ -17,9 +17,9 @@ func resultWithResponses(responses ...probeResponse) *Result {
 
 func TestStopAfterTTLDestinationWins(t *testing.T) {
 	res := resultWithResponses(
-		probeResponse{kind: probeResponseTransit},
-		probeResponse{kind: probeResponseDestination},
-		probeResponse{kind: probeResponseUnreachable, marker: "!H"},
+		probeResponse{kind: probeResponseTransit, detail: "ICMP Time Exceeded"},
+		probeResponse{kind: probeResponseDestination, detail: "ICMP Echo Reply"},
+		probeResponse{kind: probeResponseUnreachable, detail: "ICMP Host Unreachable", marker: "!H"},
 	)
 
 	if !res.stopAfterTTL(1, 30) {
@@ -27,6 +27,9 @@ func TestStopAfterTTLDestinationWins(t *testing.T) {
 	}
 	if got := res.StopReason; got == nil || got.Reason != StopReasonDestination || got.Hop != 1 {
 		t.Fatalf("StopReason = %#v, want destination at hop 1", got)
+	}
+	if !reflect.DeepEqual(res.StopReason.Responses, []string{"ICMP Echo Reply"}) {
+		t.Fatalf("StopReason.Responses = %#v, want destination response only", res.StopReason.Responses)
 	}
 }
 
@@ -71,17 +74,20 @@ func TestStopAfterTTLTargetIPTimeExceededContinues(t *testing.T) {
 
 func TestStopAfterTTLAllResponsesUnreachable(t *testing.T) {
 	res := resultWithResponses(
-		probeResponse{kind: probeResponseUnreachable, marker: "!N"},
-		probeResponse{kind: probeResponseUnreachable, marker: "!H"},
-		probeResponse{kind: probeResponseUnreachable, marker: "!N"},
+		probeResponse{kind: probeResponseUnreachable, detail: "ICMP Network Unreachable", marker: "!N"},
+		probeResponse{kind: probeResponseUnreachable, detail: "ICMP Host Unreachable", marker: "!H"},
+		probeResponse{kind: probeResponseUnreachable, detail: "ICMP Network Unreachable", marker: "!N"},
 	)
 
 	if !res.stopAfterTTL(1, 30) {
 		t.Fatal("stopAfterTTL() = false, want true")
 	}
-	want := &StopReason{Hop: 1, Reason: StopReasonUnreachable, Details: []string{"!H", "!N"}}
-	if !reflect.DeepEqual(res.StopReason, want) {
-		t.Fatalf("StopReason = %#v, want %#v", res.StopReason, want)
+	if !reflect.DeepEqual(res.StopReason.Details, []string{"!H", "!N"}) {
+		t.Fatalf("StopReason.Details = %#v, want %#v", res.StopReason.Details, []string{"!H", "!N"})
+	}
+	wantResponses := []string{"ICMP Host Unreachable (!H)", "ICMP Network Unreachable (!N)"}
+	if !reflect.DeepEqual(res.StopReason.Responses, wantResponses) {
+		t.Fatalf("StopReason.Responses = %#v, want %#v", res.StopReason.Responses, wantResponses)
 	}
 }
 
