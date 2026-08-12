@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,12 +91,55 @@ type sentInfo struct {
 }
 
 type matchTask struct {
-	srcPort int
-	seq     int
-	ack     int
-	peer    net.Addr
-	finish  time.Time
-	mpls    []string
+	srcPort  int
+	seq      int
+	ack      int
+	peer     net.Addr
+	finish   time.Time
+	mpls     []string
+	response probeResponse
+}
+
+type probeResponseKind uint8
+
+const (
+	probeResponseUnknown probeResponseKind = iota
+	probeResponseTransit
+	probeResponseDestination
+	probeResponseUnreachable
+)
+
+type probeResponse struct {
+	kind   probeResponseKind
+	marker string
+}
+
+func probeResponseFromICMP(response internal.ICMPResponse) probeResponse {
+	switch response.Kind {
+	case internal.ICMPResponseTransit:
+		return probeResponse{kind: probeResponseTransit}
+	case internal.ICMPResponseEchoReply, internal.ICMPResponsePortUnreachable:
+		return probeResponse{kind: probeResponseDestination}
+	case internal.ICMPResponseUnreachable:
+		return probeResponse{kind: probeResponseUnreachable, marker: response.Marker}
+	default:
+		return probeResponse{}
+	}
+}
+
+func markDestinationFinal(final *atomic.Int32, ttl int, response probeResponse) {
+	if final == nil || response.kind != probeResponseDestination {
+		return
+	}
+	for {
+		old := final.Load()
+		if old != -1 && ttl >= int(old) {
+			return
+		}
+		if final.CompareAndSwap(old, int32(ttl)) {
+			return
+		}
+	}
 }
 
 type Tracer interface {
@@ -286,13 +330,27 @@ func normalizeRuntimeConfig(config *Config) {
 
 type Result struct {
 	Hops        [][]Hop
+	StopReason  *StopReason `json:",omitempty"`
 	lock        sync.RWMutex
 	tailDone    []bool
+	responses   map[int][]probeResponse
 	TraceMapUrl string
 	geoWait     time.Duration
 	geoWG       sync.WaitGroup
 	geoCanceled atomic.Bool
 }
+
+type StopReason struct {
+	Hop     int
+	Reason  string
+	Details []string `json:",omitempty"`
+}
+
+const (
+	StopReasonDestination = "destination_reached"
+	StopReasonUnreachable = "unreachable"
+	StopReasonMaxHops     = "max_hops"
+)
 
 const PendingGeoSource = "pending"
 const timeoutGeoSource = "timeout"
@@ -397,6 +455,67 @@ func (s *Result) reduce(final int) {
 
 	if final > 0 && final < len(s.Hops) {
 		s.Hops = s.Hops[:final]
+	}
+}
+
+func (s *Result) recordResponse(ttl int, response probeResponse) {
+	if ttl <= 0 || response.kind == probeResponseUnknown {
+		return
+	}
+
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.responses == nil {
+		s.responses = make(map[int][]probeResponse)
+	}
+	s.responses[ttl] = append(s.responses[ttl], response)
+}
+
+func (s *Result) stopAfterTTL(ttl, maxHops int) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	if ttl <= 0 || ttl > len(s.Hops) {
+		return false
+	}
+
+	hasTransit := false
+	hasDestination := false
+	hasUnreachable := false
+	markers := make(map[string]struct{})
+	for _, response := range s.responses[ttl] {
+		switch response.kind {
+		case probeResponseTransit:
+			hasTransit = true
+		case probeResponseDestination:
+			hasDestination = true
+		case probeResponseUnreachable:
+			hasUnreachable = true
+			if response.marker != "" {
+				markers[response.marker] = struct{}{}
+			}
+		}
+	}
+
+	switch {
+	case hasDestination:
+		s.StopReason = &StopReason{Hop: ttl, Reason: StopReasonDestination}
+		return true
+	case hasTransit && ttl < maxHops:
+		return false
+	case !hasTransit && hasUnreachable:
+		details := make([]string, 0, len(markers))
+		for marker := range markers {
+			details = append(details, marker)
+		}
+		sort.Strings(details)
+		s.StopReason = &StopReason{Hop: ttl, Reason: StopReasonUnreachable, Details: details}
+		return true
+	case ttl >= maxHops:
+		s.StopReason = &StopReason{Hop: ttl, Reason: StopReasonMaxHops}
+		return true
+	default:
+		return false
 	}
 }
 
@@ -554,6 +673,12 @@ func (s *Result) markAllPendingGeoTimeout() {
 			hop.Geo = timeoutGeo()
 		}
 	}
+}
+
+func (s *Result) addMatchedHop(hop Hop, response probeResponse, final *atomic.Int32, attemptIdx, numMeasurements, maxAttempts int, cfg Config) {
+	s.recordResponse(hop.TTL, response)
+	markDestinationFinal(final, hop.TTL, response)
+	s.addWithGeoAsync(hop, attemptIdx, numMeasurements, maxAttempts, cfg)
 }
 
 func (s *Result) addWithGeoAsync(hop Hop, attemptIdx, numMeasurements, maxAttempts int, cfg Config) {

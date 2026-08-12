@@ -471,6 +471,31 @@ func TestMaybeRunUninterruptedRawReturnsOnCanceledContext(t *testing.T) {
 	}
 }
 
+func TestEffectiveRawOutput(t *testing.T) {
+	tests := []struct {
+		name         string
+		tablePrint   bool
+		classicPrint bool
+		jsonPrint    bool
+		rawPrint     bool
+		want         bool
+	}{
+		{name: "raw", rawPrint: true, want: true},
+		{name: "table overrides raw", tablePrint: true, rawPrint: true},
+		{name: "classic overrides raw", classicPrint: true, rawPrint: true},
+		{name: "JSON overrides raw", jsonPrint: true, rawPrint: true},
+		{name: "default", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := effectiveRawOutput(tt.tablePrint, tt.classicPrint, tt.jsonPrint, tt.rawPrint); got != tt.want {
+				t.Fatalf("effectiveRawOutput() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRegisterGlobalpingFlagWithAvailability_DisabledStillParses(t *testing.T) {
 	parser := argparse.NewParser("ntr", "")
 	from := registerGlobalpingFlagWithAvailability(parser, false)

@@ -80,7 +80,8 @@ func (t *TCPTracer) PrintFunc(ctx context.Context, cancel context.CancelCauseFun
 				t.RealtimePrinter(&t.res, ttl)
 			}
 			ttl++
-			if ttl == int(t.final.Load()) || ttl >= t.MaxHops {
+			if t.res.stopAfterTTL(ttl, t.MaxHops) {
+				t.final.Store(int32(ttl))
 				cancel(errNaturalDone) // 标记为“自然完成”
 				return
 			}
@@ -164,23 +165,10 @@ func (t *TCPTracer) dropSent(seq int) {
 	delete(t.sentAt, seq)
 }
 
-func (t *TCPTracer) addHopWithIndex(peer net.Addr, ttl, i int, rtt time.Duration, mpls []string) {
+func (t *TCPTracer) addHopWithIndex(peer net.Addr, ttl, i int, rtt time.Duration, mpls []string, response probeResponse) {
 	if f := t.final.Load(); f != -1 && ttl > int(f) {
 		return
 	}
-
-	if ip := util.AddrIP(peer); ip != nil && ip.Equal(t.DstIP) {
-		for {
-			old := t.final.Load()
-			if old != -1 && ttl >= int(old) {
-				break
-			}
-			if t.final.CompareAndSwap(old, int32(ttl)) {
-				break
-			}
-		}
-	}
-
 	h := Hop{
 		Success: true,
 		Address: peer,
@@ -188,7 +176,7 @@ func (t *TCPTracer) addHopWithIndex(peer net.Addr, ttl, i int, rtt time.Duration
 		RTT:     rtt,
 		MPLS:    mpls,
 	}
-	t.res.addWithGeoAsync(h, i, t.NumMeasurements, t.MaxAttempts, t.Config)
+	t.res.addMatchedHop(h, response, &t.final, i, t.NumMeasurements, t.MaxAttempts, t.Config)
 }
 
 func (t *TCPTracer) matchWorker(ctx context.Context) {
@@ -240,7 +228,7 @@ func (t *TCPTracer) matchWorker(ctx context.Context) {
 
 			if t.clearPending(task.seq) {
 				rtt := task.finish.Sub(start)
-				t.addHopWithIndex(task.peer, ttl, i, rtt, task.mpls)
+				t.addHopWithIndex(task.peer, ttl, i, rtt, task.mpls, task.response)
 			}
 			t.dropSent(task.seq)
 		}
@@ -319,6 +307,7 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 			select {
 			case t.matchQ <- matchTask{
 				srcPort: srcPort, seq: seq, ack: ack, peer: peer, finish: finish, mpls: nil,
+				response: probeResponse{kind: probeResponseDestination},
 			}:
 			default:
 				// 丢弃以避免阻塞抓包循环
@@ -394,7 +383,7 @@ func (t *TCPTracer) handleICMPMessage(msg internal.ReceivedMessage, finish time.
 	// 非阻塞投递；如果队列已满则直接丢弃该任务
 	select {
 	case t.matchQ <- matchTask{
-		srcPort: srcPort, seq: seq, peer: msg.Peer, finish: finish, mpls: mpls,
+		srcPort: srcPort, seq: seq, peer: msg.Peer, finish: finish, mpls: mpls, response: probeResponseFromICMP(msg.ICMP),
 	}:
 	default:
 		// 丢弃以避免阻塞抓包循环

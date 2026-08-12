@@ -1130,6 +1130,10 @@ func applyJSONOutputMode(conf *trace.Config, jsonPrint bool) {
 	}
 }
 
+func effectiveRawOutput(tablePrint, classicPrint, jsonPrint, rawPrint bool) bool {
+	return !tablePrint && !classicPrint && !jsonPrint && rawPrint
+}
+
 func maybeRunUninterruptedRaw(rawPrint bool, method trace.Method, conf trace.Config) bool {
 	if !(util.Uninterrupted && rawPrint) {
 		return false
@@ -1160,12 +1164,15 @@ func runTraceOnce(method trace.Method, conf trace.Config) (*trace.Result, bool) 
 	return res, true
 }
 
-func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tableClearScreen, routePath bool, dstIP net.IP, disableMaptrace, jsonPrint bool, dataOrigin string) {
+func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tableClearScreen, routePath bool, dstIP net.IP, disableMaptrace, jsonPrint, rawPrint bool, dataOrigin string) {
 	if tablePrint {
 		printer.TracerouteTablePrinter(res, tableClearScreen)
 	}
 	if routePath {
 		reporter.New(res, dstIP.String()).Print()
+	}
+	if !jsonPrint && !rawPrint {
+		printer.PrintTraceStopReason(res.StopReason)
 	}
 
 	r, err := json.Marshal(res)
@@ -1687,7 +1694,8 @@ func Execute() {
 		}()
 	}
 	applyJSONOutputMode(&conf, *jsonPrint)
-	if maybeRunUninterruptedRaw(*rawPrint, method, conf) {
+	rawOutput := effectiveRawOutput(*tablePrint, *classicPrint, *jsonPrint, *rawPrint)
+	if maybeRunUninterruptedRaw(rawOutput, method, conf) {
 		return
 	}
 
@@ -1696,7 +1704,7 @@ func Execute() {
 		return
 	}
 
-	finalizeTraceResult(rootCtx, res, *tablePrint, stdoutIsTTY, *routePath, ip, *disableMaptrace, *jsonPrint, *dataOrigin)
+	finalizeTraceResult(rootCtx, res, *tablePrint, stdoutIsTTY, *routePath, ip, *disableMaptrace, *jsonPrint, rawOutput, *dataOrigin)
 }
 
 type mtrRunMode int

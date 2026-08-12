@@ -4,6 +4,7 @@ package internal
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -21,6 +22,7 @@ type winDivertICMPPacket struct {
 	peerIP    net.IP
 	outer     []byte
 	errorData []byte
+	response  ICMPResponse
 	echoID    int
 	echoSeq   int
 	echoReply bool
@@ -132,6 +134,7 @@ func decodeWinDivertICMPv4Packet(pkt gopacket.Packet, raw []byte) (*winDivertICM
 		ipVersion: 4,
 		peerIP:    ip4.SrcIP,
 		outer:     raw,
+		response:  classifyICMPResponse(4, int(ic4.TypeCode.Type()), int(ic4.TypeCode.Code()), int(ic4.Seq)),
 	}
 
 	switch ic4.TypeCode.Type() {
@@ -140,7 +143,7 @@ func decodeWinDivertICMPv4Packet(pkt gopacket.Packet, raw []byte) (*winDivertICM
 		packet.echoID = int(ic4.Id)
 		packet.echoSeq = int(ic4.Seq)
 		return packet, true
-	case layers.ICMPv4TypeTimeExceeded, layers.ICMPv4TypeDestinationUnreachable:
+	case layers.ICMPv4TypeTimeExceeded, layers.ICMPv4TypeDestinationUnreachable, layers.ICMPv4TypeParameterProblem:
 		packet.errorData = ic4.Payload
 		return packet, true
 	default:
@@ -162,6 +165,7 @@ func decodeWinDivertICMPv6Packet(pkt gopacket.Packet, raw []byte) (*winDivertICM
 		ipVersion: 6,
 		peerIP:    ip6.SrcIP,
 		outer:     raw,
+		response:  classifyICMPResponse(6, int(ic6.TypeCode.Type()), int(ic6.TypeCode.Code()), 0),
 	}
 
 	switch ic6.TypeCode.Type() {
@@ -174,7 +178,10 @@ func decodeWinDivertICMPv6Packet(pkt gopacket.Packet, raw []byte) (*winDivertICM
 		packet.echoID = int(echo.Identifier)
 		packet.echoSeq = int(echo.SeqNumber)
 		return packet, true
-	case layers.ICMPv6TypeTimeExceeded, layers.ICMPv6TypePacketTooBig, layers.ICMPv6TypeDestinationUnreachable:
+	case layers.ICMPv6TypeTimeExceeded, layers.ICMPv6TypePacketTooBig, layers.ICMPv6TypeDestinationUnreachable, layers.ICMPv6TypeParameterProblem:
+		if ic6.TypeCode.Type() == layers.ICMPv6TypePacketTooBig {
+			packet.response = classifyICMPResponse(6, int(ic6.TypeCode.Type()), int(ic6.TypeCode.Code()), int(binary.BigEndian.Uint32(ic6.Payload[:4])))
+		}
 		packet.errorData = ic6.Payload[4:]
 		return packet, true
 	default:
@@ -186,11 +193,12 @@ func (p *winDivertICMPPacket) message() ReceivedMessage {
 	return ReceivedMessage{
 		Peer: &net.IPAddr{IP: p.peerIP},
 		Msg:  p.outer,
+		ICMP: p.response,
 	}
 }
 
-func (p *winDivertICMPPacket) echoReplyFor(dstIP net.IP, echoID int) (int, bool) {
-	if !p.echoReply || !p.peerIP.Equal(dstIP) || p.echoID != echoID {
+func (p *winDivertICMPPacket) echoReplyFor(echoID int) (int, bool) {
+	if !p.echoReply || p.echoID != echoID {
 		return 0, false
 	}
 	return p.echoSeq, true
