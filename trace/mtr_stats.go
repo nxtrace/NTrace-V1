@@ -14,19 +14,20 @@ import (
 
 // MTRHopStat 表示 MTR 输出中一行统计数据。
 type MTRHopStat struct {
-	TTL      int              `json:"ttl"`
-	Host     string           `json:"host,omitempty"`
-	IP       string           `json:"ip,omitempty"`
-	Loss     float64          `json:"loss_percent"`
-	Snt      int              `json:"snt"`
-	Last     float64          `json:"last_ms"`
-	Avg      float64          `json:"avg_ms"`
-	Best     float64          `json:"best_ms"`
-	Wrst     float64          `json:"wrst_ms"`
-	StDev    float64          `json:"stdev_ms"`
-	Geo      *ipgeo.IPGeoData `json:"geo,omitempty"`
-	MPLS     []string         `json:"mpls,omitempty"`
-	Received int              `json:"received"`
+	TTL      int               `json:"ttl"`
+	Host     string            `json:"host,omitempty"`
+	IP       string            `json:"ip,omitempty"`
+	Loss     float64           `json:"loss_percent"`
+	Snt      int               `json:"snt"`
+	Last     float64           `json:"last_ms"`
+	Avg      float64           `json:"avg_ms"`
+	Best     float64           `json:"best_ms"`
+	Wrst     float64           `json:"wrst_ms"`
+	StDev    float64           `json:"stdev_ms"`
+	Geo      *ipgeo.IPGeoData  `json:"geo,omitempty"`
+	MPLS     []string          `json:"mpls,omitempty"`
+	Received int               `json:"received"`
+	Response *MTRProbeResponse `json:"response,omitempty"`
 }
 
 // MTRSnapshot 是某一时刻的完整快照。
@@ -111,6 +112,27 @@ func (agg *MTRAggregator) ClearHop(ttl int) {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
 	delete(agg.stats, ttl)
+}
+
+// ClearAbove removes statistics beyond a confirmed sticky destination edge.
+func (agg *MTRAggregator) ClearAbove(ttl int) {
+	agg.mu.Lock()
+	defer agg.mu.Unlock()
+	for hop := range agg.stats {
+		if hop > ttl {
+			delete(agg.stats, hop)
+		}
+	}
+}
+
+func filterMTRStatsAtPathEnd(stats []MTRHopStat, ttl int) []MTRHopStat {
+	filtered := stats[:0]
+	for _, stat := range stats {
+		if stat.TTL <= ttl {
+			filtered = append(filtered, stat)
+		}
+	}
+	return filtered
 }
 
 // MigrateStats 将 fromTTL 上所有累加器迁移合并到 toTTL，然后删除 fromTTL。

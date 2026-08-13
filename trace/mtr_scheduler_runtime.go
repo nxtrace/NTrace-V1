@@ -53,6 +53,7 @@ type mtrSchedulerRuntime struct {
 	states               []mtrHopState
 	generation           uint64
 	knownFinalTTL        int32
+	pathTracker          *mtrPathTracker
 	inFlight             int
 	resultCh             chan mtrCompletedProbe
 	metadataCh           chan mtrMetadataResult
@@ -132,7 +133,7 @@ func newMTRSchedulerRuntime(
 
 	metadataCtx, metadataCancel := context.WithCancel(ctx)
 
-	return &mtrSchedulerRuntime{
+	rt := &mtrSchedulerRuntime{
 		ctx:                  ctx,
 		metadataCtx:          metadataCtx,
 		metadataCancel:       metadataCancel,
@@ -162,7 +163,9 @@ func newMTRSchedulerRuntime(
 		metadataHostAttempts: make(map[string]int),
 		metadataGeoRetryAt:   make(map[string]time.Time),
 		metadataHostRetryAt:  make(map[string]time.Time),
-	}, nil
+	}
+	rt.pathTracker = newMTRPathTracker(cfg.MaxPerHop > 0, maxHops, cfg.OnPathEnd)
+	return rt, nil
 }
 
 func (rt *mtrSchedulerRuntime) run() error {
@@ -237,7 +240,18 @@ func (rt *mtrSchedulerRuntime) maybeSnapshot(force bool) {
 		return
 	}
 	rt.lastSnapshot = now
-	rt.onSnapshot(rt.computeIteration(), rt.agg.Snapshot())
+	rt.onSnapshot(rt.computeIteration(), rt.snapshotStats())
+}
+
+func (rt *mtrSchedulerRuntime) snapshotStats() []MTRHopStat {
+	stats := rt.agg.Snapshot()
+	if pathEnd := rt.pathTracker.pathEnd(); pathEnd != nil && pathEnd.Hop > 0 {
+		stats = filterMTRStatsAtPathEnd(stats, pathEnd.Hop)
+	}
+	for i := range stats {
+		stats[i].Response = mtrProbeResponseForStat(rt.pathTracker, stats[i])
+	}
+	return stats
 }
 
 func (rt *mtrSchedulerRuntime) launchProbe(ttl int) {
@@ -336,11 +350,13 @@ func (rt *mtrSchedulerRuntime) timeoutProbeResult(ttl int) *Result {
 }
 
 func (rt *mtrSchedulerRuntime) processProbeSuccess(ttl int, result mtrProbeResult, doneAt time.Time) {
-	rt.detectDestination(ttl, result)
+	result = rt.normalizeProbeResponse(result)
+	result.Response = mtrProbeResponseWithPeer(result.Response, result.Addr)
 	if rt.probeBudgetReached(ttl) {
 		rt.states[ttl].consecutiveErrs = 0
 		return
 	}
+	rt.observeProbeResponse(ttl, result.Response)
 
 	rt.markProbeCompleted(ttl)
 	result = rt.applyMetadataCache(result)
@@ -356,6 +372,19 @@ func (rt *mtrSchedulerRuntime) processProbeSuccess(ttl int, result mtrProbeResul
 		rt.onProbe(result, rt.computeIteration(), doneAt)
 	}
 	rt.maybeSnapshot(false)
+}
+
+func (rt *mtrSchedulerRuntime) normalizeProbeResponse(result mtrProbeResult) mtrProbeResult {
+	if result.Response != nil || !result.Success || result.Addr == nil || rt.cfg.DstIP == nil {
+		return result
+	}
+	peerIP := mtrAddrToIP(result.Addr)
+	if peerIP != nil && peerIP.Equal(rt.cfg.DstIP) {
+		// Compatibility for custom mtrTTLProber implementations. Built-in
+		// probers always provide protocol-derived response semantics.
+		result.Response = &MTRProbeResponse{Kind: MTRResponseDestination}
+	}
+	return result
 }
 
 func (rt *mtrSchedulerRuntime) applyMetadataCache(result mtrProbeResult) mtrProbeResult {
@@ -681,34 +710,21 @@ func (rt *mtrSchedulerRuntime) metadataRetriesExhausted(attempts map[string]int,
 	return true
 }
 
-func (rt *mtrSchedulerRuntime) detectDestination(ttl int, result mtrProbeResult) {
-	if !result.Success || result.Addr == nil {
+func (rt *mtrSchedulerRuntime) observeProbeResponse(ttl int, response *MTRProbeResponse) {
+	if !rt.pathTracker.observe(ttl, response) {
 		return
 	}
-
-	peerIP := mtrAddrToIP(result.Addr)
-	if peerIP == nil || !peerIP.Equal(rt.cfg.DstIP) {
-		return
+	pathEnd := rt.pathTracker.pathEnd()
+	boundary := -1
+	if pathEnd != nil {
+		boundary = pathEnd.Hop
 	}
-
-	curFinal := atomic.LoadInt32(&rt.knownFinalTTL)
-	if curFinal < 0 {
-		atomic.StoreInt32(&rt.knownFinalTTL, int32(ttl))
-		rt.disableHigherTTLs(ttl + 1)
-		return
+	atomic.StoreInt32(&rt.knownFinalTTL, int32(boundary))
+	for hop := rt.beginHop; hop <= rt.maxHops; hop++ {
+		rt.states[hop].disabled = boundary > 0 && hop > boundary
 	}
-
-	if int32(ttl) < curFinal {
-		oldFinal := int(curFinal)
-		atomic.StoreInt32(&rt.knownFinalTTL, int32(ttl))
-		rt.disableHigherTTLs(ttl + 1)
-		rt.agg.ClearHop(oldFinal)
-	}
-}
-
-func (rt *mtrSchedulerRuntime) disableHigherTTLs(fromTTL int) {
-	for ttl := fromTTL; ttl <= rt.maxHops; ttl++ {
-		rt.states[ttl].disabled = true
+	if pathEnd != nil && pathEnd.Reason == StopReasonDestination {
+		rt.agg.ClearAbove(pathEnd.Hop)
 	}
 }
 
@@ -793,7 +809,11 @@ func (rt *mtrSchedulerRuntime) isDone() bool {
 	if rt.inFlight != 0 {
 		return false
 	}
-	return len(rt.metadataGeoInFlight) == 0 && len(rt.metadataHostInFlight) == 0
+	done := len(rt.metadataGeoInFlight) == 0 && len(rt.metadataHostInFlight) == 0
+	if done {
+		rt.pathTracker.completeAtMaxHops()
+	}
+	return done
 }
 
 func (rt *mtrSchedulerRuntime) handleReset() {
@@ -814,6 +834,7 @@ func (rt *mtrSchedulerRuntime) handleReset() {
 	clear(rt.metadataGeoRetryAt)
 	clear(rt.metadataHostRetryAt)
 	atomic.StoreInt32(&rt.knownFinalTTL, -1)
+	rt.pathTracker.reset()
 	rt.agg.Reset()
 	_ = rt.prober.Reset()
 }

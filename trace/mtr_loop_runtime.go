@@ -19,6 +19,7 @@ type mtrLoopRuntime struct {
 	iteration         int
 	consecutiveErrors int
 	backoff           time.Duration
+	pathTracker       *mtrPathTracker
 }
 
 func newMTRLoopRuntime(
@@ -37,7 +38,7 @@ func newMTRLoopRuntime(
 	if opts.ProgressThrottle <= 0 {
 		opts.ProgressThrottle = 200 * time.Millisecond
 	}
-	return &mtrLoopRuntime{
+	rt := &mtrLoopRuntime{
 		ctx:        ctx,
 		prober:     prober,
 		config:     config,
@@ -48,6 +49,8 @@ func newMTRLoopRuntime(
 		bo:         bo,
 		backoff:    bo.Initial,
 	}
+	rt.pathTracker = newMTRPathTracker(opts.MaxRounds > 0, config.MaxHops, opts.OnPathEnd)
+	return rt
 }
 
 func (rt *mtrLoopRuntime) run() error {
@@ -74,6 +77,7 @@ func (rt *mtrLoopRuntime) run() error {
 
 		rt.recordSuccess(res)
 		if rt.opts.MaxRounds > 0 && rt.iteration >= rt.opts.MaxRounds {
+			rt.pathTracker.completeAtMaxHops()
 			return nil
 		}
 		if err := rt.waitInterval(); err != nil {
@@ -92,8 +96,22 @@ func (rt *mtrLoopRuntime) snapshotContextError() error {
 
 func (rt *mtrLoopRuntime) emitSnapshot() {
 	if rt.onSnapshot != nil {
-		rt.onSnapshot(rt.iteration, rt.agg.Snapshot())
+		rt.onSnapshot(rt.iteration, rt.snapshotStats())
 	}
+}
+
+func (rt *mtrLoopRuntime) snapshotStats() []MTRHopStat {
+	return rt.decorateSnapshot(rt.agg.Snapshot())
+}
+
+func (rt *mtrLoopRuntime) decorateSnapshot(stats []MTRHopStat) []MTRHopStat {
+	if pathEnd := rt.pathTracker.pathEnd(); pathEnd != nil && pathEnd.Hop > 0 {
+		stats = filterMTRStatsAtPathEnd(stats, pathEnd.Hop)
+	}
+	for i := range stats {
+		stats[i].Response = mtrProbeResponseForStat(rt.pathTracker, stats[i])
+	}
+	return stats
 }
 
 func (rt *mtrLoopRuntime) handleReset() {
@@ -108,6 +126,7 @@ func (rt *mtrLoopRuntime) handleReset() {
 	if resetter, ok := rt.prober.(mtrResetter); ok {
 		resetter.resetFinalTTL()
 	}
+	rt.pathTracker.reset()
 }
 
 func (rt *mtrLoopRuntime) waitWhilePaused() error {
@@ -171,7 +190,7 @@ func (rt *mtrLoopRuntime) emitPreview(peeker mtrPeeker) {
 		return
 	}
 	preview := rt.agg.Clone()
-	rt.onSnapshot(rt.iteration+1, preview.Update(partial, 1))
+	rt.onSnapshot(rt.iteration+1, rt.decorateSnapshot(preview.Update(partial, 1)))
 }
 
 func (rt *mtrLoopRuntime) handleProbeError(err error) (bool, error) {
@@ -216,11 +235,22 @@ func (rt *mtrLoopRuntime) recordSuccess(res *Result) {
 	rt.consecutiveErrors = 0
 	rt.backoff = rt.bo.Initial
 	rt.iteration++
+	rt.observeResultResponses(res)
 
 	stats := rt.agg.Update(res, 1)
 	if rt.onSnapshot != nil {
-		rt.onSnapshot(rt.iteration, stats)
+		rt.onSnapshot(rt.iteration, rt.decorateSnapshot(stats))
 	}
+}
+
+func (rt *mtrLoopRuntime) observeResultResponses(res *Result) {
+	if res == nil {
+		return
+	}
+	for ttl := range res.responses {
+		rt.pathTracker.observe(ttl, bestMTRProbeResponse(res, ttl))
+	}
+	rt.pathTracker.observeStopReason(res.StopReason)
 }
 
 func (rt *mtrLoopRuntime) waitInterval() error {

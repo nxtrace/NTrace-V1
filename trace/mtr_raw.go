@@ -29,26 +29,29 @@ type MTRRawOptions struct {
 	// It is mainly for callers that need per-round locking or global-state setup.
 	// Legacy round-based mode only.
 	RunRound func(method Method, cfg Config) (*Result, error)
+	// OnPathEnd is called when the semantic path edge changes. nil reopens it.
+	OnPathEnd func(*StopReason)
 }
 
 // MTRRawRecord is one stream record emitted by MTR raw mode.
 // It keeps the same information family as classic --raw output.
 type MTRRawRecord struct {
-	Iteration int      `json:"iteration"`
-	TTL       int      `json:"ttl"`
-	Success   bool     `json:"success"`
-	IP        string   `json:"ip,omitempty"`
-	Host      string   `json:"host,omitempty"`
-	RTTMs     float64  `json:"rtt_ms"`
-	ASN       string   `json:"asn,omitempty"`
-	Country   string   `json:"country,omitempty"`
-	Prov      string   `json:"prov,omitempty"`
-	City      string   `json:"city,omitempty"`
-	District  string   `json:"district,omitempty"`
-	Owner     string   `json:"owner,omitempty"`
-	Lat       float64  `json:"lat"`
-	Lng       float64  `json:"lng"`
-	MPLS      []string `json:"mpls,omitempty"`
+	Iteration int               `json:"iteration"`
+	TTL       int               `json:"ttl"`
+	Success   bool              `json:"success"`
+	IP        string            `json:"ip,omitempty"`
+	Host      string            `json:"host,omitempty"`
+	RTTMs     float64           `json:"rtt_ms"`
+	ASN       string            `json:"asn,omitempty"`
+	Country   string            `json:"country,omitempty"`
+	Prov      string            `json:"prov,omitempty"`
+	City      string            `json:"city,omitempty"`
+	District  string            `json:"district,omitempty"`
+	Owner     string            `json:"owner,omitempty"`
+	Lat       float64           `json:"lat"`
+	Lng       float64           `json:"lng"`
+	MPLS      []string          `json:"mpls,omitempty"`
+	Response  *MTRProbeResponse `json:"response,omitempty"`
 }
 
 // MTRRawOnRecord is called for each probe event.
@@ -75,7 +78,6 @@ func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRaw
 	roundCfg.MaxAttempts = 1
 	roundCfg.AsyncPrinter = nil
 	roundCfg.RealtimePrinter = nil
-
 	if roundCfg.MaxHops == 0 {
 		roundCfg.MaxHops = 30
 	}
@@ -117,6 +119,7 @@ func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRaw
 		FillGeo:          true,
 		BaseConfig:       roundCfg,
 		DstIP:            roundCfg.DstIP,
+		OnPathEnd:        opts.OnPathEnd,
 	}, nil, func(result mtrProbeResult, iteration int, _ time.Time) {
 		if onRecord == nil {
 			return
@@ -138,11 +141,15 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 	roundCfg.MaxAttempts = 1
 	roundCfg.AsyncPrinter = nil
 	roundCfg.RealtimePrinter = nil
+	if roundCfg.MaxHops == 0 {
+		roundCfg.MaxHops = 30
+	}
 
 	runRound := opts.RunRound
 	if runRound == nil {
 		runRound = mtrRawTracerouteFn
 	}
+	pathTracker := newMTRPathTracker(opts.MaxRounds > 0, roundCfg.MaxHops, opts.OnPathEnd)
 
 	iteration := 0
 	for {
@@ -178,14 +185,16 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 			for i := start; i < end; i++ {
 				h := res.Hops[ttl][i]
 				rec := buildMTRRawRecord(iteration, h, cfgForRound)
+				rec.Response = bestMTRProbeResponse(res, h.TTL)
 				onRecord(rec)
 			}
 		}
 
 		done := make(chan struct{})
 		var traceErr error
+		var roundRes *Result
 		go func() {
-			_, traceErr = runRound(method, cfgForRound)
+			roundRes, traceErr = runRound(method, cfgForRound)
 			close(done)
 		}()
 
@@ -201,8 +210,15 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 		if traceErr != nil {
 			return traceErr
 		}
+		if roundRes != nil {
+			for ttl := range roundRes.responses {
+				pathTracker.observe(ttl, bestMTRProbeResponse(roundRes, ttl))
+			}
+			pathTracker.observeStopReason(roundRes.StopReason)
+		}
 
 		if opts.MaxRounds > 0 && iteration >= opts.MaxRounds {
+			pathTracker.completeAtMaxHops()
 			return nil
 		}
 
@@ -308,6 +324,7 @@ func newMTRRawRecord(iteration int, pr mtrProbeResult) MTRRawRecord {
 		Iteration: iteration,
 		TTL:       pr.TTL,
 		Success:   pr.Success && pr.Addr != nil,
+		Response:  cloneMTRProbeResponse(pr.Response),
 	}
 	if pr.Addr != nil {
 		rec.IP = addrToIPString(pr.Addr)

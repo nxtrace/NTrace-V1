@@ -760,7 +760,7 @@ func TestResetClearsKnownFinalTTL(t *testing.T) {
 // 目的地停止测试
 // ---------------------------------------------------------------------------
 
-// TestOnICMP_DetectsDestination 验证 onICMP 在 peer==DstIP 时设置 roundFinalTTL。
+// TestOnICMP_DetectsDestination verifies protocol semantics, not peer-IP equality.
 func TestOnICMP_DetectsDestination(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
 	e.config.DstIP = net.ParseIP("8.8.8.8")
@@ -772,8 +772,11 @@ func TestOnICMP_DetectsDestination(t *testing.T) {
 	seq := 42
 	e.sentAt[seq] = mtrProbeMeta{ttl: 5, start: now, roundID: 1}
 
-	peer := &net.IPAddr{IP: net.ParseIP("8.8.8.8")}
-	e.onICMP(internal.ReceivedMessage{Peer: peer}, now.Add(15*time.Millisecond), seq)
+	peer := &net.IPAddr{IP: net.ParseIP("192.0.2.55")}
+	e.onICMP(internal.ReceivedMessage{
+		Peer: peer,
+		ICMP: internal.ICMPResponse{Kind: internal.ICMPResponseEchoReply, Description: "ICMP Echo Reply"},
+	}, now.Add(15*time.Millisecond), seq)
 
 	if got := atomic.LoadInt32(&e.roundFinalTTL); got != 5 {
 		t.Errorf("expected roundFinalTTL=5, got %d", got)
@@ -992,5 +995,130 @@ func TestMTRLoop_NonPeekerNoStreaming(t *testing.T) {
 	// 非 peeker 模式：每轮仅 1 次快照，共 3 次
 	if got := atomic.LoadInt32(&snapshotCount); got != 3 {
 		t.Errorf("expected exactly 3 snapshots, got %d", got)
+	}
+}
+
+func TestMTRLoopPreviewFiltersProvisionalPathWithoutClearingHigherStats(t *testing.T) {
+	full := mkResult(
+		[]Hop{mkHop(1, "192.0.2.1", time.Millisecond)},
+		[]Hop{mkHop(2, "192.0.2.2", 2*time.Millisecond)},
+		[]Hop{mkHop(3, "192.0.2.3", 3*time.Millisecond)},
+	)
+	agg := NewMTRAggregator()
+	agg.Update(full, 1)
+
+	var snapshots [][]MTRHopStat
+	peeker := &mockPeekerProber{peekFn: func() *Result { return full }}
+	rt := newMTRLoopRuntime(context.Background(), peeker, Config{MaxHops: 3}, MTROptions{}, agg, func(_ int, stats []MTRHopStat) {
+		snapshots = append(snapshots, stats)
+	}, false, fastBackoff)
+
+	rt.pathTracker.observe(2, &MTRProbeResponse{Kind: MTRResponseUnreachable, Marker: "!H"})
+	rt.emitPreview(peeker)
+	if got := snapshots[len(snapshots)-1]; len(got) != 2 || got[1].TTL != 2 || got[1].Response == nil || got[1].Response.Marker != "!H" {
+		t.Fatalf("provisional preview = %#v, want TTL 1..2 with unreachable marker", got)
+	}
+	if got := agg.Snapshot(); len(got) != 3 {
+		t.Fatalf("provisional filtering cleared aggregate stats: %#v", got)
+	}
+
+	rt.pathTracker.observe(2, &MTRProbeResponse{Kind: MTRResponseTransit})
+	rt.emitPreview(peeker)
+	if got := snapshots[len(snapshots)-1]; len(got) != 3 || got[2].TTL != 3 {
+		t.Fatalf("reopened preview = %#v, want preserved TTL 1..3", got)
+	}
+}
+
+func TestMTRLoopRoundPathReopensProvisionalEdgeAndKeepsHigherStats(t *testing.T) {
+	var round int32
+	prober := &mockProber{roundFn: func(_ context.Context) (*Result, error) {
+		res := mkResult(
+			[]Hop{mkHop(1, "192.0.2.1", time.Millisecond)},
+			[]Hop{mkHop(2, "192.0.2.2", 2*time.Millisecond)},
+			[]Hop{mkHop(3, "192.0.2.3", 3*time.Millisecond)},
+			[]Hop{mkHop(4, "192.0.2.4", 4*time.Millisecond)},
+		)
+		res.responses = make(map[int][]probeResponse)
+		if atomic.AddInt32(&round, 1) == 1 {
+			res.responses[2] = []probeResponse{{kind: probeResponseUnreachable, detail: "ICMP Host Unreachable", marker: "!H"}}
+		} else {
+			res.responses[2] = []probeResponse{{kind: probeResponseTransit, detail: "ICMP Time Exceeded"}}
+		}
+		return res, nil
+	}}
+
+	var changes []*StopReason
+	var snapshots [][]MTRHopStat
+	agg := NewMTRAggregator()
+	err := mtrLoop(context.Background(), prober, Config{MaxHops: 4}, MTROptions{
+		MaxRounds: 2,
+		Interval:  time.Millisecond,
+		OnPathEnd: func(reason *StopReason) {
+			changes = append(changes, reason)
+		},
+	}, agg, func(_ int, stats []MTRHopStat) {
+		snapshots = append(snapshots, stats)
+	}, false, fastBackoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 || len(snapshots[0]) != 2 || len(snapshots[1]) != 4 {
+		t.Fatalf("round snapshots = %#v, want provisional TTL 1..2 then reopened TTL 1..4", snapshots)
+	}
+	if got := snapshots[0][1].Response; got == nil || got.Kind != MTRResponseUnreachable || got.Marker != "!H" {
+		t.Fatalf("provisional response = %#v, want unreachable !H", got)
+	}
+	if got := snapshots[1][1].Response; got == nil || got.Kind != MTRResponseTransit {
+		t.Fatalf("reopened response = %#v, want sticky transit", got)
+	}
+	if got := agg.Snapshot(); len(got) != 4 || got[3].Snt != 2 {
+		t.Fatalf("higher aggregate stats were lost across provisional edge: %#v", got)
+	}
+	if len(changes) != 3 || changes[0] == nil || changes[0].Reason != StopReasonUnreachable || changes[1] != nil {
+		t.Fatalf("path changes = %#v, want unreachable, nil, max_hops", changes)
+	}
+	assertMTRPathEnd(t, changes[2], 4, StopReasonMaxHops)
+}
+
+func TestMTRICMPEngineCarriesTransitAndUnreachableResponses(t *testing.T) {
+	e := newTestICMPEngine(2 * time.Second)
+	e.config.DstIP = net.ParseIP("203.0.113.10")
+	atomic.StoreUint32(&e.roundID, 1)
+	atomic.StoreInt32(&e.roundFinalTTL, -1)
+	e.curBeginHop = 1
+	e.curEffectiveMax = 3
+	e.curTtlSeq = map[int]int{2: 20, 3: 30}
+
+	now := time.Now()
+	e.sentAt[20] = mtrProbeMeta{ttl: 2, start: now, roundID: 1}
+	e.onICMP(internal.ReceivedMessage{
+		Peer: &net.IPAddr{IP: e.config.DstIP},
+		ICMP: internal.ICMPResponse{Kind: internal.ICMPResponseTransit, Description: "ICMP Time Exceeded"},
+	}, now.Add(time.Millisecond), 20)
+	if got := e.replied[20].response; got == nil || got.Kind != MTRResponseTransit {
+		t.Fatalf("target-IP Time Exceeded response = %#v, want transit", got)
+	}
+	if got := atomic.LoadInt32(&e.roundFinalTTL); got != -1 {
+		t.Fatalf("target-IP transit set round final TTL to %d", got)
+	}
+
+	e.sentAt[30] = mtrProbeMeta{ttl: 3, start: now, roundID: 1}
+	e.onICMP(internal.ReceivedMessage{
+		Peer: &net.IPAddr{IP: net.ParseIP("198.51.100.30")},
+		ICMP: internal.ICMPResponse{Kind: internal.ICMPResponseUnreachable, Description: "ICMP Host Unreachable", Marker: "!H"},
+	}, now.Add(2*time.Millisecond), 30)
+	if got := e.replied[30].response; got == nil || got.Kind != MTRResponseUnreachable || got.Marker != "!H" {
+		t.Fatalf("unreachable response = %#v, want unreachable !H", got)
+	}
+	if got := atomic.LoadInt32(&e.roundFinalTTL); got != -1 {
+		t.Fatalf("provisional unreachable set sticky round final TTL to %d", got)
+	}
+
+	res := e.buildProbeRoundResult(1, 3)
+	if got := bestMTRProbeResponse(res, 2); got == nil || got.Kind != MTRResponseTransit {
+		t.Fatalf("round transit response = %#v", got)
+	}
+	if got := bestMTRProbeResponse(res, 3); got == nil || got.Kind != MTRResponseUnreachable || got.Marker != "!H" {
+		t.Fatalf("round unreachable response = %#v", got)
 	}
 }

@@ -2563,6 +2563,7 @@ func TestScheduler_LateHigherTTLDestinationReply_Discarded_NoSntBump(t *testing.
 
 	var mu sync.Mutex
 	var callbackCount int
+	callbackByTTL := make(map[int]int)
 
 	err := runMTRScheduler(context.Background(), prober, agg, mtrSchedulerConfig{
 		BeginHop:         1,
@@ -2575,6 +2576,7 @@ func TestScheduler_LateHigherTTLDestinationReply_Discarded_NoSntBump(t *testing.
 	}, nil, func(result mtrProbeResult, _ int, _ time.Time) {
 		mu.Lock()
 		callbackCount++
+		callbackByTTL[result.TTL]++
 		mu.Unlock()
 	})
 
@@ -2598,14 +2600,16 @@ func TestScheduler_LateHigherTTLDestinationReply_Discarded_NoSntBump(t *testing.
 		t.Errorf("TTL 5: expected Snt=0 (discarded late dst reply), got %d", sntByTTL[5])
 	}
 
-	// Callback count should equal sum of Snt across active TTLs only
+	// The delayed over-boundary result must not emit a callback. Other higher
+	// TTL callbacks may have been emitted before the destination edge became
+	// known; the subsequent path_end update tells streaming consumers to filter
+	// them and the sticky destination clears them from the final snapshot.
 	mu.Lock()
-	totalSnt := 0
-	for _, s := range stats {
-		totalSnt += s.Snt
+	if callbackByTTL[5] != 0 {
+		t.Errorf("TTL 5 emitted %d callbacks after the path edge was known", callbackByTTL[5])
 	}
-	if callbackCount != totalSnt {
-		t.Errorf("callback count (%d) != total Snt (%d); discarded results may have leaked", callbackCount, totalSnt)
+	if callbackCount < sntByTTL[1]+sntByTTL[2]+sntByTTL[3] {
+		t.Errorf("callback count (%d) is below retained Snt", callbackCount)
 	}
 	mu.Unlock()
 }
@@ -3353,5 +3357,173 @@ func TestScheduler_DynamicMaxInFlightPerHop_SmallTimeout(t *testing.T) {
 		if s.TTL >= 1 && s.TTL <= 2 && s.Snt != 3 {
 			t.Errorf("TTL %d: Snt=%d, expected 3", s.TTL, s.Snt)
 		}
+	}
+}
+
+func TestSchedulerUsesExplicitResponseSemanticsForPathEnd(t *testing.T) {
+	dstIP := net.ParseIP("203.0.113.10")
+	rt, err := newMTRSchedulerRuntime(context.Background(), &mockTTLProber{}, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:  1,
+		MaxHops:   4,
+		MaxPerHop: 2,
+		DstIP:     dstIP,
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A Time Exceeded response from the target address is still transit.
+	rt.processProbeSuccess(2, mtrProbeResult{
+		TTL:      2,
+		Success:  true,
+		Addr:     &net.IPAddr{IP: dstIP},
+		RTT:      time.Millisecond,
+		Response: &MTRProbeResponse{Kind: MTRResponseTransit, Description: "ICMP Time Exceeded"},
+	}, time.Now())
+	if got := rt.pathTracker.pathEnd(); got != nil {
+		t.Fatalf("target-IP transit path end = %#v, want nil", got)
+	}
+	if rt.states[3].disabled || rt.states[4].disabled {
+		t.Fatal("target-IP transit disabled higher TTLs")
+	}
+
+	// TCP/UDP destination evidence may legitimately come from another address.
+	rt.processProbeSuccess(3, mtrProbeResult{
+		TTL:      3,
+		Success:  true,
+		Addr:     &net.TCPAddr{IP: net.ParseIP("198.51.100.44"), Port: 443},
+		RTT:      2 * time.Millisecond,
+		Response: &MTRProbeResponse{Kind: MTRResponseDestination, Description: "TCP RST"},
+	}, time.Now())
+	assertMTRPathEnd(t, rt.pathTracker.pathEnd(), 3, StopReasonDestination)
+	if !rt.states[4].disabled {
+		t.Fatal("different-source destination did not disable higher TTLs")
+	}
+}
+
+func TestSchedulerProvisionalEdgeDropsDisabledInFlightWithoutSpendingBudget(t *testing.T) {
+	var changes []*StopReason
+	agg := NewMTRAggregator()
+	rt, err := newMTRSchedulerRuntime(context.Background(), &mockTTLProber{}, agg, mtrSchedulerConfig{
+		BeginHop:  1,
+		MaxHops:   4,
+		MaxPerHop: 2,
+		OnPathEnd: func(reason *StopReason) {
+			changes = append(changes, reason)
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Preserve one already-counted high-TTL sample, then model another probe
+	// that was in flight when a lower provisional edge was observed.
+	rt.processProbeSuccess(4, mtrProbeResult{
+		TTL:      4,
+		Success:  true,
+		Addr:     &net.IPAddr{IP: net.ParseIP("192.0.2.4")},
+		RTT:      4 * time.Millisecond,
+		Response: &MTRProbeResponse{Kind: MTRResponseTransit},
+	}, time.Now())
+	rt.states[4].inFlightCount = 1
+	rt.inFlight = 1
+
+	rt.processProbeSuccess(2, mtrProbeResult{
+		TTL:      2,
+		Success:  true,
+		Addr:     &net.IPAddr{IP: net.ParseIP("192.0.2.2")},
+		RTT:      2 * time.Millisecond,
+		Response: &MTRProbeResponse{Kind: MTRResponseUnreachable, Marker: "!H"},
+	}, time.Now())
+	assertMTRPathEnd(t, rt.pathTracker.pathEnd(), 2, StopReasonUnreachable)
+	if got := rt.snapshotStats(); len(got) == 0 || got[len(got)-1].TTL > 2 {
+		t.Fatalf("provisional snapshot leaked higher TTLs: %#v", got)
+	}
+	if got := agg.Snapshot(); got[len(got)-1].TTL != 4 {
+		t.Fatalf("provisional filtering destroyed higher stats: %#v", got)
+	}
+
+	rt.processResult(mtrCompletedProbe{
+		ttl: 4,
+		result: mtrProbeResult{
+			TTL:      4,
+			Success:  true,
+			Addr:     &net.IPAddr{IP: net.ParseIP("192.0.2.40")},
+			Response: &MTRProbeResponse{Kind: MTRResponseDestination},
+		},
+		gen:    rt.generation,
+		doneAt: time.Now(),
+	})
+	if got := rt.states[4].completed; got != 1 {
+		t.Fatalf("disabled in-flight result spent budget: completed=%d, want 1", got)
+	}
+
+	rt.processProbeSuccess(2, mtrProbeResult{
+		TTL:      2,
+		Success:  true,
+		Addr:     &net.IPAddr{IP: net.ParseIP("192.0.2.2")},
+		RTT:      2 * time.Millisecond,
+		Response: &MTRProbeResponse{Kind: MTRResponseTransit},
+	}, time.Now())
+	if got := rt.pathTracker.pathEnd(); got != nil {
+		t.Fatalf("transit did not reopen provisional edge: %#v", got)
+	}
+	if rt.states[4].disabled {
+		t.Fatal("reopened TTL remained disabled")
+	}
+	if !rt.canLaunchProbe(4, time.Now()) {
+		t.Fatal("discarded high-TTL probe was not eligible for refill")
+	}
+	if got := rt.snapshotStats(); len(got) == 0 || got[len(got)-1].TTL != 4 {
+		t.Fatalf("reopened snapshot did not restore preserved high TTL: %#v", got)
+	}
+	if len(changes) != 2 || changes[0] == nil || changes[0].Reason != StopReasonUnreachable || changes[1] != nil {
+		t.Fatalf("path changes = %#v, want unreachable then nil", changes)
+	}
+}
+
+func TestSchedulerOnlyNaturalBoundedCompletionReportsMaxHops(t *testing.T) {
+	var natural []*StopReason
+	rt, err := newMTRSchedulerRuntime(context.Background(), &mockTTLProber{}, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:  1,
+		MaxHops:   3,
+		MaxPerHop: 1,
+		OnPathEnd: func(reason *StopReason) {
+			natural = append(natural, reason)
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ttl := 1; ttl <= 3; ttl++ {
+		rt.states[ttl].completed = 1
+	}
+	if !rt.isDone() {
+		t.Fatal("fully-budgeted scheduler did not complete")
+	}
+	if len(natural) != 1 {
+		t.Fatalf("natural path changes = %#v, want one max_hops", natural)
+	}
+	assertMTRPathEnd(t, natural[0], 3, StopReasonMaxHops)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var canceled []*StopReason
+	cancelRT, err := newMTRSchedulerRuntime(ctx, &mockTTLProber{}, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:  1,
+		MaxHops:   3,
+		MaxPerHop: 1,
+		OnPathEnd: func(reason *StopReason) {
+			canceled = append(canceled, reason)
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cancelRT.handleCancel(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleCancel() = %v, want context.Canceled", err)
+	}
+	if len(canceled) != 0 || cancelRT.pathTracker.pathEnd() != nil {
+		t.Fatalf("cancel fabricated path end: callbacks=%#v state=%#v", canceled, cancelRT.pathTracker.pathEnd())
 	}
 }

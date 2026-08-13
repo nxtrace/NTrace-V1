@@ -45,6 +45,9 @@ type MTROptions struct {
 	// OnProbe is called for each per-hop probe that is counted into Snt.
 	// It is only used by per-hop MTR; discarded probes are not emitted.
 	OnProbe func(MTRProbeEvent)
+	// OnPathEnd is called whenever the semantic path edge changes. A nil value
+	// means that a provisional unreachable edge was reopened or reset.
+	OnPathEnd func(*StopReason)
 }
 
 // MTROnSnapshot 每轮完成后的回调，用于刷新 CLI 表格。
@@ -57,6 +60,7 @@ type MTRProbeEvent struct {
 	Success   bool
 	RTT       time.Duration
 	Timestamp time.Time
+	Response  *MTRProbeResponse
 }
 
 // mtrBackoffCfg 控制连续错误时的指数退避行为。
@@ -157,6 +161,7 @@ func runMTRPerHop(ctx context.Context, method Method, baseConfig Config, opts MT
 		DstIP:            baseConfig.DstIP,
 		IsPaused:         opts.IsPaused,
 		IsResetRequested: opts.IsResetRequested,
+		OnPathEnd:        opts.OnPathEnd,
 	}, onSnapshot, mtrProbeCallbackFromOptions(opts))
 }
 
@@ -304,9 +309,10 @@ type mtrProbeMeta struct {
 }
 
 type mtrProbeReply struct {
-	peer net.Addr
-	rtt  time.Duration
-	mpls []string
+	peer     net.Addr
+	rtt      time.Duration
+	mpls     []string
+	response *MTRProbeResponse
 }
 
 func newMTRICMPEngine(config Config) (*mtrICMPEngine, error) {
@@ -495,7 +501,7 @@ func (e *mtrICMPEngine) onICMP(msg internal.ReceivedMessage, finish time.Time, s
 
 	rtt := finish.Sub(start.start)
 	e.storeProbeReplyLocked(seq, msg, rtt)
-	finalTTL := e.detectRoundFinalTTLCandidate(msg.Peer, start.ttl)
+	finalTTL := e.detectRoundFinalTTLCandidate(e.replied[seq].response, start.ttl)
 	e.mu.Unlock()
 
 	e.updateRoundFinalTTL(finalTTL)
@@ -529,9 +535,10 @@ func (e *mtrICMPEngine) discardProbeLocked(seq int) {
 
 func (e *mtrICMPEngine) storeProbeReplyLocked(seq int, msg internal.ReceivedMessage, rtt time.Duration) {
 	e.replied[seq] = &mtrProbeReply{
-		peer: msg.Peer,
-		rtt:  rtt,
-		mpls: extractMPLS(msg, e.config.DisableMPLS),
+		peer:     msg.Peer,
+		rtt:      rtt,
+		mpls:     extractMPLS(msg, e.config.DisableMPLS),
+		response: mtrProbeResponseFromProbe(probeResponseFromICMPForMethod(msg.ICMP, ICMPTrace)),
 	}
 	delete(e.sentAt, seq)
 	e.closeProbeNotifyLocked(seq)
@@ -544,9 +551,11 @@ func (e *mtrICMPEngine) closeProbeNotifyLocked(seq int) {
 	}
 }
 
-func (e *mtrICMPEngine) detectRoundFinalTTLCandidate(peer net.Addr, ttl int) int32 {
-	peerIP := mtrPeerIP(peer)
-	if peerIP == nil || !peerIP.Equal(e.config.DstIP) {
+func (e *mtrICMPEngine) detectRoundFinalTTLCandidate(response *MTRProbeResponse, ttl int) int32 {
+	// Only destination evidence is sticky inside the round engine. Unreachable
+	// evidence is provisional and is maintained by the outer path tracker so a
+	// later transit reply can reopen the scan without losing higher-TTL data.
+	if response == nil || response.Kind != MTRResponseDestination {
 		return -1
 	}
 	return int32(ttl)
@@ -838,11 +847,27 @@ func (e *mtrICMPEngine) roundFinalMax(effectiveMax int) int {
 }
 
 func (e *mtrICMPEngine) buildProbeRoundResult(beginHop, finalMax int) *Result {
-	res := &Result{Hops: make([][]Hop, finalMax)}
+	res := &Result{Hops: make([][]Hop, finalMax), responses: make(map[int][]probeResponse)}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for ttl := beginHop; ttl <= finalMax; ttl++ {
 		res.Hops[ttl-1] = []Hop{e.probeRoundHop(ttl)}
+		seq, sent := e.curTtlSeq[ttl]
+		if !sent {
+			continue
+		}
+		reply := e.replied[seq]
+		if reply == nil || reply.response == nil {
+			continue
+		}
+		res.responses[ttl] = []probeResponse{probeResponseFromMTR(reply.response)}
+		if res.StopReason == nil && (reply.response.Kind == MTRResponseDestination || reply.response.Kind == MTRResponseUnreachable) {
+			reason := StopReasonDestination
+			if reply.response.Kind == MTRResponseUnreachable {
+				reason = StopReasonUnreachable
+			}
+			res.StopReason = stopReasonFromMTRResponse(ttl, reason, reply.response)
+		}
 	}
 	return res
 }
@@ -951,11 +976,12 @@ func (e *mtrICMPEngine) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, 
 
 		if ok && reply != nil {
 			return mtrProbeResult{
-				TTL:     ttl,
-				Success: true,
-				Addr:    reply.peer,
-				RTT:     reply.rtt,
-				MPLS:    reply.mpls,
+				TTL:      ttl,
+				Success:  true,
+				Addr:     reply.peer,
+				RTT:      reply.rtt,
+				MPLS:     reply.mpls,
+				Response: cloneMTRProbeResponse(reply.response),
 			}, nil
 		}
 		// Notified but no reply → was discarded (stale/bad RTT)
@@ -1046,6 +1072,7 @@ func (p *mtrFallbackTTLProber) ProbeTTL(ctx context.Context, ttl int) (mtrProbeR
 		MPLS:     h.MPLS,
 		Hostname: h.Hostname,
 		Geo:      h.Geo,
+		Response: bestMTRProbeResponse(res, ttl),
 	}, nil
 }
 

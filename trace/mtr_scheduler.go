@@ -19,6 +19,7 @@ type mtrProbeResult struct {
 	Addr     net.Addr
 	RTT      time.Duration
 	MPLS     []string
+	Response *MTRProbeResponse
 	Hostname string           // pre-resolved PTR (fallback prober)
 	Geo      *ipgeo.IPGeoData // pre-resolved geo  (fallback prober)
 }
@@ -48,6 +49,7 @@ type mtrSchedulerConfig struct {
 	AsyncMetadata     bool
 	BaseConfig        Config // used for geo/RDNS lookup
 	DstIP             net.IP
+	OnPathEnd         func(*StopReason)
 
 	IsPaused         func() bool
 	IsResetRequested func() bool
@@ -102,6 +104,7 @@ func mtrProbeEventFromResult(result mtrProbeResult, at time.Time) MTRProbeEvent 
 		Success:   result.Success && result.Addr != nil,
 		RTT:       result.RTT,
 		Timestamp: at,
+		Response:  cloneMTRProbeResponse(result.Response),
 	}
 }
 
