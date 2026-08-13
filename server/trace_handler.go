@@ -100,14 +100,15 @@ type hopResponse struct {
 }
 
 type traceResponse struct {
-	Target       string        `json:"target"`
-	ResolvedIP   string        `json:"resolved_ip"`
-	Protocol     string        `json:"protocol"`
-	DataProvider string        `json:"data_provider"`
-	TraceMapURL  string        `json:"trace_map_url,omitempty"`
-	Language     string        `json:"language"`
-	Hops         []hopResponse `json:"hops"`
-	DurationMs   int64         `json:"duration_ms"`
+	Target       string                   `json:"target"`
+	ResolvedIP   string                   `json:"resolved_ip"`
+	Protocol     string                   `json:"protocol"`
+	DataProvider string                   `json:"data_provider"`
+	TraceMapURL  string                   `json:"trace_map_url,omitempty"`
+	Language     string                   `json:"language"`
+	Hops         []hopResponse            `json:"hops"`
+	DurationMs   int64                    `json:"duration_ms"`
+	StopReason   *service.TraceStopReason `json:"stop_reason,omitempty"`
 }
 
 type traceProtocolSelection struct {
@@ -328,6 +329,7 @@ func traceHandler(c *gin.Context) {
 		Language:     configured.Lang,
 		Hops:         convertHops(res, configured.Lang),
 		DurationMs:   duration.Milliseconds(),
+		StopReason:   service.NewTraceStopReason(res.StopReason),
 	}
 
 	log.Printf("[deploy] trace completed target=%s hops=%d duration=%s", sanitizeLogParam(setup.Target), len(response.Hops), duration)
@@ -468,7 +470,15 @@ func traceMapURLForResult(setup *traceExecution, res *trace.Result) string {
 	if setup == nil || res == nil || !setup.Config.Maptrace || !shouldGenerateMap(setup.DataProvider) {
 		return ""
 	}
-	payload, err := json.Marshal(res)
+	// Keep the historical tracemap payload shape stable. StopReason belongs to
+	// local CLI/API output and must not be sent to the external map service.
+	payload, err := json.Marshal(struct {
+		Hops        [][]trace.Hop
+		TraceMapUrl string
+	}{
+		Hops:        res.Hops,
+		TraceMapUrl: res.TraceMapUrl,
+	})
 	if err != nil {
 		return ""
 	}

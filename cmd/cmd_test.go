@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -11,12 +13,58 @@ import (
 	"time"
 
 	"github.com/akamensky/argparse"
+	"github.com/fatih/color"
 	fastTrace "github.com/nxtrace/NTrace-core/fast_trace"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/tracelog"
 	"github.com/nxtrace/NTrace-core/util"
 	"github.com/nxtrace/NTrace-core/wshandle"
 )
+
+var errCmdOutputWriter = errors.New("cmd output writer failed")
+
+type failingCmdOutputWriter struct{}
+
+func (failingCmdOutputWriter) Write([]byte) (int, error) {
+	return 0, errCmdOutputWriter
+}
+
+func TestMarshalTraceMapPayloadKeepsHistoricalShape(t *testing.T) {
+	res := &trace.Result{
+		Hops:        [][]trace.Hop{{{TTL: 1}}},
+		StopReason:  &trace.StopReason{Hop: 1, Reason: trace.StopReasonDestination},
+		TraceMapUrl: "https://map.example.test",
+	}
+
+	payload, err := marshalTraceMapPayload(res)
+	if err != nil {
+		t.Fatalf("marshalTraceMapPayload() error = %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("trace map payload decode: %v", err)
+	}
+	if len(fields) != 2 {
+		t.Fatalf("trace map payload fields = %v, want historical Hops and TraceMapUrl only", fields)
+	}
+	if _, ok := fields["Hops"]; !ok {
+		t.Fatalf("trace map payload missing Hops: %s", payload)
+	}
+	if got := string(fields["TraceMapUrl"]); got != `"https://map.example.test"` {
+		t.Fatalf("trace map payload TraceMapUrl = %s", got)
+	}
+	if _, ok := fields["StopReason"]; ok {
+		t.Fatalf("trace map payload leaked StopReason: %s", payload)
+	}
+
+	fullResult, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("full result marshal: %v", err)
+	}
+	if !bytes.Contains(fullResult, []byte(`"StopReason"`)) {
+		t.Fatalf("full JSON result lost StopReason: %s", fullResult)
+	}
+}
 
 func TestLookupTargetIPHonorsContextCancellation(t *testing.T) {
 	oldLookup := domainLookupFn
@@ -471,28 +519,222 @@ func TestMaybeRunUninterruptedRawReturnsOnCanceledContext(t *testing.T) {
 	}
 }
 
-func TestEffectiveRawOutput(t *testing.T) {
+func TestSelectTraceOutputModePriority(t *testing.T) {
 	tests := []struct {
 		name         string
 		tablePrint   bool
 		classicPrint bool
 		jsonPrint    bool
 		rawPrint     bool
-		want         bool
+		outputPath   string
+		want         traceOutputMode
 	}{
-		{name: "raw", rawPrint: true, want: true},
-		{name: "table overrides raw", tablePrint: true, rawPrint: true},
-		{name: "classic overrides raw", classicPrint: true, rawPrint: true},
-		{name: "JSON overrides raw", jsonPrint: true, rawPrint: true},
-		{name: "default", want: false},
+		{name: "realtime", want: traceOutputRealtime},
+		{name: "output", outputPath: "trace.log", want: traceOutputFile},
+		{name: "raw over output", rawPrint: true, outputPath: "trace.log", want: traceOutputRaw},
+		{name: "classic over raw", classicPrint: true, rawPrint: true, outputPath: "trace.log", want: traceOutputClassic},
+		{name: "table over classic", tablePrint: true, classicPrint: true, rawPrint: true, outputPath: "trace.log", want: traceOutputTable},
+		{name: "JSON over table and output", tablePrint: true, classicPrint: true, jsonPrint: true, rawPrint: true, outputPath: "trace.log", want: traceOutputJSON},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := effectiveRawOutput(tt.tablePrint, tt.classicPrint, tt.jsonPrint, tt.rawPrint); got != tt.want {
-				t.Fatalf("effectiveRawOutput() = %v, want %v", got, tt.want)
+			got := selectTraceOutputMode(tt.tablePrint, tt.classicPrint, tt.jsonPrint, tt.rawPrint, tt.outputPath)
+			if got != tt.want {
+				t.Fatalf("selectTraceOutputMode() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTraceOutputPlanStopReasonVisibility(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+	color.NoColor = true
+
+	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination}
+	tests := []struct {
+		name string
+		mode traceOutputMode
+		want bool
+	}{
+		{name: "default", mode: traceOutputRealtime, want: true},
+		{name: "route path default", mode: traceOutputRealtime, want: true},
+		{name: "table", mode: traceOutputTable, want: true},
+		{name: "output", mode: traceOutputFile, want: true},
+		{name: "classic", mode: traceOutputClassic},
+		{name: "raw", mode: traceOutputRaw},
+		{name: "JSON", mode: traceOutputJSON},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var terminal bytes.Buffer
+			color.Output = &terminal
+			plan := &traceOutputPlan{mode: tt.mode}
+			if err := plan.printStopReason(reason); err != nil {
+				t.Fatalf("printStopReason() error = %v", err)
+			}
+			if got := strings.Contains(terminal.String(), "Trace Stopped:"); got != tt.want {
+				t.Fatalf("terminal stop reason present = %v, want %v; output=%q", got, tt.want, terminal.String())
+			}
+		})
+	}
+}
+
+func TestJSONOutputOverridesFileWithoutSideEffects(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = true
+	path := filepath.Join(t.TempDir(), "trace.log")
+	mode := selectTraceOutputMode(false, false, true, false, path)
+	if mode != traceOutputJSON {
+		t.Fatalf("selectTraceOutputMode() = %v, want JSON", mode)
+	}
+
+	conf := trace.Config{
+		RealtimePrinter: func(*trace.Result, int) {},
+		AsyncPrinter:    func(*trace.Result) {},
+	}
+	plan, err := configureTracePrinters(&conf, mode, path)
+	if err != nil {
+		t.Fatalf("configureTracePrinters() error = %v", err)
+	}
+	if plan.file != nil {
+		t.Fatal("JSON output opened a trace file")
+	}
+	if conf.RealtimePrinter != nil || conf.AsyncPrinter != nil {
+		t.Fatal("JSON output left a human-readable printer enabled")
+	}
+	if err := plan.printStopReason(&trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination}); err != nil {
+		t.Fatalf("printStopReason() error = %v", err)
+	}
+	if terminal.Len() != 0 {
+		t.Fatalf("JSON output wrote a stop footer: %q", terminal.String())
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("JSON output file stat error = %v, want not exist", err)
+	}
+}
+
+func TestTraceOutputFileWritesPlainStopReason(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = false
+	path := filepath.Join(t.TempDir(), "trace.log")
+	conf := trace.Config{}
+	plan, err := configureTracePrinters(&conf, traceOutputFile, path)
+	if err != nil {
+		t.Fatalf("configureTracePrinters() error = %v", err)
+	}
+	if conf.RealtimePrinter == nil {
+		t.Fatal("RealtimePrinter = nil, want output printer")
+	}
+	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination, Responses: []string{"ICMP Echo Reply"}}
+	if err := plan.printStopReason(reason); err != nil {
+		t.Fatalf("printStopReason() error = %v", err)
+	}
+	if err := plan.close(); err != nil {
+		t.Fatalf("close() error = %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	want := "Trace Stopped: Destination Reached at Hop 5 (ICMP Echo Reply)\n"
+	if string(got) != want {
+		t.Fatalf("output file = %q, want %q", got, want)
+	}
+	if bytes.Contains(got, []byte("\x1b[")) {
+		t.Fatalf("output file contains ANSI escapes: %q", got)
+	}
+	if !strings.Contains(terminal.String(), "Trace Stopped:") {
+		t.Fatalf("terminal missing stop reason: %q", terminal.String())
+	}
+	if !strings.Contains(terminal.String(), "\x1b[") {
+		t.Fatalf("terminal stop reason is not styled: %q", terminal.String())
+	}
+}
+
+func TestTraceOutputFileStillWritesWhenTerminalFails(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	color.Output = failingCmdOutputWriter{}
+	color.NoColor = true
+	path := filepath.Join(t.TempDir(), "trace.log")
+	plan, err := configureTracePrinters(&trace.Config{}, traceOutputFile, path)
+	if err != nil {
+		t.Fatalf("configureTracePrinters() error = %v", err)
+	}
+	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination}
+	if err := plan.printStopReason(reason); !errors.Is(err, errCmdOutputWriter) {
+		t.Fatalf("printStopReason() error = %v, want %v", err, errCmdOutputWriter)
+	}
+	if err := plan.close(); err != nil {
+		t.Fatalf("close() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "Trace Stopped: Destination Reached at Hop 5\n"; string(got) != want {
+		t.Fatalf("output file = %q, want %q", got, want)
+	}
+}
+
+func TestFinalizeTraceResultRoutePathPrintsStopReason(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = true
+	res := &trace.Result{
+		Hops:       [][]trace.Hop{},
+		StopReason: &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination},
+	}
+	finalizeTraceResult(
+		context.Background(),
+		res,
+		&traceOutputPlan{mode: traceOutputRealtime},
+		false,
+		true,
+		net.ParseIP("192.0.2.1"),
+		true,
+		"disable-geoip",
+	)
+	if !strings.Contains(terminal.String(), "Trace Stopped: Destination Reached at Hop 5") {
+		t.Fatalf("route-path output missing stop reason: %q", terminal.String())
 	}
 }
 
@@ -889,15 +1131,6 @@ func TestResolveConfiguredSrcAddrPrefersExplicitSource(t *testing.T) {
 	}
 	if resolved != "192.0.2.10" {
 		t.Fatalf("resolved source = %q, want %q", resolved, "192.0.2.10")
-	}
-}
-
-func TestValidateJSONRealtimeOutput(t *testing.T) {
-	if err := validateJSONRealtimeOutput(true, "trace.log"); err == nil || err.Error() != "--json 不能与 --output/--output-default 同时使用" {
-		t.Fatalf("err = %v, want json/output conflict", err)
-	}
-	if err := validateJSONRealtimeOutput(true, ""); err != nil {
-		t.Fatalf("unexpected error without output path: %v", err)
 	}
 }
 

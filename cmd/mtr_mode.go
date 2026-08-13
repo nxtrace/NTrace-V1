@@ -212,6 +212,14 @@ func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 	opts := trace.MTRRawOptions{
 		HopInterval: time.Duration(hopIntervalMs) * time.Millisecond,
 		MaxPerHop:   maxPerHop,
+		OnPathEnd: func(reason *trace.StopReason) {
+			if reason == nil || reason.Reason != trace.StopReasonUnreachable {
+				return
+			}
+			if err := printer.WriteTraceStopReason(os.Stderr, reason); err != nil {
+				writeMTRRawRuntimeError(os.Stderr, err)
+			}
+		},
 	}
 
 	roundConf := normalizeMTRTraceConfig(conf)

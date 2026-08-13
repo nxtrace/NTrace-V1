@@ -32,6 +32,26 @@ type Hop struct {
 	Attempts []Attempt `json:"attempts"`
 }
 
+// TraceStopReason is the stable snake_case API representation of a trace edge.
+type TraceStopReason struct {
+	Hop       int      `json:"hop"`
+	Reason    string   `json:"reason"`
+	Responses []string `json:"responses,omitempty"`
+	Markers   []string `json:"markers,omitempty"`
+}
+
+func NewTraceStopReason(reason *trace.StopReason) *TraceStopReason {
+	if reason == nil {
+		return nil
+	}
+	return &TraceStopReason{
+		Hop:       reason.Hop,
+		Reason:    reason.Reason,
+		Responses: append([]string(nil), reason.Responses...),
+		Markers:   append([]string(nil), reason.Markers...),
+	}
+}
+
 type TraceRequest struct {
 	Target           string `json:"target" jsonschema:"Target domain, IP, or URL host to trace"`
 	Protocol         string `json:"protocol,omitempty" jsonschema:"Probe protocol: icmp, tcp, or udp"`
@@ -72,6 +92,7 @@ type TraceResponse struct {
 	Hops         []Hop               `json:"hops"`
 	DurationMs   int64               `json:"duration_ms"`
 	Parameters   ParameterBoundaries `json:"parameters"`
+	StopReason   *TraceStopReason    `json:"stop_reason,omitempty"`
 }
 
 type MTRReportRequest struct {
@@ -94,6 +115,7 @@ type MTRReportResponse struct {
 	Stats      []trace.MTRHopStat  `json:"stats"`
 	DurationMs int64               `json:"duration_ms"`
 	Parameters ParameterBoundaries `json:"parameters"`
+	PathEnd    *TraceStopReason    `json:"path_end,omitempty"`
 }
 
 type MTRRawResponse struct {
@@ -104,6 +126,7 @@ type MTRRawResponse struct {
 	DurationMs int64                `json:"duration_ms"`
 	Warnings   []string             `json:"warnings,omitempty"`
 	Parameters ParameterBoundaries  `json:"parameters"`
+	PathEnd    *TraceStopReason     `json:"path_end,omitempty"`
 }
 
 type MTUTraceRequest struct {

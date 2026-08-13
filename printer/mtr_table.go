@@ -336,7 +336,7 @@ func formatReportHost(s trace.MTRHopStat, mode int, nameMode int, lang string, s
 	if len(s.MPLS) > 0 {
 		host += " " + strings.Join(s.MPLS, " ")
 	}
-	return host
+	return appendMTRResponseMarker(host, s)
 }
 
 // formatCompactReportHost 构建非 wide report 的精简 Host 文本。
@@ -349,7 +349,14 @@ func formatCompactReportHost(s trace.MTRHopStat, nameMode int, showIPs bool) str
 	if isWaitingHopStat(s) {
 		return "(waiting for reply)"
 	}
-	return formatMTRHostBase(s, nameMode, showIPs)
+	return appendMTRResponseMarker(formatMTRHostBase(s, nameMode, showIPs), s)
+}
+
+func appendMTRResponseMarker(host string, stat trace.MTRHopStat) string {
+	if stat.Response == nil || stat.Response.Kind != trace.MTRResponseUnreachable || stat.Response.Marker == "" {
+		return host
+	}
+	return host + " " + stat.Response.Marker
 }
 
 // formatMTRGeoData 返回简短 geo 描述（向后兼容，等效于英文 HostModeFull geo 部分）。

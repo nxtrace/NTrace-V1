@@ -296,6 +296,8 @@ nexttrace --disable-mpls example.com
 export NEXTTRACE_DISABLEMPLS=1
 ```
 
+普通 traceroute 会报告停止原因：到达目标、收到终止性的 unreachable 响应（含 marker），或达到配置的最大跳数。`--json` 保持既有顶层结果结构，并新增可选 `StopReason`；其嵌套字段固定为小写 `hop`、`reason`、`responses`、`markers`。classic/raw/JSON 不追加人类可读 footer；`--output` 会把同一停止原因以无 ANSI 的纯文本写入日志。
+
 PS: 路由可视化的绘制模块为独立模块，具体代码可在 [nxtrace/traceMap](https://github.com/nxtrace/traceMap) 查看  
 路由可视化功能因为需要每个 Hop 的地理位置坐标，而第三方 API 通常不提供此类信息，所以此功能目前只支持搭配 LeoMoeAPI 使用。
 
@@ -628,6 +630,8 @@ wide 报告模式（`-w` / `--wide`）继续保留当前完整信息行为，包
 超时行保持固定 12 列：
 
 `ttl|*||||||||||`
+
+raw stdout 契约仍严格保持 12 列。MTR 确认终止性 unreachable 路径边界时，诊断只写 stderr；Web/API/MCP 的结构化记录通过逐 probe `response` 和最终 `path_end` 表达语义，不再按 responder IP 是否等于目标 IP 推断。
 
 在 MTR 模式（`--mtr`、`-r`、`-w`，包括 `--raw`）下，`-i/--ttl-time` 设置的是**每个跳点的探测间隔**：同一跳点两次连续探测之间的等待时间（未显式指定时默认 1000ms）。`-z/--send-time` 在 MTR 模式下被忽略。
 

@@ -13,12 +13,16 @@ nexttrace --udp -p 33494 example.com
 nexttrace --json example.com
 ```
 
+JSON includes optional `StopReason` with lowercase nested fields `hop`, `reason`, `responses`, and `markers`. Use `reason` as the reachability conclusion; do not compare the last hop IP with the target.
+
 ## MTR
 
 ```bash
 nexttrace --report example.com
 nexttrace --mtr --raw -q 5 example.com
 ```
+
+MTR raw stdout remains a fixed 12-column stream. Semantic unreachable diagnostics are written to stderr so stdout parsers remain compatible.
 
 ## MTU
 

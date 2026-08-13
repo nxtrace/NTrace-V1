@@ -54,7 +54,9 @@ Supported:
 }
 ```
 
-Output includes `target`, `resolved_ip`, `protocol`, `data_provider`, `language`, `hops[]`, and `duration_ms`.
+Output includes `target`, `resolved_ip`, `protocol`, `data_provider`, `language`, `hops[]`, `duration_ms`, and optional `stop_reason`.
+
+`stop_reason.reason` is one of `destination_reached`, `unreachable`, or `max_hops`; use it as the authoritative conclusion instead of comparing the last responder IP with `resolved_ip`. `responses[]` contains human-readable evidence and `markers[]` contains machine markers.
 
 Respect its parameter boundaries. Do not switch from ICMP to TCP/UDP because some hops drop packets; ask or report the limitation first. Keep explicit TCP/UDP ports, and remember omitted ports default to TCP `80` and UDP `33494`.
 
@@ -62,7 +64,7 @@ Final answer shape: use [output-templates.md](output-templates.md#nexttrace_trac
 
 ### `nexttrace_mtr_report`
 
-Runs bounded MTR and returns aggregated `stats[]`.
+Runs bounded MTR and returns aggregated `stats[]` plus optional `path_end`.
 
 Adds:
 
@@ -72,6 +74,8 @@ Adds:
 Use this for loss, jitter, and repeated RTT comparison.
 
 Respect its parameter boundaries. Use this for repeated local statistics, not for worldwide probe selection. Do not summarize a lossy intermediate hop as destination failure without checking later hops and final-hop stats.
+
+`path_end` is the server's semantic path boundary, not the reason the MTR session ended. Its shape matches `stop_reason`. A missing `path_end` means the bounded run ended early or no path boundary was established.
 
 Final answer shape: use [output-templates.md](output-templates.md#nexttrace_mtr_report).
 
@@ -88,6 +92,8 @@ Adds:
 If neither `max_per_hop` nor `duration_ms` is set, NextTrace bounds output with a small default and reports a warning.
 
 Respect its parameter boundaries. Raw output is probe-level records, not a final path table. Accept the bounded default or set `max_per_hop` / `duration_ms`; do not request unbounded raw streams through MCP.
+
+Each record can include `response: {kind, description, marker}`. The final optional `path_end` is authoritative; do not infer it from `record.ip == resolved_ip`.
 
 Final answer shape: use [output-templates.md](output-templates.md#nexttrace_mtr_raw).
 

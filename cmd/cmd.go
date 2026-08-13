@@ -405,8 +405,8 @@ func registerTracerouteOutputFlags(parser *argparse.Parser) tracerouteOutputFlag
 	if !defaultMTR {
 		return tracerouteOutputFlags{
 			routePath:     parser.Flag("P", "route-path", &argparse.Options{Help: "Print traceroute hop path by ASN and location"}),
-			outputPath:    parser.String("o", "output", &argparse.Options{Help: "Write trace result to FILE (RealtimePrinter only)"}),
-			outputDefault: parser.Flag("O", "output-default", &argparse.Options{Help: "Write trace result to the default log file (/tmp/trace.log)"}),
+			outputPath:    parser.String("o", "output", &argparse.Options{Help: "Write realtime trace output and final stop reason to FILE"}),
+			outputDefault: parser.Flag("O", "output-default", &argparse.Options{Help: "Write realtime trace output and final stop reason to the default log file (/tmp/trace.log)"}),
 			tablePrint:    parser.Flag("", "table", &argparse.Options{Help: "Output trace results as a final summary table (traceroute report mode)"}),
 			jsonPrint:     parser.Flag("j", "json", &argparse.Options{Help: "Output trace results as JSON"}),
 			classicPrint:  parser.Flag("c", "classic", &argparse.Options{Help: "Classic Output trace results like BestTrace"}),
@@ -1082,13 +1082,6 @@ func resolveOutputPath(outputPath string, outputDefault bool) (string, error) {
 	return "", nil
 }
 
-func validateJSONRealtimeOutput(jsonPrint bool, outputPath string) error {
-	if jsonPrint && strings.TrimSpace(outputPath) != "" {
-		return errors.New("--json 不能与 --output/--output-default 同时使用")
-	}
-	return nil
-}
-
 func setFastIPOutputSuppression(suppress bool) func() {
 	prev := util.SuppressFastIPOutput
 	util.SuppressFastIPOutput = suppress
@@ -1097,41 +1090,85 @@ func setFastIPOutputSuppression(suppress bool) func() {
 	}
 }
 
-func configureTracePrinters(conf *trace.Config, tablePrint, classicPrint, rawPrint bool, outputPath string) (func() error, error) {
-	if tablePrint {
-		return nil, nil
-	}
-	router := false
+type traceOutputMode uint8
+
+const (
+	traceOutputRealtime traceOutputMode = iota
+	traceOutputFile
+	traceOutputRaw
+	traceOutputClassic
+	traceOutputTable
+	traceOutputJSON
+)
+
+func selectTraceOutputMode(tablePrint, classicPrint, jsonPrint, rawPrint bool, outputPath string) traceOutputMode {
 	switch {
+	case jsonPrint:
+		return traceOutputJSON
+	case tablePrint:
+		return traceOutputTable
 	case classicPrint:
-		conf.RealtimePrinter = printer.ClassicPrinter
+		return traceOutputClassic
 	case rawPrint:
+		return traceOutputRaw
+	case strings.TrimSpace(outputPath) != "":
+		return traceOutputFile
+	default:
+		return traceOutputRealtime
+	}
+}
+
+func (mode traceOutputMode) printsStopReason() bool {
+	return mode == traceOutputRealtime || mode == traceOutputFile || mode == traceOutputTable
+}
+
+type traceOutputPlan struct {
+	mode traceOutputMode
+	file io.WriteCloser
+}
+
+func (plan *traceOutputPlan) printStopReason(reason *trace.StopReason) error {
+	if plan == nil || !plan.mode.printsStopReason() {
+		return nil
+	}
+	terminalErr := printer.PrintTraceStopReason(reason)
+	var fileErr error
+	if plan.mode == traceOutputFile && plan.file != nil {
+		fileErr = printer.WriteTraceStopReason(plan.file, reason)
+	}
+	return errors.Join(terminalErr, fileErr)
+}
+
+func (plan *traceOutputPlan) close() error {
+	if plan == nil || plan.file == nil {
+		return nil
+	}
+	return plan.file.Close()
+}
+
+func configureTracePrinters(conf *trace.Config, mode traceOutputMode, outputPath string) (*traceOutputPlan, error) {
+	plan := &traceOutputPlan{mode: mode}
+	switch mode {
+	case traceOutputJSON:
+		conf.RealtimePrinter = nil
+		conf.AsyncPrinter = nil
+	case traceOutputTable:
+		conf.RealtimePrinter = nil
+	case traceOutputClassic:
+		conf.RealtimePrinter = printer.ClassicPrinter
+	case traceOutputRaw:
 		conf.RealtimePrinter = printer.EasyPrinter
-	case outputPath != "":
+	case traceOutputFile:
 		f, err := tracelog.OpenFile(outputPath)
 		if err != nil {
 			return nil, err
 		}
 		conf.RealtimePrinter = tracelog.NewRealtimePrinter(io.MultiWriter(os.Stdout, f))
-		return f.Close, nil
-	case router:
-		conf.RealtimePrinter = printer.RealtimePrinterWithRouter
-		fmt.Println("路由表数据源由 BGP.Tools 提供，在此特表感谢")
-	default:
+		plan.file = f
+	case traceOutputRealtime:
 		conf.RealtimePrinter = printer.RealtimePrinter
 	}
-	return nil, nil
-}
-
-func applyJSONOutputMode(conf *trace.Config, jsonPrint bool) {
-	if jsonPrint {
-		conf.RealtimePrinter = nil
-		conf.AsyncPrinter = nil
-	}
-}
-
-func effectiveRawOutput(tablePrint, classicPrint, jsonPrint, rawPrint bool) bool {
-	return !tablePrint && !classicPrint && !jsonPrint && rawPrint
+	return plan, nil
 }
 
 func maybeRunUninterruptedRaw(rawPrint bool, method trace.Method, conf trace.Config) bool {
@@ -1164,18 +1201,34 @@ func runTraceOnce(method trace.Method, conf trace.Config) (*trace.Result, bool) 
 	return res, true
 }
 
-func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tableClearScreen, routePath bool, dstIP net.IP, disableMaptrace, jsonPrint, rawPrint bool, dataOrigin string) {
-	if tablePrint {
+// traceMapPayload preserves the historical external tracemap request shape.
+type traceMapPayload struct {
+	Hops        [][]trace.Hop `json:"Hops"`
+	TraceMapURL string        `json:"TraceMapUrl"`
+}
+
+func marshalTraceMapPayload(res *trace.Result) ([]byte, error) {
+	return json.Marshal(traceMapPayload{
+		Hops:        res.Hops,
+		TraceMapURL: res.TraceMapUrl,
+	})
+}
+
+func finalizeTraceResult(ctx context.Context, res *trace.Result, outputPlan *traceOutputPlan, tableClearScreen, routePath bool, dstIP net.IP, disableMaptrace bool, dataOrigin string) {
+	if outputPlan == nil {
+		outputPlan = &traceOutputPlan{mode: traceOutputRealtime}
+	}
+	if outputPlan.mode == traceOutputTable {
 		printer.TracerouteTablePrinter(res, tableClearScreen)
 	}
 	if routePath {
 		reporter.New(res, dstIP.String()).Print()
 	}
-	if !jsonPrint && !rawPrint {
-		printer.PrintTraceStopReason(res.StopReason)
+	if err := outputPlan.printStopReason(res.StopReason); err != nil {
+		log.Printf("print trace stop reason: %v", err)
 	}
 
-	r, err := json.Marshal(res)
+	r, err := marshalTraceMapPayload(res)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -1188,7 +1241,7 @@ func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tab
 			return
 		}
 		res.TraceMapUrl = url
-		if !jsonPrint {
+		if outputPlan.mode != traceOutputJSON {
 			tracemap.PrintMapUrl(url)
 		}
 	}
@@ -1197,7 +1250,7 @@ func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tab
 		fmt.Println(err)
 		return
 	}
-	if jsonPrint {
+	if outputPlan.mode == traceOutputJSON {
 		fmt.Println(string(r))
 	}
 }
@@ -1376,10 +1429,7 @@ func Execute() {
 		fmt.Println(outputErr)
 		os.Exit(1)
 	}
-	if err := validateJSONRealtimeOutput(*jsonPrint, resolvedOutputPath); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	outputMode := selectTraceOutputMode(*tablePrint, *classicPrint, *jsonPrint, *rawPrint, resolvedOutputPath)
 	if *mtuMode {
 		conflictFlags := buildMTUConflictFlags(
 			*tcp,
@@ -1681,21 +1731,17 @@ func Execute() {
 		return
 	}
 
-	outputCleanup, err := configureTracePrinters(&conf, *tablePrint, *classicPrint, *rawPrint, resolvedOutputPath)
+	outputPlan, err := configureTracePrinters(&conf, outputMode, resolvedOutputPath)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	if outputCleanup != nil {
-		defer func() {
-			if closeErr := outputCleanup(); closeErr != nil {
-				fmt.Println(closeErr)
-			}
-		}()
-	}
-	applyJSONOutputMode(&conf, *jsonPrint)
-	rawOutput := effectiveRawOutput(*tablePrint, *classicPrint, *jsonPrint, *rawPrint)
-	if maybeRunUninterruptedRaw(rawOutput, method, conf) {
+	defer func() {
+		if closeErr := outputPlan.close(); closeErr != nil {
+			log.Printf("close trace output: %v", closeErr)
+		}
+	}()
+	if maybeRunUninterruptedRaw(outputMode == traceOutputRaw, method, conf) {
 		return
 	}
 
@@ -1704,7 +1750,7 @@ func Execute() {
 		return
 	}
 
-	finalizeTraceResult(rootCtx, res, *tablePrint, stdoutIsTTY, *routePath, ip, *disableMaptrace, *jsonPrint, rawOutput, *dataOrigin)
+	finalizeTraceResult(rootCtx, res, outputPlan, stdoutIsTTY, *routePath, ip, *disableMaptrace, *dataOrigin)
 }
 
 type mtrRunMode int

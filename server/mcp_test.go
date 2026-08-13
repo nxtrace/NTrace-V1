@@ -14,6 +14,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nxtrace/NTrace-core/internal/service"
+	"github.com/nxtrace/NTrace-core/ipgeo"
+	"github.com/nxtrace/NTrace-core/trace"
 )
 
 type recordingMCPService struct {
@@ -55,21 +57,27 @@ func (s *recordingMCPService) Traceroute(_ context.Context, input service.TraceR
 	if err := s.record("nexttrace_traceroute", input); err != nil {
 		return service.TraceResponse{}, err
 	}
-	return service.TraceResponse{Target: "example.com", ResolvedIP: "93.184.216.34", Protocol: "icmp"}, nil
+	return service.TraceResponse{Target: "example.com", ResolvedIP: "93.184.216.34", Protocol: "icmp", StopReason: &service.TraceStopReason{Hop: 4, Reason: trace.StopReasonDestination}}, nil
 }
 
 func (s *recordingMCPService) MTRReport(_ context.Context, input service.MTRReportRequest) (service.MTRReportResponse, error) {
 	if err := s.record("nexttrace_mtr_report", input); err != nil {
 		return service.MTRReportResponse{}, err
 	}
-	return service.MTRReportResponse{Target: "example.com", ResolvedIP: "93.184.216.34", Protocol: "icmp"}, nil
+	return service.MTRReportResponse{
+		Target:     "example.com",
+		ResolvedIP: "93.184.216.34",
+		Protocol:   "icmp",
+		Stats:      []trace.MTRHopStat{{TTL: 1, Geo: &ipgeo.IPGeoData{Router: map[string][]string{}}}},
+		PathEnd:    &service.TraceStopReason{Hop: 4, Reason: trace.StopReasonDestination},
+	}, nil
 }
 
 func (s *recordingMCPService) MTRRaw(_ context.Context, input service.MTRRawRequest) (service.MTRRawResponse, error) {
 	if err := s.record("nexttrace_mtr_raw", input); err != nil {
 		return service.MTRRawResponse{}, err
 	}
-	return service.MTRRawResponse{Target: "example.com", ResolvedIP: "93.184.216.34", Protocol: "icmp"}, nil
+	return service.MTRRawResponse{Target: "example.com", ResolvedIP: "93.184.216.34", Protocol: "icmp", PathEnd: &service.TraceStopReason{Hop: 3, Reason: trace.StopReasonUnreachable}}, nil
 }
 
 func (s *recordingMCPService) MTUTrace(_ context.Context, input service.MTUTraceRequest) (service.MTUTraceResponse, error) {
@@ -175,6 +183,9 @@ func TestMCPHandlerRegistersAllToolsWithSchemas(t *testing.T) {
 		"packets",
 		"ip_version",
 	})
+	assertSchemaProperties(t, byName["nexttrace_traceroute"].OutputSchema, []string{"stop_reason"})
+	assertSchemaProperties(t, byName["nexttrace_mtr_report"].OutputSchema, []string{"path_end"})
+	assertSchemaProperties(t, byName["nexttrace_mtr_raw"].OutputSchema, []string{"path_end"})
 }
 
 func TestMCPHandlerCallsEveryToolWithStructuredContent(t *testing.T) {
@@ -339,6 +350,16 @@ func TestMCPHandlerCallsEveryToolWithStructuredContent(t *testing.T) {
 			structured := structuredContentMap(t, result)
 			if _, ok := structured[call.wantOutputKey]; !ok {
 				t.Fatalf("structuredContent missing %q: %#v", call.wantOutputKey, structured)
+			}
+			switch call.name {
+			case "nexttrace_traceroute":
+				if _, ok := structured["stop_reason"]; !ok {
+					t.Fatalf("structuredContent missing stop_reason: %#v", structured)
+				}
+			case "nexttrace_mtr_report", "nexttrace_mtr_raw":
+				if _, ok := structured["path_end"]; !ok {
+					t.Fatalf("structuredContent missing path_end: %#v", structured)
+				}
 			}
 			if svc.calls[call.name] != 1 {
 				t.Fatalf("service call count for %s = %d, want 1", call.name, svc.calls[call.name])

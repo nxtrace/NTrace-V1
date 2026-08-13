@@ -586,7 +586,7 @@ func renderMTRTUIRows(b *strings.Builder, header MTRTUIHeader, stats []trace.MTR
 	for i, s := range stats {
 		hopPrefix := formatTUIHopPrefix(s.TTL, prevTTL, lo.prefixW)
 		prevTTL = s.TTL
-		renderDataRow(b, lo, hopPrefix, formatTUIHost(allParts[i], asnW), s)
+		renderDataRow(b, lo, hopPrefix, appendMTRResponseMarker(formatTUIHost(allParts[i], asnW), s), s)
 		renderMTRTUIMPLSRows(b, lo, s.MPLS, header.DisableMPLS)
 	}
 }
@@ -872,7 +872,7 @@ func renderMTRTUIHistoryRows(b *strings.Builder, header MTRTUIHeader, stats []tr
 	for i, s := range stats {
 		hopPrefix := formatTUIHopPrefix(s.TTL, prevTTL, lo.prefixW)
 		prevTTL = s.TTL
-		host := formatTUIHost(allParts[i], asnW)
+		host := appendMTRResponseMarker(formatTUIHost(allParts[i], asnW), s)
 		renderMTRTUIHistoryRow(b, header, lo, hopPrefix, host, s, history[s.TTL], now)
 	}
 }

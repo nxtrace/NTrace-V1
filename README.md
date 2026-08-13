@@ -298,6 +298,8 @@ nexttrace --disable-mpls example.com
 export NEXTTRACE_DISABLEMPLS=1
 ```
 
+Normal traceroute reports why it stopped: destination reached, a terminal unreachable response (including its marker), or the configured maximum hop count. `--json` keeps the existing top-level result shape and adds optional `StopReason` with lowercase nested fields `hop`, `reason`, `responses`, and `markers`. Classic/raw/JSON modes do not receive an extra human-readable footer. `--output` writes the same plain stop line to the log without ANSI escapes.
+
 PS: The route visualization module is an independent component, You can find its source code at [nxtrace/traceMap](https://github.com/nxtrace/traceMap).  
 The routing visualization function requires the geographical coordinates of each Hop, but third-party APIs generally do not provide this information, so this function is currently only supported when used with LeoMoeAPI.
 
@@ -636,6 +638,8 @@ Field order:
 Timeout rows keep the same 12-column layout:
 
 `ttl|*||||||||||`
+
+The raw stdout contract remains exactly 12 columns. When MTR establishes a terminal unreachable path edge, its diagnostic is written to stderr; structured Web/API/MCP records expose per-probe `response` and a final `path_end` instead of inferring the edge from responder-IP equality.
 
 In MTR mode (`--mtr`, `-r`, `-w`, including `--raw`), `-i/--ttl-time` sets the **per-hop probe interval**: how long to wait between successive probes to the same hop (default: 1000ms when omitted). `-z/--send-time` is ignored in MTR mode.
 

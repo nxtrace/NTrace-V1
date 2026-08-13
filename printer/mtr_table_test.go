@@ -2152,6 +2152,41 @@ func TestFormatMTRRawLine_TimeoutFixedColumns(t *testing.T) {
 	}
 }
 
+func TestMTRHumanHostsShowOnlyUnreachableMarker(t *testing.T) {
+	unreachable := trace.MTRHopStat{
+		TTL: 3,
+		IP:  "192.0.2.3",
+		Response: &trace.MTRProbeResponse{
+			Kind:   trace.MTRResponseUnreachable,
+			Marker: "!H",
+		},
+	}
+	if got := formatReportHost(unreachable, HostModeBase, HostNameIPOnly, "en", false); got != "192.0.2.3 !H" {
+		t.Fatalf("formatReportHost() = %q", got)
+	}
+	if got := appendMTRResponseMarker("192.0.2.3", trace.MTRHopStat{
+		Response: &trace.MTRProbeResponse{Kind: trace.MTRResponseDestination, Marker: "!H"},
+	}); got != "192.0.2.3" {
+		t.Fatalf("destination marker unexpectedly shown: %q", got)
+	}
+}
+
+func TestFormatMTRRawLineIgnoresStructuredResponse(t *testing.T) {
+	rec := trace.MTRRawRecord{
+		TTL:      4,
+		Success:  true,
+		IP:       "192.0.2.4",
+		Response: &trace.MTRProbeResponse{Kind: trace.MTRResponseUnreachable, Marker: "!H"},
+	}
+	line := FormatMTRRawLine(rec)
+	if got := strings.Count(line, "|"); got != 11 {
+		t.Fatalf("structured response changed raw 12-column contract: %q", line)
+	}
+	if strings.Contains(line, "!H") || strings.Contains(line, "unreachable") {
+		t.Fatalf("structured response leaked into raw columns: %q", line)
+	}
+}
+
 func TestMTRTUI_PacketsColorByLoss(t *testing.T) {
 	cases := []struct {
 		name    string

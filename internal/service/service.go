@@ -124,6 +124,7 @@ func (s *Service) Traceroute(ctx context.Context, req TraceRequest) (TraceRespon
 		Hops:         convertTraceHops(res, setup.Config.Lang),
 		DurationMs:   durationMs(start),
 		Parameters:   traceParameterBoundaries(),
+		StopReason:   NewTraceStopReason(res.StopReason),
 	}, nil
 }
 
@@ -139,12 +140,16 @@ func (s *Service) MTRReport(ctx context.Context, req MTRReportRequest) (MTRRepor
 	hopInterval := positiveOrDefault(req.HopIntervalMs, defaultMTRHopIntervalMs)
 	maxPerHop := positiveOrDefault(req.MaxPerHop, 10)
 	var latest []trace.MTRHopStat
+	var pathEnd *TraceStopReason
 	err = withTraceRuntimeNoResult(ctx, setup, func() error {
 		return runMTRFn(ctx, setup.Method, setup.Config, trace.MTROptions{
 			HopInterval: time.Duration(hopInterval) * time.Millisecond,
 			MaxPerHop:   maxPerHop,
+			OnPathEnd: func(reason *trace.StopReason) {
+				pathEnd = NewTraceStopReason(reason)
+			},
 		}, func(_ int, stats []trace.MTRHopStat) {
-			latest = cloneMTRStats(stats)
+			latest = cloneMTRStats(stats, setup.Config.Lang)
 		})
 	})
 	if err != nil {
@@ -158,6 +163,7 @@ func (s *Service) MTRReport(ctx context.Context, req MTRReportRequest) (MTRRepor
 		Stats:      latest,
 		DurationMs: durationMs(start),
 		Parameters: mtrReportParameterBoundaries(),
+		PathEnd:    pathEnd,
 	}, nil
 }
 
@@ -183,10 +189,14 @@ func (s *Service) MTRRaw(ctx context.Context, req MTRRawRequest) (MTRRawResponse
 	}
 
 	var records []trace.MTRRawRecord
+	var pathEnd *TraceStopReason
 	err = withTraceRuntimeNoResult(runCtx, setup, func() error {
 		return runMTRRawFn(runCtx, setup.Method, setup.Config, trace.MTRRawOptions{
 			HopInterval: time.Duration(hopInterval) * time.Millisecond,
 			MaxPerHop:   maxPerHop,
+			OnPathEnd: func(reason *trace.StopReason) {
+				pathEnd = NewTraceStopReason(reason)
+			},
 		}, func(rec trace.MTRRawRecord) {
 			records = append(records, rec)
 		})
@@ -213,6 +223,7 @@ func (s *Service) MTRRaw(ctx context.Context, req MTRRawRequest) (MTRRawResponse
 		DurationMs: durationMs(start),
 		Warnings:   warnings,
 		Parameters: mtrRawParameterBoundaries(),
+		PathEnd:    pathEnd,
 	}, nil
 }
 
@@ -642,12 +653,19 @@ func convertTraceHops(res *trace.Result, lang string) []Hop {
 	return hops
 }
 
-func cloneMTRStats(stats []trace.MTRHopStat) []trace.MTRHopStat {
+func cloneMTRStats(stats []trace.MTRHopStat, lang string) []trace.MTRHopStat {
 	if len(stats) == 0 {
 		return nil
 	}
 	out := make([]trace.MTRHopStat, len(stats))
 	copy(out, stats)
+	for i := range out {
+		out[i].Geo = localizeGeo(stats[i].Geo, lang)
+		if stats[i].Response != nil {
+			response := *stats[i].Response
+			out[i].Response = &response
+		}
+	}
 	return out
 }
 
