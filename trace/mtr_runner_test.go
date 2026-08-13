@@ -1085,6 +1085,7 @@ func TestMTRICMPEngineCarriesTransitAndUnreachableResponses(t *testing.T) {
 	e.config.DstIP = net.ParseIP("203.0.113.10")
 	atomic.StoreUint32(&e.roundID, 1)
 	atomic.StoreInt32(&e.roundFinalTTL, -1)
+	atomic.StoreInt32(&e.knownFinalTTL, -1)
 	e.curBeginHop = 1
 	e.curEffectiveMax = 3
 	e.curTtlSeq = map[int]int{2: 20, 3: 30}

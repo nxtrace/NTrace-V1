@@ -101,7 +101,7 @@ func TestStopAfterTTLAllResponsesUnreachable(t *testing.T) {
 	if !reflect.DeepEqual(res.StopReason.Markers, []string{"!H", "!N"}) {
 		t.Fatalf("StopReason.Markers = %#v, want %#v", res.StopReason.Markers, []string{"!H", "!N"})
 	}
-	wantResponses := []string{"ICMP Host Unreachable (!H)", "ICMP Network Unreachable (!N)"}
+	wantResponses := []string{"ICMP Host Unreachable", "ICMP Network Unreachable"}
 	if !reflect.DeepEqual(res.StopReason.Responses, wantResponses) {
 		t.Fatalf("StopReason.Responses = %#v, want %#v", res.StopReason.Responses, wantResponses)
 	}
@@ -220,14 +220,41 @@ func TestPortUnreachableDependsOnProbeMethod(t *testing.T) {
 		kind   probeResponseKind
 		marker string
 	}{
-		{name: "udp v4", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMP Port Unreachable", Marker: "!<3-3>"}, method: UDPTrace, kind: probeResponseDestination},
+		{name: "udp v4", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMP Port Unreachable", Marker: "!<3-3>"}, method: UDPTrace, kind: probeResponseDestination, marker: "!<3-3>"},
 		{name: "icmp v4", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMP Port Unreachable", Marker: "!<3-3>"}, method: ICMPTrace, kind: probeResponseUnreachable, marker: "!<3-3>"},
+		{name: "tcp v4", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMP Port Unreachable", Marker: "!<3-3>"}, method: TCPTrace, kind: probeResponseUnreachable, marker: "!<3-3>"},
+		{name: "udp v6", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMPv6 Port Unreachable", Marker: "!<1-4>"}, method: UDPTrace, kind: probeResponseDestination, marker: "!<1-4>"},
+		{name: "icmp v6", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMPv6 Port Unreachable", Marker: "!<1-4>"}, method: ICMPTrace, kind: probeResponseUnreachable, marker: "!<1-4>"},
 		{name: "tcp v6", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMPv6 Port Unreachable", Marker: "!<1-4>"}, method: TCPTrace, kind: probeResponseUnreachable, marker: "!<1-4>"},
 	} {
 		t.Run(response.name, func(t *testing.T) {
 			got := probeResponseFromICMPForMethod(response.icmp, response.method)
 			if got.kind != response.kind || got.marker != response.marker {
 				t.Fatalf("response = %#v, want kind=%v marker=%q", got, response.kind, response.marker)
+			}
+		})
+	}
+}
+
+func TestUDPPortUnreachableDestinationPreservesMarker(t *testing.T) {
+	for _, response := range []struct {
+		name   string
+		icmp   internal.ICMPResponse
+		marker string
+	}{
+		{name: "IPv4", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMP Port Unreachable", Marker: "!<3-3>"}, marker: "!<3-3>"},
+		{name: "IPv6", icmp: internal.ICMPResponse{Kind: internal.ICMPResponsePortUnreachable, Description: "ICMPv6 Port Unreachable", Marker: "!<1-4>"}, marker: "!<1-4>"},
+	} {
+		t.Run(response.name, func(t *testing.T) {
+			res := resultWithResponses(probeResponseFromICMPForMethod(response.icmp, UDPTrace))
+			if !res.stopAfterTTL(1, 30) {
+				t.Fatal("stopAfterTTL() = false, want destination")
+			}
+			if got := res.StopReason; got == nil || got.Reason != StopReasonDestination {
+				t.Fatalf("StopReason = %#v, want destination", got)
+			}
+			if !reflect.DeepEqual(res.StopReason.Markers, []string{response.marker}) {
+				t.Fatalf("StopReason.Markers = %#v, want %#v", res.StopReason.Markers, []string{response.marker})
 			}
 		})
 	}

@@ -353,10 +353,30 @@ func formatCompactReportHost(s trace.MTRHopStat, nameMode int, showIPs bool) str
 }
 
 func appendMTRResponseMarker(host string, stat trace.MTRHopStat) string {
-	if stat.Response == nil || stat.Response.Kind != trace.MTRResponseUnreachable || stat.Response.Marker == "" {
+	marker := mtrResponseMarker(stat)
+	if marker == "" {
 		return host
 	}
-	return host + " " + stat.Response.Marker
+	return host + " " + marker
+}
+
+func mtrResponseMarker(stat trace.MTRHopStat) string {
+	if stat.Response == nil || stat.Response.Kind != trace.MTRResponseUnreachable {
+		return ""
+	}
+	return stat.Response.Marker
+}
+
+func fitMTRHostWithMarker(host, marker string, width int) string {
+	if marker == "" {
+		return fitLeft(host, width)
+	}
+	markerW := displayWidth(marker)
+	if width <= markerW {
+		return fitLeft(marker, width)
+	}
+	hostW := width - markerW - 1
+	return fitLeft(host, hostW) + " " + marker
 }
 
 // formatMTRGeoData 返回简短 geo 描述（向后兼容，等效于英文 HostModeFull geo 部分）。
@@ -539,7 +559,7 @@ func prepareMTRReportHosts(stats []trace.MTRHopStat, opts MTRReportOptions, lang
 		return hosts, computeWideMTRReportHostWidth(hosts, opts.SrcHost)
 	}
 	hostColW := narrowMTRReportHostWidth()
-	truncateMTRReportHosts(hosts, hostColW)
+	truncateMTRReportHosts(hosts, stats, hostColW)
 	return hosts, hostColW
 }
 
@@ -575,11 +595,20 @@ func narrowMTRReportHostWidth() int {
 	}
 }
 
-func truncateMTRReportHosts(hosts []string, hostColW int) {
+func truncateMTRReportHosts(hosts []string, stats []trace.MTRHopStat, hostColW int) {
 	for i, h := range hosts {
-		if reportDisplayWidth(h) > hostColW {
-			hosts[i] = reportTruncateToWidth(h, hostColW)
+		marker := mtrResponseMarker(stats[i])
+		if marker != "" {
+			h = strings.TrimSuffix(h, " "+marker)
+			markerW := reportDisplayWidth(marker)
+			if hostColW <= markerW {
+				hosts[i] = reportTruncateToWidth(marker, hostColW)
+				continue
+			}
+			hosts[i] = reportTruncateToWidth(h, hostColW-markerW-1) + " " + marker
+			continue
 		}
+		hosts[i] = reportTruncateToWidth(h, hostColW)
 	}
 }
 

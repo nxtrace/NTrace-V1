@@ -1,7 +1,48 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 
-const {pathEndTTL, filterRows, responseForRow} = require('./mtr_path.js');
+const mtrPath = require('./mtr_path.js');
+const {pathEndTTL, filterRows, responseForRow} = mtrPath;
+
+function loadAppRawIngestor() {
+  const classList = {add() {}, remove() {}, toggle() {}};
+  const element = () => ({
+    classList,
+    dataset: {},
+    parentElement: {classList},
+    addEventListener() {},
+  });
+  const context = vm.createContext({
+    console,
+    document: {
+      body: {classList},
+      getElementById: element,
+      addEventListener() {},
+    },
+    window: {
+      location: {protocol: 'http:', host: 'example.test'},
+      nextTraceMTRPath: mtrPath,
+    },
+  });
+  const appPath = path.join(__dirname, 'app.js');
+  vm.runInContext(fs.readFileSync(appPath, 'utf8'), context, {filename: appPath});
+
+  return (records, summary) => {
+    context.__records = records;
+    context.__summary = summary;
+    vm.runInContext(`
+      mtrRawAggStore = new Map();
+      mtrRawOrderSeq = 0;
+      latestSummary = __summary;
+      __records.forEach(ingestMTRRawRecord);
+      globalThis.__rows = buildMTRStatsFromRawAgg();
+    `, context);
+    return JSON.parse(JSON.stringify(context.__rows));
+  };
+}
 
 const rows = [
   {ttl: 1, ip: '192.0.2.1'},
@@ -11,13 +52,17 @@ const rows = [
 ];
 
 test('target-IP transit does not infer a path edge', () => {
+  const ingest = loadAppRawIngestor();
   const records = [
     {ttl: 2, ip: '203.0.113.10', response: {kind: 'transit'}},
     {ttl: 3, ip: '203.0.113.3', response: {kind: 'transit'}},
   ];
 
   assert.equal(pathEndTTL(null), Infinity);
-  assert.deepEqual(filterRows(records, null), records);
+  assert.deepEqual(ingest(records, {resolved_ip: '203.0.113.10', path_end: null}).map(({ttl, ip}) => ({ttl, ip})), [
+    {ttl: 2, ip: '203.0.113.10'},
+    {ttl: 3, ip: '203.0.113.3'},
+  ]);
 });
 
 test('different-source destination path_end truncates by semantic hop', () => {

@@ -315,7 +315,12 @@ func configureFastTraceRealtimePrinter(conf *trace.Config, outputPath, header st
 		conf.RealtimePrinter = printer.RealtimePrinter
 		return plan, nil
 	}
-	conf.RealtimePrinter = tracelog.NewRealtimePrinter(io.MultiWriter(os.Stdout, fp))
+	conf.RealtimePrinter = func(res *trace.Result, ttl int) {
+		printer.RealtimePrinter(res, ttl)
+		if err := tracelog.WriteRealtime(fp, res, ttl); err != nil {
+			log.Printf("fast trace output write failed for %q: %v", outputPath, err)
+		}
+	}
 	plan.file = fp
 	return plan, nil
 }

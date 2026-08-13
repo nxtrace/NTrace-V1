@@ -158,7 +158,6 @@ func runMTRPerHop(ctx context.Context, method Method, baseConfig Config, opts MT
 		FillGeo:          true,
 		AsyncMetadata:    opts.AsyncMetadata,
 		BaseConfig:       baseConfig,
-		DstIP:            baseConfig.DstIP,
 		IsPaused:         opts.IsPaused,
 		IsResetRequested: opts.IsResetRequested,
 		OnPathEnd:        opts.OnPathEnd,

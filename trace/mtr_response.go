@@ -21,10 +21,14 @@ const (
 )
 
 type mtrTTLEvidence struct {
-	destination *MTRProbeResponse
-	transit     *MTRProbeResponse
-	unreachable *MTRProbeResponse
-	live        *MTRProbeResponse
+	destination          *MTRProbeResponse
+	transit              *MTRProbeResponse
+	unreachable          *MTRProbeResponse
+	live                 *MTRProbeResponse
+	destinationResponses map[string]struct{}
+	destinationMarkers   map[string]struct{}
+	unreachableResponses map[string]struct{}
+	unreachableMarkers   map[string]struct{}
 }
 
 // mtrPathTracker owns the response evidence used to derive an MTR path edge.
@@ -48,6 +52,13 @@ func newMTRPathTracker(bounded bool, maxHops int, onChange func(*StopReason)) *m
 }
 
 func (t *mtrPathTracker) observe(ttl int, response *MTRProbeResponse) bool {
+	if response == nil {
+		return false
+	}
+	return t.observeWithDetails(ttl, response, []string{response.Description}, []string{response.Marker})
+}
+
+func (t *mtrPathTracker) observeWithDetails(ttl int, response *MTRProbeResponse, responses, markers []string) bool {
 	if t == nil || ttl <= 0 || response == nil {
 		return false
 	}
@@ -64,6 +75,10 @@ func (t *mtrPathTracker) observe(ttl int, response *MTRProbeResponse) bool {
 
 	if response.Kind == MTRResponseDestination {
 		evidence.destination = response
+		if t.bounded {
+			addMTRStopDetails(&evidence.destinationResponses, responses)
+			addMTRStopDetails(&evidence.destinationMarkers, markers)
+		}
 	} else if evidence.destination == nil {
 		if t.bounded {
 			switch response.Kind {
@@ -71,6 +86,8 @@ func (t *mtrPathTracker) observe(ttl int, response *MTRProbeResponse) bool {
 				evidence.transit = response
 			case MTRResponseUnreachable:
 				evidence.unreachable = response
+				addMTRStopDetails(&evidence.unreachableResponses, responses)
+				addMTRStopDetails(&evidence.unreachableMarkers, markers)
 			}
 		} else {
 			evidence.live = response
@@ -93,7 +110,7 @@ func (t *mtrPathTracker) observeStopReason(reason *StopReason) bool {
 	default:
 		return false
 	}
-	return t.observe(reason.Hop, response)
+	return t.observeWithDetails(reason.Hop, response, reason.Responses, reason.Markers)
 }
 
 func (t *mtrPathTracker) responseAt(ttl int) *MTRProbeResponse {
@@ -146,26 +163,22 @@ func (t *mtrPathTracker) reset() bool {
 }
 
 func (t *mtrPathTracker) recompute() bool {
-	var next *StopReason
 	ttls := make([]int, 0, len(t.evidence))
 	for ttl := range t.evidence {
 		ttls = append(ttls, ttl)
 	}
 	sort.Ints(ttls)
+
+	var next *StopReason
 	for _, ttl := range ttls {
 		response := t.responseAt(ttl)
-		if response == nil {
-			continue
-		}
-		switch response.Kind {
-		case MTRResponseDestination:
-			next = stopReasonFromMTRResponse(ttl, StopReasonDestination, response)
-		case MTRResponseUnreachable:
-			next = stopReasonFromMTRResponse(ttl, StopReasonUnreachable, response)
-		}
-		if next != nil {
+		if response != nil && response.Kind == MTRResponseDestination {
+			next = t.stopReasonFromEvidence(ttl, StopReasonDestination, response)
 			break
 		}
+	}
+	if next == nil {
+		next = t.firstUnreachable(ttls)
 	}
 	if reflect.DeepEqual(t.current, next) {
 		return false
@@ -173,6 +186,48 @@ func (t *mtrPathTracker) recompute() bool {
 	t.current = next
 	t.notify()
 	return true
+}
+
+func (t *mtrPathTracker) firstUnreachable(ttls []int) *StopReason {
+	for _, ttl := range ttls {
+		response := t.responseAt(ttl)
+		if response != nil && response.Kind == MTRResponseUnreachable {
+			return t.stopReasonFromEvidence(ttl, StopReasonUnreachable, response)
+		}
+	}
+	return nil
+}
+
+func (t *mtrPathTracker) stopReasonFromEvidence(ttl int, reason string, response *MTRProbeResponse) *StopReason {
+	result := stopReasonFromMTRResponse(ttl, reason, response)
+	if !t.bounded {
+		return result
+	}
+	evidence := t.evidence[ttl]
+	if evidence == nil {
+		return result
+	}
+	switch reason {
+	case StopReasonDestination:
+		result.Responses = sortedResponseDetails(evidence.destinationResponses)
+		result.Markers = sortedResponseDetails(evidence.destinationMarkers)
+	case StopReasonUnreachable:
+		result.Responses = sortedResponseDetails(evidence.unreachableResponses)
+		result.Markers = sortedResponseDetails(evidence.unreachableMarkers)
+	}
+	return result
+}
+
+func addMTRStopDetails(details *map[string]struct{}, values []string) {
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if *details == nil {
+			*details = make(map[string]struct{})
+		}
+		(*details)[value] = struct{}{}
+	}
 }
 
 func (t *mtrPathTracker) notify() {

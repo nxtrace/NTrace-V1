@@ -184,21 +184,21 @@ func (rt *mtrSchedulerRuntime) run() error {
 		case cp := <-rt.resultCh:
 			rt.processResult(cp)
 			if rt.isDone() {
-				rt.maybeSnapshot(true)
+				rt.finishRun()
 				return nil
 			}
 			rt.scheduleReady()
 		case mr := <-rt.metadataCh:
 			rt.processMetadataResult(mr)
 			if rt.isDone() {
-				rt.maybeSnapshot(true)
+				rt.finishRun()
 				return nil
 			}
 		case <-tick.C:
 			rt.handleReset()
 			rt.scheduleReady()
 			if rt.isDone() {
-				rt.maybeSnapshot(true)
+				rt.finishRun()
 				return nil
 			}
 		}
@@ -350,7 +350,6 @@ func (rt *mtrSchedulerRuntime) timeoutProbeResult(ttl int) *Result {
 }
 
 func (rt *mtrSchedulerRuntime) processProbeSuccess(ttl int, result mtrProbeResult, doneAt time.Time) {
-	result = rt.normalizeProbeResponse(result)
 	result.Response = mtrProbeResponseWithPeer(result.Response, result.Addr)
 	if rt.probeBudgetReached(ttl) {
 		rt.states[ttl].consecutiveErrs = 0
@@ -372,19 +371,6 @@ func (rt *mtrSchedulerRuntime) processProbeSuccess(ttl int, result mtrProbeResul
 		rt.onProbe(result, rt.computeIteration(), doneAt)
 	}
 	rt.maybeSnapshot(false)
-}
-
-func (rt *mtrSchedulerRuntime) normalizeProbeResponse(result mtrProbeResult) mtrProbeResult {
-	if result.Response != nil || !result.Success || result.Addr == nil || rt.cfg.DstIP == nil {
-		return result
-	}
-	peerIP := mtrAddrToIP(result.Addr)
-	if peerIP != nil && peerIP.Equal(rt.cfg.DstIP) {
-		// Compatibility for custom mtrTTLProber implementations. Built-in
-		// probers always provide protocol-derived response semantics.
-		result.Response = &MTRProbeResponse{Kind: MTRResponseDestination}
-	}
-	return result
 }
 
 func (rt *mtrSchedulerRuntime) applyMetadataCache(result mtrProbeResult) mtrProbeResult {
@@ -809,11 +795,12 @@ func (rt *mtrSchedulerRuntime) isDone() bool {
 	if rt.inFlight != 0 {
 		return false
 	}
-	done := len(rt.metadataGeoInFlight) == 0 && len(rt.metadataHostInFlight) == 0
-	if done {
-		rt.pathTracker.completeAtMaxHops()
-	}
-	return done
+	return len(rt.metadataGeoInFlight) == 0 && len(rt.metadataHostInFlight) == 0
+}
+
+func (rt *mtrSchedulerRuntime) finishRun() {
+	rt.pathTracker.completeAtMaxHops()
+	rt.maybeSnapshot(true)
 }
 
 func (rt *mtrSchedulerRuntime) handleReset() {

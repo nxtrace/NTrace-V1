@@ -16,6 +16,40 @@ type traceStopLine struct {
 	suffix    string
 }
 
+func formatTraceStopResponses(reason *trace.StopReason) string {
+	responses := strings.Join(reason.Responses, ", ")
+	missing := make([]string, 0, len(reason.Markers))
+	seen := make(map[string]struct{}, len(reason.Markers))
+	for _, marker := range reason.Markers {
+		if marker == "" {
+			continue
+		}
+		if _, ok := seen[marker]; ok {
+			continue
+		}
+		seen[marker] = struct{}{}
+		markerToken := "(" + marker + ")"
+		found := false
+		for _, response := range reason.Responses {
+			if strings.Contains(response, markerToken) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, marker)
+		}
+	}
+	if len(missing) == 0 {
+		return responses
+	}
+	markers := strings.Join(missing, " ")
+	if responses == "" {
+		return markers
+	}
+	return responses + " (" + markers + ")"
+}
+
 func buildTraceStopLine(reason *trace.StopReason) (traceStopLine, bool) {
 	if reason == nil {
 		return traceStopLine{}, false
@@ -25,10 +59,10 @@ func buildTraceStopLine(reason *trace.StopReason) (traceStopLine, bool) {
 	switch reason.Reason {
 	case trace.StopReasonDestination:
 		line.status = "Destination Reached"
-		line.responses = strings.Join(reason.Responses, ", ")
+		line.responses = formatTraceStopResponses(reason)
 	case trace.StopReasonUnreachable:
 		line.status = "No Continuing Route Observed"
-		line.responses = strings.Join(reason.Responses, ", ")
+		line.responses = formatTraceStopResponses(reason)
 	case trace.StopReasonMaxHops:
 		line.status = "Maximum Hops Reached"
 		line.suffix = " (No Destination Response)"

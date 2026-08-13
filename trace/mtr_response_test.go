@@ -35,20 +35,85 @@ func TestMTRPathTrackerBoundedEvidencePriority(t *testing.T) {
 	}
 }
 
+func TestMTRPathTrackerDestinationIsStickyAcrossTTLs(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		name := "unbounded"
+		if bounded {
+			name = "bounded"
+		}
+		t.Run(name, func(t *testing.T) {
+			tracker := newMTRPathTracker(bounded, 30, nil)
+			tracker.observe(5, &MTRProbeResponse{Kind: MTRResponseDestination, Description: "destination at 5"})
+			tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseUnreachable, Description: "unreachable at 3", Marker: "!H"})
+			want := &StopReason{Hop: 5, Reason: StopReasonDestination, Responses: []string{"destination at 5"}}
+			if got := tracker.pathEnd(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("pathEnd() after lower unreachable = %#v, want sticky destination %#v", got, want)
+			}
+
+			tracker.observe(4, &MTRProbeResponse{Kind: MTRResponseDestination, Description: "destination at 4"})
+			want = &StopReason{Hop: 4, Reason: StopReasonDestination, Responses: []string{"destination at 4"}}
+			if got := tracker.pathEnd(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("pathEnd() after lower destination = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestMTRPathTrackerBoundedAccumulatesWinningEvidence(t *testing.T) {
+	var changes []*StopReason
+	tracker := newMTRPathTracker(true, 30, func(reason *StopReason) {
+		changes = append(changes, reason)
+	})
+	tracker.observe(4, &MTRProbeResponse{Kind: MTRResponseUnreachable, Description: "network unreachable", Marker: "!N"})
+	tracker.observe(4, &MTRProbeResponse{Kind: MTRResponseUnreachable, Description: "host unreachable", Marker: "!H"})
+	tracker.observe(4, &MTRProbeResponse{Kind: MTRResponseUnreachable, Description: "network unreachable", Marker: "!N"})
+
+	want := &StopReason{
+		Hop:       4,
+		Reason:    StopReasonUnreachable,
+		Responses: []string{"host unreachable", "network unreachable"},
+		Markers:   []string{"!H", "!N"},
+	}
+	if got := tracker.pathEnd(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pathEnd() = %#v, want %#v", got, want)
+	}
+	if got := len(changes); got != 2 {
+		t.Fatalf("path-end changes = %d, want two distinct evidence states", got)
+	}
+
+	tracker = newMTRPathTracker(true, 30, nil)
+	tracker.observeStopReason(&StopReason{
+		Hop:       5,
+		Reason:    StopReasonDestination,
+		Responses: []string{"TCP RST from 192.0.2.2", "TCP SYN/ACK from 192.0.2.1", "TCP RST from 192.0.2.2"},
+	})
+	want = &StopReason{
+		Hop:       5,
+		Reason:    StopReasonDestination,
+		Responses: []string{"TCP RST from 192.0.2.2", "TCP SYN/ACK from 192.0.2.1"},
+	}
+	if got := tracker.pathEnd(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pathEnd() from StopReason = %#v, want %#v", got, want)
+	}
+}
+
 func TestMTRPathTrackerUnboundedReopensProvisionalEdge(t *testing.T) {
 	var changes []*StopReason
 	tracker := newMTRPathTracker(false, 30, func(reason *StopReason) {
 		changes = append(changes, reason)
 	})
 
-	tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseUnreachable, Marker: "!H"})
+	tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseUnreachable, Description: "host unreachable", Marker: "!H"})
 	assertMTRPathEnd(t, tracker.pathEnd(), 3, StopReasonUnreachable)
 	tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseTransit})
 	if got := tracker.pathEnd(); got != nil {
 		t.Fatalf("path end after transit = %#v, want nil", got)
 	}
-	tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseUnreachable, Marker: "!N"})
-	assertMTRPathEnd(t, tracker.pathEnd(), 3, StopReasonUnreachable)
+	tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseUnreachable, Description: "network unreachable", Marker: "!N"})
+	want := &StopReason{Hop: 3, Reason: StopReasonUnreachable, Responses: []string{"network unreachable"}, Markers: []string{"!N"}}
+	if got := tracker.pathEnd(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reopened path end = %#v, want latest live evidence %#v", got, want)
+	}
 	tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseDestination})
 	assertMTRPathEnd(t, tracker.pathEnd(), 3, StopReasonDestination)
 	tracker.observe(3, &MTRProbeResponse{Kind: MTRResponseTransit})
@@ -60,6 +125,9 @@ func TestMTRPathTrackerUnboundedReopensProvisionalEdge(t *testing.T) {
 	}
 	if changes[len(changes)-1] != nil {
 		t.Fatalf("last reset callback = %#v, want nil", changes[len(changes)-1])
+	}
+	if got := len(changes); got != 5 {
+		t.Fatalf("path-end changes = %d, want unreachable, reopen, unreachable, destination, reset", got)
 	}
 }
 
@@ -90,6 +158,21 @@ func TestMTRPathTrackerCopiesCallbackState(t *testing.T) {
 	want := &StopReason{Hop: 2, Reason: StopReasonUnreachable, Responses: []string{"blocked"}, Markers: []string{"!X"}}
 	if got := tracker.pathEnd(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("pathEnd() = %#v, want %#v", got, want)
+	}
+}
+
+func TestMTRPathTrackerPathEndReturnsCopy(t *testing.T) {
+	tracker := newMTRPathTracker(false, 30, nil)
+	tracker.observe(2, &MTRProbeResponse{Kind: MTRResponseUnreachable, Description: "blocked", Marker: "!X"})
+
+	read := tracker.pathEnd()
+	read.Hop = 99
+	read.Responses[0] = "mutated"
+	read.Markers[0] = "mutated"
+
+	want := &StopReason{Hop: 2, Reason: StopReasonUnreachable, Responses: []string{"blocked"}, Markers: []string{"!X"}}
+	if got := tracker.pathEnd(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pathEnd() after caller mutation = %#v, want %#v", got, want)
 	}
 }
 

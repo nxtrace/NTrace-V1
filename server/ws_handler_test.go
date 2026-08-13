@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -328,6 +329,53 @@ func TestRunMTRTraceCancellationDoesNotInventPathEnd(t *testing.T) {
 	}
 	if string(data) != `{"iteration":0,"path_end":null}` {
 		t.Fatalf("cancel complete data = %s", data)
+	}
+}
+
+func TestRunSingleTraceCompleteUsesSnakeCaseStopReason(t *testing.T) {
+	oldTraceroute := traceTracerouteFn
+	t.Cleanup(func() { traceTracerouteFn = oldTraceroute })
+	traceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return &trace.Result{
+			StopReason: &trace.StopReason{
+				Hop:       4,
+				Reason:    trace.StopReasonUnreachable,
+				Responses: []string{"ICMP Host Unreachable"},
+				Markers:   []string{"!H"},
+			},
+		}, nil
+	}
+
+	conn := newFakeWSConn(false)
+	session := newWSTraceSession(conn, "en", 4)
+	runSingleTrace(context.Background(), session, &traceExecution{
+		Target:       "example.test",
+		Protocol:     "ICMP",
+		DataProvider: "disable-geoip",
+		Method:       trace.ICMPTrace,
+		IP:           net.ParseIP("192.0.2.1"),
+		Config:       trace.Config{Lang: "en"},
+	})
+	session.finish()
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if len(conn.writes) != 1 || conn.writes[0].Type != "complete" {
+		t.Fatalf("envelopes = %#v, want one complete", conn.writes)
+	}
+	data, err := json.Marshal(conn.writes[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("complete data decode: %v", err)
+	}
+	if _, ok := fields["stop_reason"]; !ok {
+		t.Fatalf("complete data missing stop_reason: %s", data)
+	}
+	if _, ok := fields["StopReason"]; ok {
+		t.Fatalf("complete data leaked core StopReason key: %s", data)
 	}
 }
 

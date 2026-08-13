@@ -586,7 +586,7 @@ func renderMTRTUIRows(b *strings.Builder, header MTRTUIHeader, stats []trace.MTR
 	for i, s := range stats {
 		hopPrefix := formatTUIHopPrefix(s.TTL, prevTTL, lo.prefixW)
 		prevTTL = s.TTL
-		renderDataRow(b, lo, hopPrefix, appendMTRResponseMarker(formatTUIHost(allParts[i], asnW), s), s)
+		renderDataRow(b, lo, hopPrefix, formatTUIHost(allParts[i], asnW), s)
 		renderMTRTUIMPLSRows(b, lo, s.MPLS, header.DisableMPLS)
 	}
 }
@@ -703,6 +703,10 @@ func centerIn(s string, width int) string {
 // 左侧为 prefix+hostText（含 tab），填充到 metricsStart 后拼接指标列，
 // 保证右侧指标列始终键齐。
 func renderDataRow(b *strings.Builder, lo mtrTUILayout, hopPrefix, host string, s trace.MTRHopStat) {
+	marker := mtrResponseMarker(s)
+	if marker != "" {
+		host = fitMTRHostWithMarker(host, marker, lo.metricsStart-1-displayWidthWithTabs(hopPrefix, tuiTabStop))
+	}
 	left := hopPrefix + host
 	leftW := displayWidthWithTabs(left, tuiTabStop)
 
@@ -872,7 +876,7 @@ func renderMTRTUIHistoryRows(b *strings.Builder, header MTRTUIHeader, stats []tr
 	for i, s := range stats {
 		hopPrefix := formatTUIHopPrefix(s.TTL, prevTTL, lo.prefixW)
 		prevTTL = s.TTL
-		host := appendMTRResponseMarker(formatTUIHost(allParts[i], asnW), s)
+		host := formatTUIHost(allParts[i], asnW)
 		renderMTRTUIHistoryRow(b, header, lo, hopPrefix, host, s, history[s.TTL], now)
 	}
 }
@@ -900,7 +904,7 @@ func renderMTRTUIHistoryRow(
 	if waiting {
 		hostSty = mtrTUIWaitColor
 	}
-	row := mtrTUIHopColor(hopPrefix) + hostSty(fitLeft(host, lo.hostW))
+	row := mtrTUIHopColor(hopPrefix) + hostSty(fitMTRHostWithMarker(host, mtrResponseMarker(stat), lo.hostW))
 
 	m := formatMTRMetricStrings(stat)
 	row += strings.Repeat(" ", tuiHistoryGap)

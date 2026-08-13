@@ -13,7 +13,9 @@ nexttrace --udp -p 33494 example.com
 nexttrace --json example.com
 ```
 
-JSON includes optional `StopReason` with lowercase nested fields `hop`, `reason`, `responses`, and `markers`. Use `reason` as the reachability conclusion; do not compare the last hop IP with the target.
+JSON includes optional `StopReason` with lowercase nested fields `hop`, `reason`, `responses`, and `markers`. `responses` contains human-readable descriptions; `markers` contains machine-readable codes. Use `reason` as the reachability conclusion; do not compare the last hop IP with the target.
+
+Normal traceroute output precedence is `--json` > `--table` > `--classic` > `--raw` > `--output` > realtime. A higher-priority mode that overrides an explicit output file emits a warning on stderr.
 
 ## MTR
 
@@ -22,7 +24,7 @@ nexttrace --report example.com
 nexttrace --mtr --raw -q 5 example.com
 ```
 
-MTR raw stdout remains a fixed 12-column stream. Semantic unreachable diagnostics are written to stderr so stdout parsers remain compatible.
+MTR raw stdout remains a fixed 12-column stream. Semantic unreachable diagnostics are written to stderr so stdout parsers remain compatible. In unbounded MTR, an unreachable edge is provisional and later transit evidence can reopen the path; use the final `path_end` from bounded structured output as the authoritative boundary.
 
 ## MTU
 

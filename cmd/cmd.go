@@ -1122,6 +1122,33 @@ func (mode traceOutputMode) printsStopReason() bool {
 	return mode == traceOutputRealtime || mode == traceOutputFile || mode == traceOutputTable
 }
 
+func (mode traceOutputMode) label() string {
+	switch mode {
+	case traceOutputRaw:
+		return "raw"
+	case traceOutputClassic:
+		return "classic"
+	case traceOutputTable:
+		return "table"
+	case traceOutputJSON:
+		return "JSON"
+	default:
+		return ""
+	}
+}
+
+func writeIgnoredTraceOutputWarning(w io.Writer, mode traceOutputMode, outputPath string) error {
+	if strings.TrimSpace(outputPath) == "" || mode == traceOutputFile {
+		return nil
+	}
+	label := mode.label()
+	if label == "" {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "warning: trace output file is ignored because %s output has higher priority\n", label)
+	return err
+}
+
 type traceOutputPlan struct {
 	mode traceOutputMode
 	file io.WriteCloser
@@ -1163,7 +1190,12 @@ func configureTracePrinters(conf *trace.Config, mode traceOutputMode, outputPath
 		if err != nil {
 			return nil, err
 		}
-		conf.RealtimePrinter = tracelog.NewRealtimePrinter(io.MultiWriter(os.Stdout, f))
+		conf.RealtimePrinter = func(res *trace.Result, ttl int) {
+			printer.RealtimePrinter(res, ttl)
+			if err := tracelog.WriteRealtime(f, res, ttl); err != nil {
+				log.Printf("write trace output: %v", err)
+			}
+		}
 		plan.file = f
 	case traceOutputRealtime:
 		conf.RealtimePrinter = printer.RealtimePrinter
@@ -1729,6 +1761,9 @@ func Execute() {
 
 	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode) {
 		return
+	}
+	if err := writeIgnoredTraceOutputWarning(os.Stderr, outputMode, resolvedOutputPath); err != nil {
+		log.Printf("write trace output warning: %v", err)
 	}
 
 	outputPlan, err := configureTracePrinters(&conf, outputMode, resolvedOutputPath)

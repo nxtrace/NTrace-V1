@@ -48,7 +48,6 @@ type mtrSchedulerConfig struct {
 	FillGeo           bool
 	AsyncMetadata     bool
 	BaseConfig        Config // used for geo/RDNS lookup
-	DstIP             net.IP
 	OnPathEnd         func(*StopReason)
 
 	IsPaused         func() bool

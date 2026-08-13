@@ -103,12 +103,12 @@ const uiText = {
     metaDuration: '耗时',
     metaIterations: '持续轮次',
     metaMap: '地图',
-	metaStopReason: '终止原因',
-	metaPathEnd: '路径终点',
-	reasonDestination: '已到达目标',
-	reasonUnreachable: '网络不可达',
-	reasonMaxHops: '已达到最大跳数',
-	reasonUnknown: '未知原因',
+    metaStopReason: '终止原因',
+    metaPathEnd: '路径终点',
+    reasonDestination: '已到达目标',
+    reasonUnreachable: '网络不可达',
+    reasonMaxHops: '已达到最大跳数',
+    reasonUnknown: '未知原因',
     mapOpen: '打开地图',
     attemptLabelHost: '主机',
     attemptLabelAddress: '地址',
@@ -175,12 +175,12 @@ const uiText = {
     metaDuration: 'Duration',
     metaIterations: 'Iterations',
     metaMap: 'Map',
-	metaStopReason: 'Stop reason',
-	metaPathEnd: 'Path end',
-	reasonDestination: 'Destination reached',
-	reasonUnreachable: 'Network unreachable',
-	reasonMaxHops: 'Maximum hops reached',
-	reasonUnknown: 'Unknown reason',
+    metaStopReason: 'Stop reason',
+    metaPathEnd: 'Path end',
+    reasonDestination: 'Destination reached',
+    reasonUnreachable: 'Network unreachable',
+    reasonMaxHops: 'Maximum hops reached',
+    reasonUnknown: 'Unknown reason',
     mapOpen: 'Open map',
     attemptLabelHost: 'Host',
     attemptLabelAddress: 'IP',
@@ -313,12 +313,12 @@ function renderMeta(summary = {}) {
     // t('mapOpen') is assumed not user-supplied; escape only the URL
     rows.push(`${t('metaMap')}：<a href="${escapeHTML(summary.trace_map_url)}" target="_blank" rel="noreferrer">${t('mapOpen')}</a>`);
   }
-	if (summary.stop_reason) {
-		rows.push(`${t('metaStopReason')}：<strong>${escapeHTML(formatTraceStopReason(summary.stop_reason))}</strong>`);
-	}
-	if (summary.path_end) {
-		rows.push(`${t('metaPathEnd')}：<strong>${escapeHTML(formatTraceStopReason(summary.path_end))}</strong>`);
-	}
+  if (summary.stop_reason) {
+    rows.push(`${t('metaStopReason')}：<strong>${escapeHTML(formatTraceStopReason(summary.stop_reason))}</strong>`);
+  }
+  if (summary.path_end) {
+    rows.push(`${t('metaPathEnd')}：<strong>${escapeHTML(formatTraceStopReason(summary.path_end))}</strong>`);
+  }
   if (rows.length === 0) {
     resultMetaNode.classList.add('hidden');
     resultMetaNode.innerHTML = '';
@@ -329,25 +329,25 @@ function renderMeta(summary = {}) {
 }
 
 function formatTraceStopReason(reason) {
-	if (window.nextTraceReason) {
-		return window.nextTraceReason.format(reason, currentLang);
-	}
-	if (!reason) {
-		return '';
-	}
-	const labels = {
-		destination_reached: t('reasonDestination'),
-		unreachable: t('reasonUnreachable'),
-		max_hops: t('reasonMaxHops'),
-	};
-	const parts = [`#${Number(reason.hop) || '?'}`, labels[reason.reason] || t('reasonUnknown')];
-	if (Array.isArray(reason.responses) && reason.responses.length > 0) {
-		parts.push(reason.responses.join(', '));
-	}
-	if (Array.isArray(reason.markers) && reason.markers.length > 0) {
-		parts.push(reason.markers.join(' '));
-	}
-	return parts.join(' — ');
+  if (window.nextTraceReason) {
+    return window.nextTraceReason.format(reason, currentLang);
+  }
+  if (!reason) {
+    return '';
+  }
+  const labels = {
+    destination_reached: t('reasonDestination'),
+    unreachable: t('reasonUnreachable'),
+    max_hops: t('reasonMaxHops'),
+  };
+  const parts = [`#${Number(reason.hop) || '?'}`, labels[reason.reason] || t('reasonUnknown')];
+  if (Array.isArray(reason.responses) && reason.responses.length > 0) {
+    parts.push(reason.responses.join(', '));
+  }
+  if (Array.isArray(reason.markers) && reason.markers.length > 0) {
+    parts.push(reason.markers.join(' '));
+  }
+  return parts.join(' — ');
 }
 
 function renderAttemptsGrouped(attempts) {
@@ -809,11 +809,11 @@ function handleSocketMessage(event) {
       scheduleMTRRender();
       break;
     }
-	case 'path_end': {
-		latestSummary = {...latestSummary, path_end: msg.data || null};
-		scheduleMTRRender();
-		break;
-	}
+    case 'path_end': {
+      latestSummary = {...latestSummary, path_end: msg.data || null};
+      scheduleMTRRender();
+      break;
+    }
     case 'complete': {
       traceCompleted = true;
       submitBtn.disabled = false;
@@ -821,9 +821,9 @@ function handleSocketMessage(event) {
         if (msg.data && typeof msg.data.iteration === 'number') {
           latestSummary = {...latestSummary, iteration: msg.data.iteration};
         }
-		if (msg.data && Object.prototype.hasOwnProperty.call(msg.data, 'path_end')) {
-			latestSummary = {...latestSummary, path_end: msg.data.path_end || null};
-		}
+        if (msg.data && Object.prototype.hasOwnProperty.call(msg.data, 'path_end')) {
+          latestSummary = {...latestSummary, path_end: msg.data.path_end || null};
+        }
         stopBtn.disabled = true;
         stopBtn.classList.add('hidden');
         if (msg.data && Array.isArray(msg.data.stats)) {
@@ -1228,30 +1228,30 @@ function ingestMTRRawRecord(rec) {
     });
     row.mpls = Array.from(existing);
   }
-	if (rec.response) {
-		row.response = {...rec.response};
-	}
+  if (rec.response) {
+    row.response = {...rec.response};
+  }
 
   recomputeMTRRawDerived(row);
 }
 
 function buildMTRStatsFromRawAgg() {
-	let rows = Array.from(mtrRawAggStore.values())
+  let rows = Array.from(mtrRawAggStore.values())
     .sort((a, b) => (a.ttl - b.ttl) || (a._order - b._order))
     .map((row) => {
       const out = {...row};
-		delete out.response;
-		if (window.nextTraceMTRPath) {
-			out.response = window.nextTraceMTRPath.responseForRow(out, latestSummary.path_end);
-		}
+      delete out.response;
+      if (window.nextTraceMTRPath) {
+        out.response = window.nextTraceMTRPath.responseForRow(out, latestSummary.path_end);
+      }
       delete out._sum_ms;
       delete out._order;
       return out;
     });
-	if (window.nextTraceMTRPath) {
-		rows = window.nextTraceMTRPath.filterRows(rows, latestSummary.path_end);
-	}
-	mtrStatsStore = rows;
+  if (window.nextTraceMTRPath) {
+    rows = window.nextTraceMTRPath.filterRows(rows, latestSummary.path_end);
+  }
+  mtrStatsStore = rows;
   return rows;
 }
 
@@ -1339,14 +1339,14 @@ function renderMTRStats(stats) {
       mplsDiv.textContent = mplsText;
       hostCell.appendChild(mplsDiv);
     }
-	const marker = stat && stat.response && stat.response.kind === 'unreachable'
-		? String(stat.response.marker || '').trim() : '';
-	if (marker) {
-		const markerSpan = document.createElement('span');
-		markerSpan.className = 'mtr-response-marker';
-		markerSpan.textContent = ` ${marker}`;
-		hostCell.appendChild(markerSpan);
-	}
+    const marker = stat && stat.response && stat.response.kind === 'unreachable'
+      ? String(stat.response.marker || '').trim() : '';
+    if (marker) {
+      const markerSpan = document.createElement('span');
+      markerSpan.className = 'mtr-response-marker';
+      markerSpan.textContent = ` ${marker}`;
+      hostCell.appendChild(markerSpan);
+    }
 
     tbody.appendChild(row);
   });

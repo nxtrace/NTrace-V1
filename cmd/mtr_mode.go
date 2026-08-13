@@ -201,6 +201,13 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 // runMTRRaw 执行 MTR 原始流式模式（逐事件输出，'|' 分隔）。
 // 行格式固定为 12 列：
 // ttl|ip|ptr|rtt|asn|country|prov|city|district|owner|lat|lng
+func writeMTRRawPathEnd(w io.Writer, reason *trace.StopReason) error {
+	if reason == nil || reason.Reason != trace.StopReasonUnreachable {
+		return nil
+	}
+	return printer.WriteTraceStopReason(w, reason)
+}
+
 func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, dataOrigin string) {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
@@ -213,10 +220,7 @@ func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 		HopInterval: time.Duration(hopIntervalMs) * time.Millisecond,
 		MaxPerHop:   maxPerHop,
 		OnPathEnd: func(reason *trace.StopReason) {
-			if reason == nil || reason.Reason != trace.StopReasonUnreachable {
-				return
-			}
-			if err := printer.WriteTraceStopReason(os.Stderr, reason); err != nil {
+			if err := writeMTRRawPathEnd(os.Stderr, reason); err != nil {
 				writeMTRRawRuntimeError(os.Stderr, err)
 			}
 		},

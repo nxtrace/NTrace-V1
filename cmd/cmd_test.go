@@ -563,7 +563,6 @@ func TestTraceOutputPlanStopReasonVisibility(t *testing.T) {
 		want bool
 	}{
 		{name: "default", mode: traceOutputRealtime, want: true},
-		{name: "route path default", mode: traceOutputRealtime, want: true},
 		{name: "table", mode: traceOutputTable, want: true},
 		{name: "output", mode: traceOutputFile, want: true},
 		{name: "classic", mode: traceOutputClassic},
@@ -581,6 +580,40 @@ func TestTraceOutputPlanStopReasonVisibility(t *testing.T) {
 			}
 			if got := strings.Contains(terminal.String(), "Trace Stopped:"); got != tt.want {
 				t.Fatalf("terminal stop reason present = %v, want %v; output=%q", got, tt.want, terminal.String())
+			}
+		})
+	}
+}
+
+func TestWriteIgnoredTraceOutputWarning(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       traceOutputMode
+		outputPath string
+		want       string
+	}{
+		{name: "JSON overrides output", mode: traceOutputJSON, outputPath: "trace.log", want: "JSON"},
+		{name: "table overrides output", mode: traceOutputTable, outputPath: "trace.log", want: "table"},
+		{name: "classic overrides output", mode: traceOutputClassic, outputPath: "trace.log", want: "classic"},
+		{name: "raw overrides output", mode: traceOutputRaw, outputPath: "trace.log", want: "raw"},
+		{name: "file output active", mode: traceOutputFile, outputPath: "trace.log"},
+		{name: "no output requested", mode: traceOutputJSON},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := writeIgnoredTraceOutputWarning(&output, tt.mode, tt.outputPath); err != nil {
+				t.Fatalf("writeIgnoredTraceOutputWarning() error = %v", err)
+			}
+			if tt.want == "" {
+				if output.Len() != 0 {
+					t.Fatalf("warning = %q, want empty", output.String())
+				}
+				return
+			}
+			if got := output.String(); !strings.Contains(got, "output file is ignored") || !strings.Contains(got, tt.want) {
+				t.Fatalf("warning = %q, want ignored warning for %s", got, tt.want)
 			}
 		})
 	}
@@ -650,6 +683,10 @@ func TestTraceOutputFileWritesPlainStopReason(t *testing.T) {
 	if conf.RealtimePrinter == nil {
 		t.Fatal("RealtimePrinter = nil, want output printer")
 	}
+	conf.RealtimePrinter(&trace.Result{Hops: [][]trace.Hop{{}}}, 0)
+	if !strings.Contains(terminal.String(), "\x1b[") {
+		t.Fatalf("terminal hop output is not styled: %q", terminal.String())
+	}
 	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination, Responses: []string{"ICMP Echo Reply"}}
 	if err := plan.printStopReason(reason); err != nil {
 		t.Fatalf("printStopReason() error = %v", err)
@@ -662,9 +699,12 @@ func TestTraceOutputFileWritesPlainStopReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	want := "Trace Stopped: Destination Reached at Hop 5 (ICMP Echo Reply)\n"
-	if string(got) != want {
-		t.Fatalf("output file = %q, want %q", got, want)
+	if !strings.Contains(string(got), "1   *\n") {
+		t.Fatalf("output file missing plain hop output: %q", got)
+	}
+	wantStop := "Trace Stopped: Destination Reached at Hop 5 (ICMP Echo Reply)\n"
+	if !strings.Contains(string(got), wantStop) {
+		t.Fatalf("output file = %q, want stop line %q", got, wantStop)
 	}
 	if bytes.Contains(got, []byte("\x1b[")) {
 		t.Fatalf("output file contains ANSI escapes: %q", got)

@@ -117,10 +117,11 @@ func TestScheduler_MaxPerHopCompletion(t *testing.T) {
 			// Simulate: TTL 3 is the destination
 			if ttl == 3 {
 				return mtrProbeResult{
-					TTL:     ttl,
-					Success: true,
-					Addr:    &net.IPAddr{IP: dstIP},
-					RTT:     10 * time.Millisecond,
+					TTL:      ttl,
+					Success:  true,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      10 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -143,7 +144,6 @@ func TestScheduler_MaxPerHopCompletion(t *testing.T) {
 		MaxPerHop:        3,
 		ParallelRequests: 5,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, func(iter int, stats []MTRHopStat) {
 		atomic.AddInt32(&snapshotCount, 1)
 		lastIter = iter
@@ -219,10 +219,11 @@ func TestScheduler_DestinationDetection(t *testing.T) {
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			if ttl >= 5 {
 				return mtrProbeResult{
-					TTL:     ttl,
-					Success: true,
-					Addr:    &net.IPAddr{IP: dstIP},
-					RTT:     50 * time.Millisecond,
+					TTL:      ttl,
+					Success:  true,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      50 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -243,7 +244,6 @@ func TestScheduler_DestinationDetection(t *testing.T) {
 		MaxPerHop:        2,
 		ParallelRequests: 1, // serialize to ensure dest detection before higher TTLs
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -435,8 +435,9 @@ func TestScheduler_OnProbeCallback(t *testing.T) {
 			if ttl == 3 {
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  5 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -459,7 +460,6 @@ func TestScheduler_OnProbeCallback(t *testing.T) {
 		MaxPerHop:        1,
 		ParallelRequests: 5,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, func(result mtrProbeResult, _ int, _ time.Time) {
 		mu.Lock()
 		callbackResults = append(callbackResults, result)
@@ -2142,18 +2142,20 @@ func TestScheduler_HigherTTLDestinationRepliesDiscarded(t *testing.T) {
 				// so TTL 3's result is processed first.
 				time.Sleep(30 * time.Millisecond)
 				return mtrProbeResult{
-					TTL:     ttl,
-					Success: true,
-					Addr:    &net.IPAddr{IP: dstIP},
-					RTT:     time.Duration(ttl) * time.Millisecond,
+					TTL:      ttl,
+					Success:  true,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      time.Duration(ttl) * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 3 {
 				return mtrProbeResult{
-					TTL:     ttl,
-					Success: true,
-					Addr:    &net.IPAddr{IP: dstIP},
-					RTT:     time.Duration(ttl) * time.Millisecond,
+					TTL:      ttl,
+					Success:  true,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      time.Duration(ttl) * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2177,7 +2179,6 @@ func TestScheduler_HigherTTLDestinationRepliesDiscarded(t *testing.T) {
 		MaxPerHop:        3,
 		ParallelRequests: 6, // enough to launch TTLs 1-6 simultaneously
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, func(result mtrProbeResult, _ int, _ time.Time) {
 		mu.Lock()
 		probeByTTL[result.TTL]++
@@ -2233,10 +2234,11 @@ func TestScheduler_DiscardedDestinationRepliesCannotExceedMaxPerHop(t *testing.T
 			if ttl >= 2 {
 				// All TTLs >= 2 hit destination
 				return mtrProbeResult{
-					TTL:     ttl,
-					Success: true,
-					Addr:    &net.IPAddr{IP: dstIP},
-					RTT:     5 * time.Millisecond,
+					TTL:      ttl,
+					Success:  true,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2257,7 +2259,6 @@ func TestScheduler_DiscardedDestinationRepliesCannotExceedMaxPerHop(t *testing.T
 		MaxPerHop:        2, // strict cap
 		ParallelRequests: 10,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -2298,10 +2299,11 @@ func TestScheduler_NonDestinationRepliesOnDisabledHigherTTLDiscarded(t *testing.
 			if ttl == 3 {
 				// TTL 3 is destination — returns quickly
 				return mtrProbeResult{
-					TTL:     ttl,
-					Success: true,
-					Addr:    &net.IPAddr{IP: dstIP},
-					RTT:     5 * time.Millisecond,
+					TTL:      ttl,
+					Success:  true,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl > 3 {
@@ -2333,7 +2335,6 @@ func TestScheduler_NonDestinationRepliesOnDisabledHigherTTLDiscarded(t *testing.
 		MaxPerHop:        2,
 		ParallelRequests: 6, // all TTLs may launch before destination detected
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, func(result mtrProbeResult, _ int, _ time.Time) {
 		mu.Lock()
 		probeResults = append(probeResults, result)
@@ -2378,8 +2379,9 @@ func TestScheduler_FinalTTLLowered_MigratesStatsToNewFinal(t *testing.T) {
 				// TTL 12 returns destination quickly
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  3 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      3 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 7 {
@@ -2388,8 +2390,9 @@ func TestScheduler_FinalTTLLowered_MigratesStatsToNewFinal(t *testing.T) {
 				time.Sleep(50 * time.Millisecond)
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  5 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			// Intermediate hops
@@ -2410,7 +2413,6 @@ func TestScheduler_FinalTTLLowered_MigratesStatsToNewFinal(t *testing.T) {
 		MaxPerHop:        3,
 		ParallelRequests: 15,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -2463,24 +2465,27 @@ func TestScheduler_FinalTTLLowered_ChainMigration(t *testing.T) {
 			if ttl == 12 {
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  3 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      3 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 9 {
 				time.Sleep(30 * time.Millisecond)
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  4 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      4 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 7 {
 				time.Sleep(60 * time.Millisecond)
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  5 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2500,7 +2505,6 @@ func TestScheduler_FinalTTLLowered_ChainMigration(t *testing.T) {
 		MaxPerHop:        2,
 		ParallelRequests: 15,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -2538,8 +2542,9 @@ func TestScheduler_LateHigherTTLDestinationReply_Discarded_NoSntBump(t *testing.
 				// Destination — returns fast
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  3 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      3 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 5 {
@@ -2547,8 +2552,9 @@ func TestScheduler_LateHigherTTLDestinationReply_Discarded_NoSntBump(t *testing.
 				time.Sleep(40 * time.Millisecond)
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  8 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      8 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2572,7 +2578,6 @@ func TestScheduler_LateHigherTTLDestinationReply_Discarded_NoSntBump(t *testing.
 		MaxPerHop:        2,
 		ParallelRequests: 6,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, func(result mtrProbeResult, _ int, _ time.Time) {
 		mu.Lock()
 		callbackCount++
@@ -2625,16 +2630,18 @@ func TestScheduler_DiscardedOverFinal_DoesNotEmitOnProbe(t *testing.T) {
 			if ttl == 2 {
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  5 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl > 2 {
 				time.Sleep(30 * time.Millisecond)
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  10 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      10 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2664,7 +2671,6 @@ func TestScheduler_DiscardedOverFinal_DoesNotEmitOnProbe(t *testing.T) {
 		MaxPerHop:        2,
 		ParallelRequests: 5,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, onProbe)
 
 	if err != nil {
@@ -2722,8 +2728,9 @@ func TestScheduler_FinalTTLLowering_Chain_WithMaxPerHop_NoGhostRow_StableStats(t
 				}
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  rtt,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      rtt,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 9 {
@@ -2734,8 +2741,9 @@ func TestScheduler_FinalTTLLowering_Chain_WithMaxPerHop_NoGhostRow_StableStats(t
 				}
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  rtt,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      rtt,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 7 {
@@ -2746,8 +2754,9 @@ func TestScheduler_FinalTTLLowering_Chain_WithMaxPerHop_NoGhostRow_StableStats(t
 				}
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  rtt,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      rtt,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2767,7 +2776,6 @@ func TestScheduler_FinalTTLLowering_Chain_WithMaxPerHop_NoGhostRow_StableStats(t
 		MaxPerHop:        3,
 		ParallelRequests: 15,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -2847,8 +2855,9 @@ func TestScheduler_FinalHopSntNotInflated_NoLowering(t *testing.T) {
 			if ttl == 5 {
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  5 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2868,7 +2877,6 @@ func TestScheduler_FinalHopSntNotInflated_NoLowering(t *testing.T) {
 		MaxPerHop:        5,
 		ParallelRequests: 30,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -2901,8 +2909,9 @@ func TestScheduler_FinalHopSntNotInflated_WithLowering(t *testing.T) {
 				// Returns destination quickly (discovered first as provisional final)
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  3 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      3 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			if ttl == 5 {
@@ -2910,8 +2919,9 @@ func TestScheduler_FinalHopSntNotInflated_WithLowering(t *testing.T) {
 				time.Sleep(30 * time.Millisecond)
 				return mtrProbeResult{
 					TTL: ttl, Success: true,
-					Addr: &net.IPAddr{IP: dstIP},
-					RTT:  5 * time.Millisecond,
+					Addr:     &net.IPAddr{IP: dstIP},
+					RTT:      5 * time.Millisecond,
+					Response: &MTRProbeResponse{Kind: MTRResponseDestination},
 				}, nil
 			}
 			return mtrProbeResult{
@@ -2931,7 +2941,6 @@ func TestScheduler_FinalHopSntNotInflated_WithLowering(t *testing.T) {
 		MaxPerHop:        4,
 		ParallelRequests: 15,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -2977,8 +2986,10 @@ func TestScheduler_MultiInFlightPerHop_HighLossEqualSnt(t *testing.T) {
 			// TTL 2: 80% loss (simulated as 80% of probes sleeping 200ms = "timeout")
 			// TTL 3: destination, fast
 			ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", ttl))
+			var response *MTRProbeResponse
 			if ttl == 3 {
 				ip = dstIP
+				response = &MTRProbeResponse{Kind: MTRResponseDestination}
 			}
 
 			if ttl == 2 {
@@ -2988,10 +2999,11 @@ func TestScheduler_MultiInFlightPerHop_HighLossEqualSnt(t *testing.T) {
 			}
 
 			return mtrProbeResult{
-				TTL:     ttl,
-				Success: true,
-				Addr:    &net.IPAddr{IP: ip},
-				RTT:     5 * time.Millisecond,
+				TTL:      ttl,
+				Success:  true,
+				Addr:     &net.IPAddr{IP: ip},
+				RTT:      5 * time.Millisecond,
+				Response: response,
 			}, nil
 		},
 	}
@@ -3006,7 +3018,6 @@ func TestScheduler_MultiInFlightPerHop_HighLossEqualSnt(t *testing.T) {
 		MaxInFlightPerHop: 3,
 		ParallelRequests:  30,
 		ProgressThrottle:  time.Millisecond,
-		DstIP:             dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -3039,8 +3050,10 @@ func TestScheduler_MultiInFlightPerHop_TimeoutHopsKeepUp(t *testing.T) {
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", ttl))
+			var response *MTRProbeResponse
 			if ttl == 5 {
 				ip = dstIP
+				response = &MTRProbeResponse{Kind: MTRResponseDestination}
 			}
 
 			if ttl == 3 {
@@ -3054,10 +3067,11 @@ func TestScheduler_MultiInFlightPerHop_TimeoutHopsKeepUp(t *testing.T) {
 			}
 
 			return mtrProbeResult{
-				TTL:     ttl,
-				Success: true,
-				Addr:    &net.IPAddr{IP: ip},
-				RTT:     2 * time.Millisecond,
+				TTL:      ttl,
+				Success:  true,
+				Addr:     &net.IPAddr{IP: ip},
+				RTT:      2 * time.Millisecond,
+				Response: response,
 			}, nil
 		},
 	}
@@ -3072,7 +3086,6 @@ func TestScheduler_MultiInFlightPerHop_TimeoutHopsKeepUp(t *testing.T) {
 		MaxInFlightPerHop: 3,
 		ParallelRequests:  30,
 		ProgressThrottle:  time.Millisecond,
-		DstIP:             dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -3166,14 +3179,17 @@ func TestScheduler_MaxPerHopRespectedWithMultiInFlight(t *testing.T) {
 			time.Sleep(30 * time.Millisecond)
 
 			ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", ttl))
+			var response *MTRProbeResponse
 			if ttl == 3 {
 				ip = dstIP
+				response = &MTRProbeResponse{Kind: MTRResponseDestination}
 			}
 			return mtrProbeResult{
-				TTL:     ttl,
-				Success: true,
-				Addr:    &net.IPAddr{IP: ip},
-				RTT:     5 * time.Millisecond,
+				TTL:      ttl,
+				Success:  true,
+				Addr:     &net.IPAddr{IP: ip},
+				RTT:      5 * time.Millisecond,
+				Response: response,
 			}, nil
 		},
 	}
@@ -3188,7 +3204,6 @@ func TestScheduler_MaxPerHopRespectedWithMultiInFlight(t *testing.T) {
 		MaxInFlightPerHop: 5, // higher than MaxPerHop to test the guard
 		ParallelRequests:  30,
 		ProgressThrottle:  time.Millisecond,
-		DstIP:             dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -3217,14 +3232,17 @@ func TestScheduler_SingleInFlightPerHopConfig(t *testing.T) {
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", ttl))
+			var response *MTRProbeResponse
 			if ttl == 3 {
 				ip = dstIP
+				response = &MTRProbeResponse{Kind: MTRResponseDestination}
 			}
 			return mtrProbeResult{
-				TTL:     ttl,
-				Success: true,
-				Addr:    &net.IPAddr{IP: ip},
-				RTT:     1 * time.Millisecond,
+				TTL:      ttl,
+				Success:  true,
+				Addr:     &net.IPAddr{IP: ip},
+				RTT:      1 * time.Millisecond,
+				Response: response,
 			}, nil
 		},
 	}
@@ -3239,7 +3257,6 @@ func TestScheduler_SingleInFlightPerHopConfig(t *testing.T) {
 		MaxInFlightPerHop: 1, // explicit single in-flight
 		ParallelRequests:  5,
 		ProgressThrottle:  time.Millisecond,
-		DstIP:             dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -3270,17 +3287,20 @@ func TestScheduler_DynamicMaxInFlightPerHop(t *testing.T) {
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", ttl))
+			var response *MTRProbeResponse
 			if ttl == 3 {
 				ip = dstIP
+				response = &MTRProbeResponse{Kind: MTRResponseDestination}
 			}
 			if ttl == 2 {
 				time.Sleep(500 * time.Millisecond) // full "timeout"
 			}
 			return mtrProbeResult{
-				TTL:     ttl,
-				Success: true,
-				Addr:    &net.IPAddr{IP: ip},
-				RTT:     2 * time.Millisecond,
+				TTL:      ttl,
+				Success:  true,
+				Addr:     &net.IPAddr{IP: ip},
+				RTT:      2 * time.Millisecond,
+				Response: response,
 			}, nil
 		},
 	}
@@ -3295,7 +3315,6 @@ func TestScheduler_DynamicMaxInFlightPerHop(t *testing.T) {
 		MaxPerHop:        8,
 		ParallelRequests: 30,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 		// MaxInFlightPerHop intentionally 0 → dynamic
 	}, nil, nil)
 
@@ -3324,13 +3343,16 @@ func TestScheduler_DynamicMaxInFlightPerHop_SmallTimeout(t *testing.T) {
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", ttl))
+			var response *MTRProbeResponse
 			if ttl == 2 {
 				ip = dstIP
+				response = &MTRProbeResponse{Kind: MTRResponseDestination}
 			}
 			return mtrProbeResult{
 				TTL: ttl, Success: true,
-				Addr: &net.IPAddr{IP: ip},
-				RTT:  1 * time.Millisecond,
+				Addr:     &net.IPAddr{IP: ip},
+				RTT:      1 * time.Millisecond,
+				Response: response,
 			}, nil
 		},
 	}
@@ -3345,7 +3367,6 @@ func TestScheduler_DynamicMaxInFlightPerHop_SmallTimeout(t *testing.T) {
 		MaxPerHop:        3,
 		ParallelRequests: 10,
 		ProgressThrottle: time.Millisecond,
-		DstIP:            dstIP,
 	}, nil, nil)
 
 	if err != nil {
@@ -3366,10 +3387,20 @@ func TestSchedulerUsesExplicitResponseSemanticsForPathEnd(t *testing.T) {
 		BeginHop:  1,
 		MaxHops:   4,
 		MaxPerHop: 2,
-		DstIP:     dstIP,
 	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// A matching responder address without protocol evidence is not a path end.
+	rt.processProbeSuccess(1, mtrProbeResult{
+		TTL:     1,
+		Success: true,
+		Addr:    &net.IPAddr{IP: dstIP},
+		RTT:     time.Millisecond,
+	}, time.Now())
+	if got := rt.pathTracker.pathEnd(); got != nil {
+		t.Fatalf("target-IP response without semantics path end = %#v, want nil", got)
 	}
 
 	// A Time Exceeded response from the target address is still transit.
@@ -3501,6 +3532,10 @@ func TestSchedulerOnlyNaturalBoundedCompletionReportsMaxHops(t *testing.T) {
 	if !rt.isDone() {
 		t.Fatal("fully-budgeted scheduler did not complete")
 	}
+	if len(natural) != 0 || rt.pathTracker.pathEnd() != nil {
+		t.Fatalf("isDone mutated path end: callbacks=%#v state=%#v", natural, rt.pathTracker.pathEnd())
+	}
+	rt.finishRun()
 	if len(natural) != 1 {
 		t.Fatalf("natural path changes = %#v, want one max_hops", natural)
 	}

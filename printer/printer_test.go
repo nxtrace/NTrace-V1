@@ -46,6 +46,35 @@ func TestFormatTraceStopReason(t *testing.T) {
 			want: "Trace Stopped: No Continuing Route Observed at Hop 7 (ICMP Host Unreachable (!H), ICMP Network Unreachable (!N))",
 		},
 		{
+			name: "unreachable markers kept outside response descriptions",
+			reason: &trace.StopReason{
+				Hop:       7,
+				Reason:    trace.StopReasonUnreachable,
+				Responses: []string{"ICMP Host Unreachable"},
+				Markers:   []string{"!H"},
+			},
+			want: "Trace Stopped: No Continuing Route Observed at Hop 7 (ICMP Host Unreachable (!H))",
+		},
+		{
+			name: "marker-only unreachable",
+			reason: &trace.StopReason{
+				Hop:     7,
+				Reason:  trace.StopReasonUnreachable,
+				Markers: []string{"!N"},
+			},
+			want: "Trace Stopped: No Continuing Route Observed at Hop 7 (!N)",
+		},
+		{
+			name: "markers are matched exactly and appended once",
+			reason: &trace.StopReason{
+				Hop:       7,
+				Reason:    trace.StopReasonUnreachable,
+				Responses: []string{"ICMP custom unreachable (!H2)"},
+				Markers:   []string{"!H", "!H"},
+			},
+			want: "Trace Stopped: No Continuing Route Observed at Hop 7 (ICMP custom unreachable (!H2) (!H))",
+		},
+		{
 			name:   "max hops",
 			reason: &trace.StopReason{Hop: 30, Reason: trace.StopReasonMaxHops},
 			want:   "Trace Stopped: Maximum Hops Reached at Hop 30 (No Destination Response)",
