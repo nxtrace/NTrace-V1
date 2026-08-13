@@ -121,7 +121,7 @@ func (s *ICMPSpec) listenICMPWinDivert(ctx context.Context, ready chan struct{},
 		}
 
 		msg := packet.message()
-		if seq, ok := packet.echoReplyFor(s.EchoID); ok {
+		if seq, ok := packet.echoReplyFor(s.EchoID, s.DstIP); ok {
 			onICMP(msg, finish, seq)
 			continue
 		}

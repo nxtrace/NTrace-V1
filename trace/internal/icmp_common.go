@@ -88,7 +88,7 @@ func (s *ICMPSpec) decodeICMPSocketMessage(msg ReceivedMessage) (time.Time, int,
 	}
 	response := classifySocketICMPResponse(s.IPVersion, rm, msg.Msg)
 
-	if seq, ok := matchSocketICMPEchoReply(s.IPVersion, rm, s.EchoID); ok {
+	if seq, ok := matchSocketICMPEchoReply(s.IPVersion, rm, s.EchoID, msg.Peer, s.DstIP); ok {
 		return finish, seq, response, true
 	}
 

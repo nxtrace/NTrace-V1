@@ -19,9 +19,11 @@ func tcpProbeReply(tcp *layers.TCP) (seq int, ack int, ok bool) {
 		return 0, 0, false
 	}
 	if tcp.ACK && tcp.RST {
+		// A non-zero ack tells the caller this was a RST/ACK response.
 		return 0, int(tcp.Ack), true
 	}
 	if tcp.ACK && tcp.SYN {
+		// A zero ack return value tells the caller this was a SYN/ACK response.
 		return int(tcp.Ack) - 1, 0, true
 	}
 	return 0, 0, false

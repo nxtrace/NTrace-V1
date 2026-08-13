@@ -41,16 +41,16 @@ func winDivertICMPFilter(ipVersion int, srcIP net.IP) string {
 	return fmt.Sprintf("inbound and icmpv6 and ipv6.DstAddr == %s", srcIP.String())
 }
 
-func winDivertTCPFilter(ipVersion int, dstIP, srcIP net.IP, dstPort int) string {
+func winDivertTCPFilter(ipVersion int, srcIP net.IP, dstPort int) string {
 	if ipVersion == 4 {
 		return fmt.Sprintf(
-			"inbound and tcp and ip.SrcAddr == %s and ip.DstAddr == %s and tcp.SrcPort == %d",
-			dstIP.String(), srcIP.String(), dstPort,
+			"inbound and tcp and ip.DstAddr == %s and tcp.SrcPort == %d",
+			srcIP.String(), dstPort,
 		)
 	}
 	return fmt.Sprintf(
-		"inbound and tcp and ipv6.SrcAddr == %s and ipv6.DstAddr == %s and tcp.SrcPort == %d",
-		dstIP.String(), srcIP.String(), dstPort,
+		"inbound and tcp and ipv6.DstAddr == %s and tcp.SrcPort == %d",
+		srcIP.String(), dstPort,
 	)
 }
 
@@ -197,8 +197,8 @@ func (p *winDivertICMPPacket) message() ReceivedMessage {
 	}
 }
 
-func (p *winDivertICMPPacket) echoReplyFor(echoID int) (int, bool) {
-	if !p.echoReply || p.echoID != echoID {
+func (p *winDivertICMPPacket) echoReplyFor(echoID int, dstIP net.IP) (int, bool) {
+	if !p.echoReply || p.echoID != echoID || !p.peerIP.Equal(dstIP) {
 		return 0, false
 	}
 	return p.echoSeq, true

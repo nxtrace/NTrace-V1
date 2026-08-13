@@ -39,6 +39,7 @@ func buildIPv6InnerPacket(dstIP net.IP, echoID, seq int) []byte {
 }
 
 func TestMatchSocketICMPEchoReplyIPv4(t *testing.T) {
+	dstIP := net.ParseIP("192.0.2.1")
 	raw := mustMarshalICMP(t, icmp.Message{
 		Type: ipv4.ICMPTypeEchoReply,
 		Code: 0,
@@ -49,13 +50,14 @@ func TestMatchSocketICMPEchoReplyIPv4(t *testing.T) {
 	if !ok {
 		t.Fatalf("parseSocketICMPMessage() ok = false")
 	}
-	seq, ok := matchSocketICMPEchoReply(4, rm, 7)
+	seq, ok := matchSocketICMPEchoReply(4, rm, 7, &net.IPAddr{IP: dstIP}, dstIP)
 	if !ok || seq != 11 {
 		t.Fatalf("matchSocketICMPEchoReply() = (%d, %v), want (11, true)", seq, ok)
 	}
 }
 
 func TestMatchSocketICMPEchoReplyIPv6(t *testing.T) {
+	dstIP := net.ParseIP("2001:db8::1")
 	raw := mustMarshalICMP(t, icmp.Message{
 		Type: ipv6.ICMPTypeEchoReply,
 		Code: 0,
@@ -66,13 +68,13 @@ func TestMatchSocketICMPEchoReplyIPv6(t *testing.T) {
 	if !ok {
 		t.Fatalf("parseSocketICMPMessage() ok = false")
 	}
-	seq, ok := matchSocketICMPEchoReply(6, rm, 9)
+	seq, ok := matchSocketICMPEchoReply(6, rm, 9, &net.IPAddr{IP: dstIP}, dstIP)
 	if !ok || seq != 21 {
 		t.Fatalf("matchSocketICMPEchoReply() = (%d, %v), want (21, true)", seq, ok)
 	}
 }
 
-func TestDecodeICMPSocketEchoReplyDoesNotRequireDestinationSourceIP(t *testing.T) {
+func TestDecodeICMPSocketEchoReplyRejectsNonDestinationSourceIP(t *testing.T) {
 	raw := mustMarshalICMP(t, icmp.Message{
 		Type: ipv4.ICMPTypeEchoReply,
 		Code: 0,
@@ -83,12 +85,76 @@ func TestDecodeICMPSocketEchoReplyDoesNotRequireDestinationSourceIP(t *testing.T
 		EchoID:    7,
 		DstIP:     net.ParseIP("192.0.2.1"),
 	}
-	_, seq, response, ok := spec.decodeICMPSocketMessage(ReceivedMessage{
+	_, _, _, ok := spec.decodeICMPSocketMessage(ReceivedMessage{
 		Peer: &net.IPAddr{IP: net.ParseIP("192.0.2.2")},
 		Msg:  raw,
 	})
-	if !ok || seq != 11 || response.Kind != ICMPResponseEchoReply {
-		t.Fatalf("decodeICMPSocketMessage() = (_, %d, %#v, %v), want (_, 11, EchoReply, true)", seq, response, ok)
+	if ok {
+		t.Fatal("decodeICMPSocketMessage() ok = true, want false for non-destination Echo Reply source")
+	}
+}
+
+func TestDecodeICMPSocketErrorAllowsAlternateOuterSource(t *testing.T) {
+	tests := []struct {
+		name      string
+		ipVersion int
+		dstIP     net.IP
+		peerIP    net.IP
+		echoID    int
+		seq       int
+		message   icmp.Message
+	}{
+		{
+			name:      "IPv4",
+			ipVersion: 4,
+			dstIP:     net.ParseIP("192.0.2.1"),
+			peerIP:    net.ParseIP("198.51.100.1"),
+			echoID:    7,
+			seq:       11,
+			message: icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Code: 0, Body: &icmp.TimeExceeded{
+				Data: buildIPv4InnerPacket(net.ParseIP("192.0.2.1"), 7, 11),
+			}},
+		},
+		{
+			name:      "IPv6",
+			ipVersion: 6,
+			dstIP:     net.ParseIP("2001:db8::1"),
+			peerIP:    net.ParseIP("2001:db8::ffff"),
+			echoID:    9,
+			seq:       21,
+			message: icmp.Message{Type: ipv6.ICMPTypeTimeExceeded, Code: 0, Body: &icmp.TimeExceeded{
+				Data: buildIPv6InnerPacket(net.ParseIP("2001:db8::1"), 9, 21),
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &ICMPSpec{IPVersion: tt.ipVersion, EchoID: tt.echoID, DstIP: tt.dstIP}
+			_, seq, response, ok := spec.decodeICMPSocketMessage(ReceivedMessage{
+				Peer: &net.IPAddr{IP: tt.peerIP},
+				Msg:  mustMarshalICMP(t, tt.message),
+			})
+			if !ok || seq != tt.seq || response.Kind != ICMPResponseTransit {
+				t.Fatalf("decodeICMPSocketMessage() = (_, %d, %#v, %v), want (_, %d, Transit, true)", seq, response, ok, tt.seq)
+			}
+		})
+	}
+}
+
+func TestDecodeICMPSocketErrorRejectsWrongEmbeddedIdentifier(t *testing.T) {
+	dstIP := net.ParseIP("192.0.2.1")
+	raw := mustMarshalICMP(t, icmp.Message{
+		Type: ipv4.ICMPTypeTimeExceeded,
+		Code: 0,
+		Body: &icmp.TimeExceeded{Data: buildIPv4InnerPacket(dstIP, 8, 11)},
+	})
+	spec := &ICMPSpec{IPVersion: 4, EchoID: 7, DstIP: dstIP}
+	if _, _, _, ok := spec.decodeICMPSocketMessage(ReceivedMessage{
+		Peer: &net.IPAddr{IP: net.ParseIP("198.51.100.1")},
+		Msg:  raw,
+	}); ok {
+		t.Fatal("decodeICMPSocketMessage() ok = true, want false for wrong embedded Echo ID")
 	}
 }
 
@@ -109,11 +175,20 @@ func TestClassifySocketICMPResponse(t *testing.T) {
 			wantDetail: "ICMP Time Exceeded",
 		},
 		{
-			name:       "IPv4 fragment reassembly transit",
+			name:       "IPv4 fragment reassembly timeout",
 			ipVersion:  4,
 			message:    icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Code: 1, Body: &icmp.TimeExceeded{}},
-			wantKind:   ICMPResponseTransit,
-			wantDetail: "ICMP Time Exceeded",
+			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMP Fragment Reassembly Time Exceeded",
+			wantMarker: "!<11-1>",
+		},
+		{
+			name:       "IPv4 unknown time exceeded code",
+			ipVersion:  4,
+			message:    icmp.Message{Type: ipv4.ICMPTypeTimeExceeded, Code: 2, Body: &icmp.TimeExceeded{}},
+			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMP Time Exceeded (Code 2)",
+			wantMarker: "!<11-2>",
 		},
 		{
 			name:       "IPv4 host unreachable",
@@ -129,6 +204,15 @@ func TestClassifySocketICMPResponse(t *testing.T) {
 			message:    icmp.Message{Type: ipv4.ICMPTypeDestinationUnreachable, Code: 3, Body: &icmp.DstUnreach{}},
 			wantKind:   ICMPResponsePortUnreachable,
 			wantDetail: "ICMP Port Unreachable",
+			wantMarker: "!<3-3>",
+		},
+		{
+			name:       "IPv6 port unreachable",
+			ipVersion:  6,
+			message:    icmp.Message{Type: ipv6.ICMPTypeDestinationUnreachable, Code: 4, Body: &icmp.DstUnreach{}},
+			wantKind:   ICMPResponsePortUnreachable,
+			wantDetail: "ICMPv6 Port Unreachable",
+			wantMarker: "!<1-4>",
 		},
 		{
 			name:       "IPv6 administratively prohibited",
@@ -139,11 +223,43 @@ func TestClassifySocketICMPResponse(t *testing.T) {
 			wantMarker: "!X",
 		},
 		{
-			name:       "IPv6 fragment reassembly transit",
+			name:       "IPv6 transit",
 			ipVersion:  6,
-			message:    icmp.Message{Type: ipv6.ICMPTypeTimeExceeded, Code: 1, Body: &icmp.TimeExceeded{}},
+			message:    icmp.Message{Type: ipv6.ICMPTypeTimeExceeded, Code: 0, Body: &icmp.TimeExceeded{}},
 			wantKind:   ICMPResponseTransit,
 			wantDetail: "ICMPv6 Time Exceeded",
+		},
+		{
+			name:       "IPv6 fragment reassembly timeout",
+			ipVersion:  6,
+			message:    icmp.Message{Type: ipv6.ICMPTypeTimeExceeded, Code: 1, Body: &icmp.TimeExceeded{}},
+			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMPv6 Fragment Reassembly Time Exceeded",
+			wantMarker: "!<3-1>",
+		},
+		{
+			name:       "IPv6 unknown time exceeded code",
+			ipVersion:  6,
+			message:    icmp.Message{Type: ipv6.ICMPTypeTimeExceeded, Code: 2, Body: &icmp.TimeExceeded{}},
+			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMPv6 Time Exceeded (Code 2)",
+			wantMarker: "!<3-2>",
+		},
+		{
+			name:       "IPv6 beyond scope",
+			ipVersion:  6,
+			message:    icmp.Message{Type: ipv6.ICMPTypeDestinationUnreachable, Code: 2, Body: &icmp.DstUnreach{}},
+			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMPv6 Beyond Scope of Source Address",
+			wantMarker: "!H",
+		},
+		{
+			name:       "IPv6 address unreachable",
+			ipVersion:  6,
+			message:    icmp.Message{Type: ipv6.ICMPTypeDestinationUnreachable, Code: 3, Body: &icmp.DstUnreach{}},
+			wantKind:   ICMPResponseUnreachable,
+			wantDetail: "ICMPv6 Address Unreachable",
+			wantMarker: "!H",
 		},
 		{
 			name:       "IPv6 packet too big",
