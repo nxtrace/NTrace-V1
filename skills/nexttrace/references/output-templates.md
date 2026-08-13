@@ -10,6 +10,8 @@ Use these templates when turning NextTrace MCP `structuredContent` into a user-f
 - Use only fields present in `structuredContent`. Omit unknown values instead of guessing.
 - Keep raw data short. Link or quote only the key lines from `raw_output` when it materially changes the conclusion.
 - Choose the Chinese or English template based on the user's language. Do not output both languages unless requested.
+- For traceroute reachability, use `stop_reason.reason`; do not infer completion from the final responder IP.
+- For MTR path boundaries, use `path_end`; it describes the known path edge, not why the MTR session itself stopped.
 
 ## `nexttrace_capabilities`
 
@@ -58,6 +60,7 @@ English template:
 | 协议 | `<protocol>` |
 | Geo 数据源 | `<data_provider>` |
 | 耗时 | `<duration_ms> ms` |
+| 终止原因 | `<stop_reason.reason>`（TTL `<stop_reason.hop>`；`<stop_reason.responses/markers>`） |
 
 **关键路径**
 
@@ -85,6 +88,7 @@ English template:
 | Protocol | `<protocol>` |
 | Geo source | `<data_provider>` |
 | Duration | `<duration_ms> ms` |
+| Stop reason | `<stop_reason.reason>` (TTL `<stop_reason.hop>`; `<stop_reason.responses/markers>`) |
 
 **Key Path**
 
@@ -113,6 +117,7 @@ English template:
 | 解析 IP | `<resolved_ip>` |
 | 协议 | `<protocol>` |
 | 采样耗时 | `<duration_ms> ms` |
+| 路径终点 | `<path_end.reason>`（TTL `<path_end.hop>`；缺失时不要推断） |
 
 **最终 hop**
 
@@ -141,6 +146,7 @@ English template:
 | Resolved IP | `<resolved_ip>` |
 | Protocol | `<protocol>` |
 | Duration | `<duration_ms> ms` |
+| Path end | `<path_end.reason>` (TTL `<path_end.hop>`; do not infer when absent) |
 
 **Final Hop**
 
@@ -173,12 +179,13 @@ English template:
 | 记录数 | `<len(records)>` |
 | 耗时 | `<duration_ms> ms` |
 | Warning | `<warnings[]>` |
+| 路径终点 | `<path_end.reason>`（TTL `<path_end.hop>`；缺失时不要推断） |
 
 **关键记录**
 
 | Iter | TTL | IP / Host | RTT | ASN / 地理 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| `<record.iteration>` | `<record.ttl>` | `<record.ip>` / `<record.host>` | `<record.rtt_ms> ms` | `<record.asn>` `<record.country/prov/city>` | `<record.success>` |
+| `<record.iteration>` | `<record.ttl>` | `<record.ip>` / `<record.host>` | `<record.rtt_ms> ms` | `<record.asn>` `<record.country/prov/city>` | `<record.response.kind/marker or record.success>` |
 ```
 
 English template:
@@ -197,12 +204,13 @@ English template:
 | Records | `<len(records)>` |
 | Duration | `<duration_ms> ms` |
 | Warnings | `<warnings[]>` |
+| Path end | `<path_end.reason>` (TTL `<path_end.hop>`; do not infer when absent) |
 
 **Key Records**
 
 | Iter | TTL | IP / Host | RTT | ASN / Location | Status |
 | --- | --- | --- | --- | --- | --- |
-| `<record.iteration>` | `<record.ttl>` | `<record.ip>` / `<record.host>` | `<record.rtt_ms> ms` | `<record.asn>` `<record.country/prov/city>` | `<record.success>` |
+| `<record.iteration>` | `<record.ttl>` | `<record.ip>` / `<record.host>` | `<record.rtt_ms> ms` | `<record.asn>` `<record.country/prov/city>` | `<record.response.kind/marker or record.success>` |
 ```
 
 ## `nexttrace_mtu_trace`

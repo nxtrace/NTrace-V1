@@ -128,7 +128,7 @@ func (s *TCPSpec) ListenTCP(ctx context.Context, ready chan struct{}, onTCP func
 
 	sniffHandle, closeHandleTCP := openWinDivertSniffHandle(
 		ctx,
-		winDivertTCPFilter(s.IPVersion, s.DstIP, s.SrcIP, s.DstPort),
+		winDivertTCPFilter(s.IPVersion, s.SrcIP, s.DstPort),
 		"ListenTCP",
 	)
 	defer closeHandleTCP()

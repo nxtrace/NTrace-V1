@@ -127,17 +127,42 @@ func TestMTRRawAllowsLocalDurationTimeout(t *testing.T) {
 	if len(resp.Records) != 1 || resp.Records[0].IP != "192.0.2.1" {
 		t.Fatalf("MTRRaw records = %+v, want one preserved record", resp.Records)
 	}
+	if resp.PathEnd != nil {
+		t.Fatalf("local duration timeout fabricated path_end = %#v", resp.PathEnd)
+	}
+}
+
+func TestMTRRawLocalDurationTimeoutPreservesSemanticPathEnd(t *testing.T) {
+	restore := stubServiceRuntimeForTests(t)
+	defer restore()
+
+	runMTRRawFn = func(_ context.Context, _ trace.Method, _ trace.Config, opts trace.MTRRawOptions, _ trace.MTRRawOnRecord) error {
+		opts.OnPathEnd(&trace.StopReason{Hop: 2, Reason: trace.StopReasonUnreachable, Markers: []string{"!H"}})
+		return context.DeadlineExceeded
+	}
+	resp, err := New().MTRRaw(context.Background(), MTRRawRequest{
+		TraceRequest: TraceRequest{Target: "192.0.2.1", DataProvider: "disable-geoip"},
+		DurationMs:   1,
+	})
+	if err != nil {
+		t.Fatalf("MTRRaw returned error: %v", err)
+	}
+	if resp.PathEnd == nil || resp.PathEnd.Hop != 2 || resp.PathEnd.Reason != trace.StopReasonUnreachable || len(resp.PathEnd.Markers) != 1 || resp.PathEnd.Markers[0] != "!H" {
+		t.Fatalf("duration timeout path_end = %#v, want unreachable !H", resp.PathEnd)
+	}
 }
 
 func TestMTRResponsesUseMTRParameterBoundaries(t *testing.T) {
 	restore := stubServiceRuntimeForTests(t)
 	defer restore()
 
-	runMTRFn = func(_ context.Context, _ trace.Method, _ trace.Config, _ trace.MTROptions, onUpdate trace.MTROnSnapshot) error {
-		onUpdate(1, []trace.MTRHopStat{{TTL: 1, IP: "192.0.2.1"}})
+	runMTRFn = func(_ context.Context, _ trace.Method, _ trace.Config, opts trace.MTROptions, onUpdate trace.MTROnSnapshot) error {
+		opts.OnPathEnd(&trace.StopReason{Hop: 1, Reason: trace.StopReasonDestination, Responses: []string{"ICMP Echo Reply"}})
+		onUpdate(1, []trace.MTRHopStat{{TTL: 1, IP: "192.0.2.1", Geo: &ipgeo.IPGeoData{}}})
 		return nil
 	}
-	runMTRRawFn = func(_ context.Context, _ trace.Method, _ trace.Config, _ trace.MTRRawOptions, onRecord trace.MTRRawOnRecord) error {
+	runMTRRawFn = func(_ context.Context, _ trace.Method, _ trace.Config, opts trace.MTRRawOptions, onRecord trace.MTRRawOnRecord) error {
+		opts.OnPathEnd(&trace.StopReason{Hop: 1, Reason: trace.StopReasonUnreachable, Markers: []string{"!H"}})
 		onRecord(trace.MTRRawRecord{TTL: 1, Success: true, IP: "192.0.2.1"})
 		return nil
 	}
@@ -149,6 +174,12 @@ func TestMTRResponsesUseMTRParameterBoundaries(t *testing.T) {
 		t.Fatalf("MTRReport returned error: %v", err)
 	}
 	assertMTRBoundaries(t, "report", report.Parameters, false)
+	if report.PathEnd == nil || report.PathEnd.Reason != trace.StopReasonDestination {
+		t.Fatalf("report path_end = %#v, want destination", report.PathEnd)
+	}
+	if len(report.Stats) != 1 || report.Stats[0].Geo == nil || report.Stats[0].Geo.Router == nil {
+		t.Fatalf("report geo = %#v, want schema-safe non-nil router", report.Stats)
+	}
 
 	raw, err := New().MTRRaw(context.Background(), MTRRawRequest{
 		TraceRequest: TraceRequest{Target: "192.0.2.1", DataProvider: "disable-geoip"},
@@ -158,6 +189,24 @@ func TestMTRResponsesUseMTRParameterBoundaries(t *testing.T) {
 		t.Fatalf("MTRRaw returned error: %v", err)
 	}
 	assertMTRBoundaries(t, "raw", raw.Parameters, true)
+	if raw.PathEnd == nil || raw.PathEnd.Reason != trace.StopReasonUnreachable || len(raw.PathEnd.Markers) != 1 || raw.PathEnd.Markers[0] != "!H" {
+		t.Fatalf("raw path_end = %#v, want unreachable !H", raw.PathEnd)
+	}
+}
+
+func TestNewTraceStopReasonCopiesStableFields(t *testing.T) {
+	core := &trace.StopReason{
+		Hop:       7,
+		Reason:    trace.StopReasonUnreachable,
+		Responses: []string{"ICMP Host Unreachable"},
+		Markers:   []string{"!H"},
+	}
+	got := NewTraceStopReason(core)
+	core.Responses[0] = "mutated"
+	core.Markers[0] = "mutated"
+	if got == nil || got.Hop != 7 || got.Reason != trace.StopReasonUnreachable || got.Responses[0] != "ICMP Host Unreachable" || got.Markers[0] != "!H" {
+		t.Fatalf("NewTraceStopReason() = %#v", got)
+	}
 }
 
 func TestMTUTraceInitializesDefaultLeoMoeRuntime(t *testing.T) {

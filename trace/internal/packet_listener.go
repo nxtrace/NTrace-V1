@@ -11,6 +11,7 @@ type ReceivedMessage struct {
 	Peer net.Addr
 	Msg  []byte
 	Err  error
+	ICMP ICMPResponse
 }
 
 // PacketListener 负责监听网络数据包并通过通道传递接收到的消息

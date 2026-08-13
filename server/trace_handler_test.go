@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/nxtrace/NTrace-core/internal/service"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
 )
@@ -183,6 +185,55 @@ func TestTraceHandler_RejectsOversizedJSONBody(t *testing.T) {
 	}
 }
 
+func TestTraceHandlerReturnsSnakeCaseStopReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLookup := traceDomainLookupFn
+	oldTraceroute := traceTracerouteFn
+	defer func() {
+		traceDomainLookupFn = oldLookup
+		traceTracerouteFn = oldTraceroute
+	}()
+	traceDomainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
+		return net.ParseIP("192.0.2.1"), nil
+	}
+	traceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return &trace.Result{
+			Hops: [][]trace.Hop{{{TTL: 1, Success: true, Address: &net.IPAddr{IP: net.ParseIP("198.51.100.8")}}}},
+			StopReason: &trace.StopReason{
+				Hop:       1,
+				Reason:    trace.StopReasonUnreachable,
+				Responses: []string{"ICMP Host Unreachable from 198.51.100.8"},
+				Markers:   []string{"!H"},
+			},
+		}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/trace", strings.NewReader(`{"target":"example.test","data_provider":"disable-geoip","disable_maptrace":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	traceHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var reason service.TraceStopReason
+	if err := json.Unmarshal(body["stop_reason"], &reason); err != nil {
+		t.Fatalf("stop_reason decode: %v body=%s", err, w.Body.String())
+	}
+	if reason.Reason != trace.StopReasonUnreachable || reason.Hop != 1 || len(reason.Markers) != 1 || reason.Markers[0] != "!H" {
+		t.Fatalf("stop_reason = %#v", reason)
+	}
+	if _, ok := body["StopReason"]; ok {
+		t.Fatalf("REST leaked core PascalCase StopReason: %s", w.Body.String())
+	}
+}
+
 func TestExecuteMTRRaw_PerHopDoesNotMutateSessionGlobals(t *testing.T) {
 	oldRunMTRRaw := traceRunMTRRawFn
 	defer func() { traceRunMTRRawFn = oldRunMTRRaw }()
@@ -279,6 +330,16 @@ func TestTraceMapURLForResult_UsesRequestScopedMapHelper(t *testing.T) {
 		if payload == "" {
 			t.Fatal("payload should not be empty")
 		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(payload), &body); err != nil {
+			t.Fatalf("invalid tracemap payload: %v", err)
+		}
+		if _, ok := body["StopReason"]; ok {
+			t.Fatalf("tracemap payload leaked StopReason: %s", payload)
+		}
+		if _, ok := body["Hops"]; !ok {
+			t.Fatalf("tracemap payload lost historical Hops field: %s", payload)
+		}
 		return "https://map.example.test", nil
 	}
 
@@ -287,7 +348,8 @@ func TestTraceMapURLForResult_UsesRequestScopedMapHelper(t *testing.T) {
 		DataProvider: "IPInfo",
 		Config:       trace.Config{Maptrace: true},
 	}, &trace.Result{
-		Hops: [][]trace.Hop{{{TTL: 1}}},
+		Hops:       [][]trace.Hop{{{TTL: 1}}},
+		StopReason: &trace.StopReason{Hop: 1, Reason: trace.StopReasonDestination},
 	})
 
 	if got != "https://map.example.test" {

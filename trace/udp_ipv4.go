@@ -60,10 +60,7 @@ func (t *UDPTracer) waitAllReady(ctx context.Context) {
 }
 
 func (t *UDPTracer) ttlComp(ttl int) bool {
-	idx := ttl - 1
-	t.res.lock.RLock()
-	defer t.res.lock.RUnlock()
-	return idx < len(t.res.Hops) && len(t.res.Hops[idx]) >= t.NumMeasurements
+	return t.res.ttlDisplayComplete(ttl, t.NumMeasurements)
 }
 
 func (t *UDPTracer) PrintFunc(ctx context.Context, cancel context.CancelCauseFunc) {
@@ -74,21 +71,14 @@ func (t *UDPTracer) PrintFunc(ctx context.Context, cancel context.CancelCauseFun
 	defer ticker.Stop()
 
 	for {
-		if t.AsyncPrinter != nil {
-			t.AsyncPrinter(&t.res)
-		}
-
-		// 接收的时候检查一下是不是 3 跳都齐了
-		if t.ttlComp(ttl + 1) {
-			if t.RealtimePrinter != nil {
-				t.res.waitGeo(ctx, ttl)
-				t.RealtimePrinter(&t.res, ttl)
-			}
-			ttl++
-			if ttl == int(t.final.Load()) || ttl >= t.MaxHops {
-				cancel(errNaturalDone) // 标记为“自然完成”
-				return
-			}
+		nextTTL, stop := advanceStableTracePrint(
+			ctx, &t.res, ttl, t.MaxHops, t.NumMeasurements, &t.final,
+			t.AsyncPrinter, t.RealtimePrinter,
+		)
+		ttl = nextTTL
+		if stop {
+			cancel(errNaturalDone)
+			return
 		}
 
 		select {
@@ -100,20 +90,35 @@ func (t *UDPTracer) PrintFunc(ctx context.Context, cancel context.CancelCauseFun
 }
 
 func (t *UDPTracer) launchTTL(ctx context.Context, s *internal.UDPSpec, ttl int) {
+	t.wg.Add(1)
 	go func(ttl int) {
+		defer t.wg.Done()
+		defer t.res.markTTLLaunchDone(ttl)
 		for i := 0; i < t.MaxAttempts; i++ {
 			// 若此 TTL 已完成或 ctx 已取消，则不再发起新的尝试
 			if t.ttlComp(ttl) || ctx.Err() != nil {
 				return
 			}
 
+			if !t.res.markAttemptLaunched(ttl, i, &t.final) {
+				return
+			}
 			t.wg.Add(1)
 			go func(ttl, i int) {
-				if err := t.send(ctx, s, ttl, i); err != nil && !errors.Is(err, context.Canceled) {
+				defer t.wg.Done()
+				err := t.send(ctx, s, ttl, i)
+				if err != nil && !errors.Is(err, context.Canceled) {
 					if util.EnvDevMode {
 						panic(err)
 					}
 					fmt.Fprintf(os.Stderr, "send error (ttl=%d, attempt=%d): %v\n", ttl, i, err)
+				}
+				if err != nil {
+					if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+						t.res.addFailedAttempt(Hop{TTL: ttl, Error: err}, &t.final, i, t.NumMeasurements, t.MaxAttempts)
+					} else {
+						t.res.settleAttempt(ttl, i)
+					}
 				}
 			}(ttl, i)
 
@@ -202,23 +207,11 @@ func (t *UDPTracer) dropByAttempt(ttl, i int) {
 	}
 }
 
-func (t *UDPTracer) addHopWithIndex(peer net.Addr, ttl, i int, rtt time.Duration, mpls []string) {
+func (t *UDPTracer) addHopWithIndex(peer net.Addr, ttl, i int, rtt time.Duration, mpls []string, response probeResponse) {
 	if f := t.final.Load(); f != -1 && ttl > int(f) {
+		t.res.settleAttempt(ttl, i)
 		return
 	}
-
-	if ip := util.AddrIP(peer); ip != nil && ip.Equal(t.DstIP) {
-		for {
-			old := t.final.Load()
-			if old != -1 && ttl >= int(old) {
-				break
-			}
-			if t.final.CompareAndSwap(old, int32(ttl)) {
-				break
-			}
-		}
-	}
-
 	h := Hop{
 		Success: true,
 		Address: peer,
@@ -226,7 +219,7 @@ func (t *UDPTracer) addHopWithIndex(peer net.Addr, ttl, i int, rtt time.Duration
 		RTT:     rtt,
 		MPLS:    mpls,
 	}
-	t.res.addWithGeoAsync(h, i, t.NumMeasurements, t.MaxAttempts, t.Config)
+	t.res.addMatchedHop(h, response, &t.final, i, t.NumMeasurements, t.MaxAttempts, t.Config)
 }
 
 func (t *UDPTracer) matchWorker(ctx context.Context) {
@@ -274,7 +267,7 @@ func (t *UDPTracer) matchWorker(ctx context.Context) {
 
 			if t.clearPending(ttl, i) {
 				rtt := task.finish.Sub(start)
-				t.addHopWithIndex(task.peer, ttl, i, rtt, task.mpls)
+				t.addHopWithIndex(task.peer, ttl, i, rtt, task.mpls, task.response)
 			}
 			t.dropSent(task.seq)
 		}
@@ -382,6 +375,7 @@ func (t *UDPTracer) Execute() (res *Result, err error) {
 
 			// 如果到达最终跳，则退出
 			if f := t.final.Load(); f != -1 && ttl > int(f) {
+				t.res.markTTLLaunchDone(ttl)
 				return
 			}
 
@@ -431,7 +425,7 @@ func (t *UDPTracer) handleICMPMessage(msg internal.ReceivedMessage, finish time.
 	// 非阻塞投递；如果队列已满则直接丢弃该任务
 	select {
 	case t.matchQ <- matchTask{
-		srcPort: srcPort, seq: seq, peer: msg.Peer, finish: finish, mpls: mpls,
+		srcPort: srcPort, seq: seq, peer: msg.Peer, finish: finish, mpls: mpls, response: probeResponseFromICMPForMethod(msg.ICMP, UDPTrace),
 	}:
 	default:
 		// 丢弃以避免阻塞抓包循环
@@ -447,8 +441,9 @@ func randomPayload(size int, offset int) []byte {
 	return payload
 }
 
-func (t *UDPTracer) acquireSendPermit(ctx context.Context, ttl int) (func(), bool, error) {
+func (t *UDPTracer) acquireSendPermit(ctx context.Context, ttl, i int) (func(), bool, error) {
 	if t.ttlComp(ttl) {
+		t.res.settleAttempt(ttl, i)
 		return nil, true, nil
 	}
 	if err := acquireTraceSemaphore(ctx, t.sem); err != nil {
@@ -457,10 +452,12 @@ func (t *UDPTracer) acquireSendPermit(ctx context.Context, ttl int) (func(), boo
 	release := func() { t.sem.Release(1) }
 	if f := t.final.Load(); f != -1 && ttl > int(f) {
 		release()
+		t.res.settleAttempt(ttl, i)
 		return nil, true, nil
 	}
 	if t.ttlComp(ttl) {
 		release()
+		t.res.settleAttempt(ttl, i)
 		return nil, true, nil
 	}
 	return release, false, nil
@@ -495,18 +492,15 @@ func (t *UDPTracer) buildUDPPacket(ttl, i, srcPort int) (int, *layers.IPv4, *lay
 
 func (t *UDPTracer) startSendTimeout(ctx context.Context, ttl, i, seq int) {
 	t.markPending(ttl, i)
+	t.wg.Add(1)
 	go func(seq, ttl, i int) {
+		defer t.wg.Done()
 		if !waitForTraceDelay(ctx, t.Timeout) {
 			_ = t.clearPending(ttl, i)
+			t.res.settleAttempt(ttl, i)
 			return
 		}
 		if !t.clearPending(ttl, i) {
-			return
-		}
-		if f := t.final.Load(); f != -1 && ttl > int(f) {
-			return
-		}
-		if t.ttlComp(ttl) {
 			return
 		}
 
@@ -517,7 +511,7 @@ func (t *UDPTracer) startSendTimeout(ctx context.Context, ttl, i, seq int) {
 			RTT:     0,
 			Error:   errHopLimitTimeout,
 		}
-		_, _ = t.res.add(h, i, t.NumMeasurements, t.MaxAttempts)
+		t.res.addTimeout(h, &t.final, i, t.NumMeasurements, t.MaxAttempts)
 		if t.OSType != 1 {
 			t.dropSent(seq)
 			return
@@ -539,9 +533,7 @@ func (t *UDPTracer) finalizeSent(seq, srcPort int, start time.Time) {
 }
 
 func (t *UDPTracer) send(ctx context.Context, s *internal.UDPSpec, ttl, i int) error {
-	defer t.wg.Done()
-
-	release, skip, err := t.acquireSendPermit(ctx, ttl)
+	release, skip, err := t.acquireSendPermit(ctx, ttl, i)
 	if err != nil {
 		return err
 	}

@@ -703,6 +703,10 @@ func centerIn(s string, width int) string {
 // 左侧为 prefix+hostText（含 tab），填充到 metricsStart 后拼接指标列，
 // 保证右侧指标列始终键齐。
 func renderDataRow(b *strings.Builder, lo mtrTUILayout, hopPrefix, host string, s trace.MTRHopStat) {
+	marker := mtrResponseMarker(s)
+	if marker != "" {
+		host = fitMTRHostWithMarker(host, marker, lo.metricsStart-1-displayWidthWithTabs(hopPrefix, tuiTabStop))
+	}
 	left := hopPrefix + host
 	leftW := displayWidthWithTabs(left, tuiTabStop)
 
@@ -900,7 +904,7 @@ func renderMTRTUIHistoryRow(
 	if waiting {
 		hostSty = mtrTUIWaitColor
 	}
-	row := mtrTUIHopColor(hopPrefix) + hostSty(fitLeft(host, lo.hostW))
+	row := mtrTUIHopColor(hopPrefix) + hostSty(fitMTRHostWithMarker(host, mtrResponseMarker(stat), lo.hostW))
 
 	m := formatMTRMetricStrings(stat)
 	row += strings.Repeat(" ", tuiHistoryGap)

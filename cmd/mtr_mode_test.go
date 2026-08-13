@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,38 @@ import (
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
 )
+
+func TestWriteMTRRawPathEnd(t *testing.T) {
+	reason := &trace.StopReason{
+		Hop:       4,
+		Reason:    trace.StopReasonUnreachable,
+		Responses: []string{"ICMP Host Unreachable"},
+		Markers:   []string{"!H"},
+	}
+	var output bytes.Buffer
+	if err := writeMTRRawPathEnd(&output, reason); err != nil {
+		t.Fatalf("writeMTRRawPathEnd() error = %v", err)
+	}
+	for _, want := range []string{"No Continuing Route Observed", "ICMP Host Unreachable", "!H"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q: %q", want, output.String())
+		}
+	}
+
+	for _, ignored := range []*trace.StopReason{
+		nil,
+		{Hop: 4, Reason: trace.StopReasonDestination},
+		{Hop: 30, Reason: trace.StopReasonMaxHops},
+	} {
+		output.Reset()
+		if err := writeMTRRawPathEnd(&output, ignored); err != nil {
+			t.Fatalf("writeMTRRawPathEnd(%v) error = %v", ignored, err)
+		}
+		if output.Len() != 0 {
+			t.Fatalf("writeMTRRawPathEnd(%v) output = %q, want empty", ignored, output.String())
+		}
+	}
+}
 
 func TestCheckMTRConflicts_NoConflict(t *testing.T) {
 	flags := map[string]bool{

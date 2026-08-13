@@ -2152,6 +2152,92 @@ func TestFormatMTRRawLine_TimeoutFixedColumns(t *testing.T) {
 	}
 }
 
+func TestMTRHumanHostsShowOnlyUnreachableMarker(t *testing.T) {
+	unreachable := trace.MTRHopStat{
+		TTL: 3,
+		IP:  "192.0.2.3",
+		Response: &trace.MTRProbeResponse{
+			Kind:   trace.MTRResponseUnreachable,
+			Marker: "!H",
+		},
+	}
+	if got := formatReportHost(unreachable, HostModeBase, HostNameIPOnly, "en", false); got != "192.0.2.3 !H" {
+		t.Fatalf("formatReportHost() = %q", got)
+	}
+	if got := appendMTRResponseMarker("192.0.2.3", trace.MTRHopStat{
+		Response: &trace.MTRProbeResponse{Kind: trace.MTRResponseDestination, Marker: "!H"},
+	}); got != "192.0.2.3" {
+		t.Fatalf("destination marker unexpectedly shown: %q", got)
+	}
+}
+
+func TestMTRHumanHostsKeepUnreachableMarkerWhenTruncated(t *testing.T) {
+	originalNoColor := color.NoColor
+	t.Cleanup(func() { color.NoColor = originalNoColor })
+	color.NoColor = true
+
+	stat := trace.MTRHopStat{
+		TTL:      1,
+		Host:     strings.Repeat("long-router-name-", 8),
+		IP:       "192.0.2.1",
+		Snt:      1,
+		Received: 1,
+		Response: &trace.MTRProbeResponse{Kind: trace.MTRResponseUnreachable, Marker: "!H"},
+	}
+
+	t.Run("default TUI", func(t *testing.T) {
+		output := mtrTUIRenderStringWithWidth(MTRTUIHeader{Target: "example.com"}, []trace.MTRHopStat{stat}, 80)
+		if !strings.Contains(output, "!H") {
+			t.Fatalf("truncated TUI host lost unreachable marker:\n%s", output)
+		}
+		if strings.Contains(output, stat.Host) {
+			t.Fatalf("test host was not truncated:\n%s", output)
+		}
+	})
+
+	t.Run("history TUI", func(t *testing.T) {
+		output := mtrTUIRenderStringWithWidth(MTRTUIHeader{
+			Target:      "example.com",
+			HistoryMode: true,
+		}, []trace.MTRHopStat{stat}, 64)
+		if !strings.Contains(output, "!H") {
+			t.Fatalf("truncated history host lost unreachable marker:\n%s", output)
+		}
+		if strings.Contains(output, stat.Host) {
+			t.Fatalf("test host was not truncated:\n%s", output)
+		}
+	})
+
+	t.Run("non-wide report", func(t *testing.T) {
+		hosts, width := prepareMTRReportHosts([]trace.MTRHopStat{stat}, MTRReportOptions{}, "en")
+		if !strings.Contains(hosts[0], "!H") {
+			t.Fatalf("truncated report host lost unreachable marker: %q", hosts[0])
+		}
+		if reportDisplayWidth(hosts[0]) > width {
+			t.Fatalf("report host width = %d, want <= %d: %q", reportDisplayWidth(hosts[0]), width, hosts[0])
+		}
+		if strings.Contains(hosts[0], stat.Host) {
+			t.Fatalf("test host was not truncated: %q", hosts[0])
+		}
+	})
+}
+
+func TestFormatMTRRawLineIgnoresStructuredResponse(t *testing.T) {
+	rec := trace.MTRRawRecord{
+		TTL:      4,
+		Success:  true,
+		IP:       "192.0.2.4",
+		Response: &trace.MTRProbeResponse{Kind: trace.MTRResponseUnreachable, Marker: "!H"},
+	}
+	line := FormatMTRRawLine(rec)
+	if got := strings.Count(line, "|"); got != 11 {
+		t.Fatalf("structured response changed raw 12-column contract: %q", line)
+	}
+	if strings.Contains(line, "!H") || strings.Contains(line, "unreachable") {
+		t.Fatalf("structured response leaked into raw columns: %q", line)
+	}
+}
+
 func TestMTRTUI_PacketsColorByLoss(t *testing.T) {
 	cases := []struct {
 		name    string

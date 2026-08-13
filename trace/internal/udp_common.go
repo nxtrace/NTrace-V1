@@ -43,25 +43,26 @@ func (s *UDPSpec) listenICMPSock(ctx context.Context, ready chan struct{}, onICM
 			if !ok {
 				return
 			}
-			finish, data, ok := s.decodeICMPSocketMessage(msg)
+			finish, data, response, ok := s.decodeICMPSocketMessage(msg)
 			if ok {
+				msg.ICMP = response
 				onICMP(msg, finish, data)
 			}
 		}
 	}
 }
 
-func (s *UDPSpec) decodeICMPSocketMessage(msg ReceivedMessage) (time.Time, []byte, bool) {
+func (s *UDPSpec) decodeICMPSocketMessage(msg ReceivedMessage) (time.Time, []byte, ICMPResponse, bool) {
 	if msg.Err != nil {
-		return time.Time{}, nil, false
+		return time.Time{}, nil, ICMPResponse{}, false
 	}
 
 	finish := time.Now()
 	rm, ok := parseSocketICMPMessage(s.IPVersion, msg.Msg)
 	if !ok {
-		return finish, nil, false
+		return finish, nil, ICMPResponse{}, false
 	}
 
 	data, ok := extractSocketICMPPayload(s.IPVersion, rm, s.DstIP)
-	return finish, data, ok
+	return finish, data, classifySocketICMPResponse(s.IPVersion, rm, msg.Msg), ok
 }

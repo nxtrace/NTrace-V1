@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
+	"github.com/nxtrace/NTrace-core/internal/service"
 	"github.com/nxtrace/NTrace-core/trace"
 )
 
@@ -335,6 +336,7 @@ func runSingleTrace(ctx context.Context, session *wsTraceSession, setup *traceEx
 		Language:     setup.Config.Lang,
 		Hops:         convertHops(res, setup.Config.Lang),
 		DurationMs:   duration.Milliseconds(),
+		StopReason:   service.NewTraceStopReason(res.StopReason),
 	}
 
 	if err := session.send(wsEnvelope{Type: "complete", Data: final}); err != nil {
@@ -348,12 +350,19 @@ func runMTRTrace(parentCtx context.Context, session *wsTraceSession, setup *trac
 	maxPerHop := setup.Req.MaxRounds // 0 = unlimited
 
 	iteration := 0
+	var pathEnd *service.TraceStopReason
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	err := executeMTRRaw(ctx, session, setup, trace.MTRRawOptions{
 		HopInterval: hopInterval,
 		MaxPerHop:   maxPerHop,
+		OnPathEnd: func(reason *trace.StopReason) {
+			pathEnd = service.NewTraceStopReason(reason)
+			if err := session.send(wsEnvelope{Type: "path_end", Data: pathEnd}); err != nil {
+				cancel()
+			}
+		},
 	}, func(rec trace.MTRRawRecord) {
 		if rec.Iteration > iteration {
 			iteration = rec.Iteration
@@ -369,7 +378,7 @@ func runMTRTrace(parentCtx context.Context, session *wsTraceSession, setup *trac
 	}
 
 	if !session.closed.Load() {
-		_ = session.send(wsEnvelope{Type: "complete", Data: gin.H{"iteration": iteration}})
+		_ = session.send(wsEnvelope{Type: "complete", Data: gin.H{"iteration": iteration, "path_end": pathEnd}})
 	}
 }
 
