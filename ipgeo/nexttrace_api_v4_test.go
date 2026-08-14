@@ -75,7 +75,7 @@ func isolateNextTraceAPIV4ProxyEnv(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPNormalizesTimeout(t *testing.T) {
+func TestNextTraceAPIV4GeoIPNormalizesTimeout(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
 	oldFactory := nextTraceAPIV4HTTPClientFactory
@@ -112,9 +112,9 @@ func TestLeoIPNextTraceAPIV4HTTPNormalizesTimeout(t *testing.T) {
 				client.Timeout = timeout
 				return client
 			}
-			geo, err := LeoIPNextTraceAPIV4HTTP("1.1.1.1", tt.timeout, "cn", false)
+			geo, err := NextTraceAPIV4GeoIP("1.1.1.1", tt.timeout, "cn", false)
 			if err != nil {
-				t.Fatalf("LeoIPNextTraceAPIV4HTTP() error = %v", err)
+				t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
 			}
 			if geo.IP != "1.1.1.1" {
 				t.Fatalf("IP = %q, want 1.1.1.1", geo.IP)
@@ -126,7 +126,7 @@ func TestLeoIPNextTraceAPIV4HTTPNormalizesTimeout(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPUsesTimeoutAsTotalBudget(t *testing.T) {
+func TestNextTraceAPIV4GeoIPUsesTimeoutAsTotalBudget(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	withNextTraceAPIV4RetryDelays(t, 3*time.Second, 3*time.Second)
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
@@ -153,10 +153,10 @@ func TestLeoIPNextTraceAPIV4HTTPUsesTimeoutAsTotalBudget(t *testing.T) {
 	resetNextTraceAPIV4ClientCache()
 
 	start := time.Now()
-	_, err := LeoIPNextTraceAPIV4HTTP("1.1.1.1", 2*time.Second, "cn", false)
+	_, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false)
 	elapsed := time.Since(start)
 	if err == nil {
-		t.Fatal("LeoIPNextTraceAPIV4HTTP() error = nil, want error")
+		t.Fatal("NextTraceAPIV4GeoIP() error = nil, want error")
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1 before timeout budget stops retry", attempts)
@@ -166,7 +166,7 @@ func TestLeoIPNextTraceAPIV4HTTPUsesTimeoutAsTotalBudget(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPSharesTimeoutWithFastIPPrewarm(t *testing.T) {
+func TestNextTraceAPIV4GeoIPSharesTimeoutWithFastIPPrewarm(t *testing.T) {
 	isolateNextTraceAPIV4ProxyEnv(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
@@ -220,15 +220,15 @@ func TestLeoIPNextTraceAPIV4HTTPSharesTimeoutWithFastIPPrewarm(t *testing.T) {
 	}
 	resetNextTraceAPIV4ClientCache()
 
-	if _, err := LeoIPNextTraceAPIV4HTTP("1.1.1.1", timeout, "cn", false); err != nil {
-		t.Fatalf("LeoIPNextTraceAPIV4HTTP() error = %v", err)
+	if _, err := NextTraceAPIV4GeoIP("1.1.1.1", timeout, "cn", false); err != nil {
+		t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
 	}
 	if lookupRemaining >= timeout-100*time.Millisecond {
 		t.Fatalf("lookup remaining timeout = %s, want FastIP prewarm charged to same budget", lookupRemaining)
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPReusesCachedClientAndConnection(t *testing.T) {
+func TestNextTraceAPIV4GeoIPReusesCachedClientAndConnection(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
 	oldFactory := nextTraceAPIV4HTTPClientFactory
@@ -262,9 +262,9 @@ func TestLeoIPNextTraceAPIV4HTTPReusesCachedClientAndConnection(t *testing.T) {
 	resetNextTraceAPIV4ClientCache()
 
 	for _, ip := range []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"} {
-		geo, err := LeoIPNextTraceAPIV4HTTP(ip, 2*time.Second, "cn", false)
+		geo, err := NextTraceAPIV4GeoIP(ip, 2*time.Second, "cn", false)
 		if err != nil {
-			t.Fatalf("LeoIPNextTraceAPIV4HTTP(%s) error = %v", ip, err)
+			t.Fatalf("NextTraceAPIV4GeoIP(%s) error = %v", ip, err)
 		}
 		if geo.IP != ip {
 			t.Fatalf("IP = %q, want %s", geo.IP, ip)
@@ -279,7 +279,7 @@ func TestLeoIPNextTraceAPIV4HTTPReusesCachedClientAndConnection(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPUsesFastIPForAPIEndpoint(t *testing.T) {
+func TestNextTraceAPIV4GeoIPUsesFastIPForAPIEndpoint(t *testing.T) {
 	isolateNextTraceAPIV4ProxyEnv(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
@@ -334,9 +334,9 @@ func TestLeoIPNextTraceAPIV4HTTPUsesFastIPForAPIEndpoint(t *testing.T) {
 	}
 	resetNextTraceAPIV4ClientCache()
 
-	geo, err := LeoIPNextTraceAPIV4HTTP("1.1.1.1", 2*time.Second, "cn", false)
+	geo, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false)
 	if err != nil {
-		t.Fatalf("LeoIPNextTraceAPIV4HTTP() error = %v", err)
+		t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
 	}
 	if geo.IP != "1.1.1.1" {
 		t.Fatalf("IP = %q, want 1.1.1.1", geo.IP)
@@ -487,7 +487,7 @@ func TestNewNextTraceAPIV4HTTPClientSkipsFastIPDialForStandardProxyEnv(t *testin
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPSkipsFastIPForCustomEndpoint(t *testing.T) {
+func TestNextTraceAPIV4GeoIPSkipsFastIPForCustomEndpoint(t *testing.T) {
 	isolateNextTraceAPIV4ProxyEnv(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
@@ -514,9 +514,9 @@ func TestLeoIPNextTraceAPIV4HTTPSkipsFastIPForCustomEndpoint(t *testing.T) {
 	nextTraceAPIV4GeoEndpoint = srv.URL
 	resetNextTraceAPIV4ClientCache()
 
-	geo, err := LeoIPNextTraceAPIV4HTTP("8.8.8.8", 2*time.Second, "cn", false)
+	geo, err := NextTraceAPIV4GeoIP("8.8.8.8", 2*time.Second, "cn", false)
 	if err != nil {
-		t.Fatalf("LeoIPNextTraceAPIV4HTTP() error = %v", err)
+		t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
 	}
 	if geo.IP != "8.8.8.8" {
 		t.Fatalf("IP = %q, want 8.8.8.8", geo.IP)
@@ -526,7 +526,7 @@ func TestLeoIPNextTraceAPIV4HTTPSkipsFastIPForCustomEndpoint(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPUsesProxyInsteadOfFastIP(t *testing.T) {
+func TestNextTraceAPIV4GeoIPUsesProxyInsteadOfFastIP(t *testing.T) {
 	isolateNextTraceAPIV4ProxyEnv(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
@@ -565,9 +565,9 @@ func TestLeoIPNextTraceAPIV4HTTPUsesProxyInsteadOfFastIP(t *testing.T) {
 	nextTraceAPIV4GeoEndpoint = "http://" + nextTraceAPIV4APIHost + ":65535" + nextTraceAPIV4GeoPath
 	resetNextTraceAPIV4ClientCache()
 
-	geo, err := LeoIPNextTraceAPIV4HTTP("9.9.9.9", 2*time.Second, "cn", false)
+	geo, err := NextTraceAPIV4GeoIP("9.9.9.9", 2*time.Second, "cn", false)
 	if err != nil {
-		t.Fatalf("LeoIPNextTraceAPIV4HTTP() error = %v", err)
+		t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
 	}
 	if geo.IP != "9.9.9.9" {
 		t.Fatalf("IP = %q, want 9.9.9.9", geo.IP)
@@ -580,7 +580,7 @@ func TestLeoIPNextTraceAPIV4HTTPUsesProxyInsteadOfFastIP(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesTokenAndTimeout(t *testing.T) {
+func TestNextTraceAPIV4GeoIPCacheKeyIncludesTokenAndTimeout(t *testing.T) {
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
 	oldFactory := nextTraceAPIV4HTTPClientFactory
 	t.Cleanup(func() {
@@ -606,10 +606,10 @@ func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesTokenAndTimeout(t *testing.T) {
 	resetNextTraceAPIV4ClientCache()
 
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "token-a")
-	if _, err := LeoIPNextTraceAPIV4HTTP("1.1.1.1", 2*time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false); err != nil {
 		t.Fatalf("first lookup error = %v", err)
 	}
-	if _, err := LeoIPNextTraceAPIV4HTTP("8.8.8.8", time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("8.8.8.8", time.Second, "cn", false); err != nil {
 		t.Fatalf("same normalized timeout lookup error = %v", err)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
@@ -617,14 +617,14 @@ func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesTokenAndTimeout(t *testing.T) {
 	}
 
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "token-b")
-	if _, err := LeoIPNextTraceAPIV4HTTP("9.9.9.9", 2*time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("9.9.9.9", 2*time.Second, "cn", false); err != nil {
 		t.Fatalf("token change lookup error = %v", err)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 2 {
 		t.Fatalf("factory calls after token change = %d, want 2", got)
 	}
 
-	if _, err := LeoIPNextTraceAPIV4HTTP("1.0.0.1", 3*time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("1.0.0.1", 3*time.Second, "cn", false); err != nil {
 		t.Fatalf("timeout change lookup error = %v", err)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
@@ -632,7 +632,7 @@ func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesTokenAndTimeout(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesGeoDNSResolver(t *testing.T) {
+func TestNextTraceAPIV4GeoIPCacheKeyIncludesGeoDNSResolver(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
 	oldFactory := nextTraceAPIV4HTTPClientFactory
@@ -661,7 +661,7 @@ func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesGeoDNSResolver(t *testing.T) {
 	util.SetGeoDNSResolver("")
 	resetNextTraceAPIV4ClientCache()
 
-	if _, err := LeoIPNextTraceAPIV4HTTP("1.1.1.1", 2*time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false); err != nil {
 		t.Fatalf("default resolver lookup error = %v", err)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
@@ -669,7 +669,7 @@ func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesGeoDNSResolver(t *testing.T) {
 	}
 
 	util.SetGeoDNSResolver("google")
-	if _, err := LeoIPNextTraceAPIV4HTTP("8.8.8.8", 2*time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("8.8.8.8", 2*time.Second, "cn", false); err != nil {
 		t.Fatalf("google resolver lookup error = %v", err)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 2 {
@@ -677,7 +677,7 @@ func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesGeoDNSResolver(t *testing.T) {
 	}
 
 	util.SetGeoDNSResolver("cloudflare")
-	if _, err := LeoIPNextTraceAPIV4HTTP("9.9.9.9", 2*time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("9.9.9.9", 2*time.Second, "cn", false); err != nil {
 		t.Fatalf("cloudflare resolver lookup error = %v", err)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
@@ -685,7 +685,7 @@ func TestLeoIPNextTraceAPIV4HTTPCacheKeyIncludesGeoDNSResolver(t *testing.T) {
 	}
 
 	util.SetGeoDNSResolver("google")
-	if _, err := LeoIPNextTraceAPIV4HTTP("1.0.0.1", 2*time.Second, "cn", false); err != nil {
+	if _, err := NextTraceAPIV4GeoIP("1.0.0.1", 2*time.Second, "cn", false); err != nil {
 		t.Fatalf("google resolver reuse lookup error = %v", err)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
@@ -842,7 +842,7 @@ func TestNextTraceAPIV4ClientCacheEvictsMultipleOldestEntries(t *testing.T) {
 	}
 }
 
-func TestLeoIPNextTraceAPIV4HTTPCachesClientConcurrently(t *testing.T) {
+func TestNextTraceAPIV4GeoIPCachesClientConcurrently(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
 	oldFactory := nextTraceAPIV4HTTPClientFactory
@@ -874,7 +874,7 @@ func TestLeoIPNextTraceAPIV4HTTPCachesClientConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := LeoIPNextTraceAPIV4HTTP("1.1.1.1", 2*time.Second, "cn", false)
+			_, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false)
 			errCh <- err
 		}()
 	}
@@ -1109,7 +1109,7 @@ func TestDecodeNextTraceAPIV4GeoOwnerMatchesV3(t *testing.T) {
 		IPPools.poolMux.Unlock()
 	}()
 
-	dispatchLeoMessage(string(raw))
+	dispatchNextTraceAPIV3Message(string(raw))
 	var v3Geo IPGeoData
 	select {
 	case v3Geo = <-ch:

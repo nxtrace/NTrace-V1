@@ -16,7 +16,7 @@ import (
 /***
  * 原理介绍 By Leo
  * WebSocket 一共开启了一个发送和一个接收协程，在 New 了一个连接的实例对象后，不给予关闭，持续化连接
- * 当有新的IP请求时，一直在等待IP数据的发送协程接收到从 leo.go 的 sendIPRequest 函数发来的IP数据，向服务端发送数据
+ * 当有新的IP请求时，一直在等待IP数据的发送协程接收到从 nexttrace_api_v3.go 的 sendNextTraceAPIV3IPRequest 函数发来的IP数据，向服务端发送数据
  * 由于实际使用时有大量并发，但是 ws 在同一时刻每次有且只能处理一次发送一条数据，所以必须给 ws 连接上互斥锁，保证每次只有一个协程访问
  * 运作模型可以理解为一个 Node 一直在等待数据，当获得一个新的任务后，转交给下一个协程，不再关注这个 Node 的下一步处理过程，并且回到空闲状态继续等待新的任务
 ***/
@@ -31,9 +31,9 @@ var IPPools = IPPool{
 	pool: make(map[string]chan IPGeoData),
 }
 
-var getLeoWsConn = wshandle.GetWsConn
+var getNextTraceAPIV3WSConn = wshandle.GetWsConn
 
-func sendIPRequest(ctx context.Context, wsConn *wshandle.WsConn, ip string) bool {
+func sendNextTraceAPIV3IPRequest(ctx context.Context, wsConn *wshandle.WsConn, ip string) bool {
 	if wsConn == nil {
 		return false
 	}
@@ -51,31 +51,31 @@ func sendIPRequest(ctx context.Context, wsConn *wshandle.WsConn, ip string) bool
 	}
 }
 
-func receiveParse() {
+func receiveNextTraceAPIV3Responses() {
 	for {
 		// 获得连接实例
-		wsConn := getLeoWsConn()
+		wsConn := getNextTraceAPIV3WSConn()
 		if wsConn == nil {
 			return
 		}
-		if !receiveParseConn(wsConn) {
+		if !receiveNextTraceAPIV3Conn(wsConn) {
 			return
 		}
 	}
 }
 
-func receiveParseConn(wsConn *wshandle.WsConn) bool {
+func receiveNextTraceAPIV3Conn(wsConn *wshandle.WsConn) bool {
 	// 防止多协程抢夺一个ws连接，导致死锁，当一个协程获得ws的控制权后上锁
 	wsConn.ConnMux.Lock()
 	// 函数退出时解锁，给其他协程使用
 	defer wsConn.ConnMux.Unlock()
 	for data := range wsConn.MsgReceiveCh {
-		dispatchLeoMessage(data)
+		dispatchNextTraceAPIV3Message(data)
 	}
-	return getLeoWsConn() != wsConn
+	return getNextTraceAPIV3WSConn() != wsConn
 }
 
-func dispatchLeoMessage(data string) {
+func dispatchNextTraceAPIV3Message(data string) {
 	// json解析 -> data
 	res := gjson.Parse(data)
 	// 根据返回的IP信息，发送给对应等待回复的IP通道上
@@ -141,45 +141,46 @@ func deliverGeo(ch chan IPGeoData, geo IPGeoData) {
 	}
 }
 
-// 当前的实现中，每次调用 receiveParse() 都会锁定 WebSocket 连接
-// 当前为单例模式，只启动一个 receiveParse 协程
+// 当前的实现中，每次调用 receiveNextTraceAPIV3Responses() 都会锁定 WebSocket 连接
+// 当前为单例模式，只启动一个 NextTrace API v3 接收协程
 
 var (
-	receiveParseMu      sync.Mutex
-	receiveParseRunning bool
-	receiveParseRestart bool
+	nextTraceAPIV3ReceiveMu      sync.Mutex
+	nextTraceAPIV3ReceiveRunning bool
+	nextTraceAPIV3ReceiveRestart bool
 )
 
-func startReceiveParse() {
-	receiveParseMu.Lock()
-	if receiveParseRunning {
-		receiveParseRestart = true
-		receiveParseMu.Unlock()
+func startNextTraceAPIV3Receiver() {
+	nextTraceAPIV3ReceiveMu.Lock()
+	if nextTraceAPIV3ReceiveRunning {
+		nextTraceAPIV3ReceiveRestart = true
+		nextTraceAPIV3ReceiveMu.Unlock()
 		return
 	}
-	receiveParseRunning = true
-	receiveParseRestart = false
-	receiveParseMu.Unlock()
+	nextTraceAPIV3ReceiveRunning = true
+	nextTraceAPIV3ReceiveRestart = false
+	nextTraceAPIV3ReceiveMu.Unlock()
 
-	go runReceiveParseLoop()
+	go runNextTraceAPIV3ReceiveLoop()
 }
 
-func runReceiveParseLoop() {
+func runNextTraceAPIV3ReceiveLoop() {
 	for {
-		receiveParse()
+		receiveNextTraceAPIV3Responses()
 
-		receiveParseMu.Lock()
-		if !receiveParseRestart {
-			receiveParseRunning = false
-			receiveParseMu.Unlock()
+		nextTraceAPIV3ReceiveMu.Lock()
+		if !nextTraceAPIV3ReceiveRestart {
+			nextTraceAPIV3ReceiveRunning = false
+			nextTraceAPIV3ReceiveMu.Unlock()
 			return
 		}
-		receiveParseRestart = false
-		receiveParseMu.Unlock()
+		nextTraceAPIV3ReceiveRestart = false
+		nextTraceAPIV3ReceiveMu.Unlock()
 	}
 }
 
-func LeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
+// NextTraceAPIV3GeoIP queries the NextTrace API v3 WebSocket service.
+func NextTraceAPIV3GeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
 	// TODO: 根据lang的值请求中文/英文API
 	// TODO: 根据maptrace的值决定是否请求经纬度信息
 	if timeout < 2*time.Second {
@@ -200,7 +201,7 @@ func LeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeo
 	}
 	drainStaleGeo(ch)
 
-	wsConn := getLeoWsConn()
+	wsConn := getNextTraceAPIV3WSConn()
 	if wsConn == nil {
 		return &IPGeoData{}, errors.New("TimeOut")
 	}
@@ -215,12 +216,12 @@ func LeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeo
 	}
 
 	// 发送请求
-	if !sendIPRequest(waitCtx, wsConn, ip) {
+	if !sendNextTraceAPIV3IPRequest(waitCtx, wsConn, ip) {
 		return &IPGeoData{}, errors.New("TimeOut")
 	}
 
-	// 确保 receiveParse 只启动一次
-	startReceiveParse()
+	// 确保 NextTrace API v3 接收协程只启动一次
+	startNextTraceAPIV3Receiver()
 
 	// 等待数据返回或超时
 	select {
@@ -229,6 +230,12 @@ func LeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeo
 	case <-waitCtx.Done():
 		return &IPGeoData{}, errors.New("TimeOut")
 	}
+}
+
+// LeoIP is kept for source compatibility.
+// Deprecated: use NextTraceAPIV3GeoIP.
+func LeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
+	return NextTraceAPIV3GeoIP(ip, timeout, lang, maptrace)
 }
 
 func drainStaleGeo(ch chan IPGeoData) {

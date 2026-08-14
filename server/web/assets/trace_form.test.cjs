@@ -7,7 +7,7 @@ test('buildTracePayload preserves negative packet_size and zero tos', () => {
   const payload = buildTracePayload({
     target: '1.1.1.1',
     protocol: 'icmp',
-    dataProvider: 'LeoMoeAPI',
+    dataProvider: 'NextTrace-API',
     disableMaptrace: false,
     language: 'cn',
     mode: 'single',

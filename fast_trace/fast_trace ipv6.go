@@ -52,7 +52,7 @@ func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
 		AlwaysWaitRDNS:   f.ParamsFastTrace.AlwaysWaitRDNS,
 		PacketInterval:   100,
 		TTLInterval:      500,
-		IPGeoSource:      ipgeo.GetSource("LeoMoeAPI"),
+		IPGeoSource:      ipgeo.GetSource(ipgeo.NextTraceAPIProvider),
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
 		SourceDevice:     f.ParamsFastTrace.SrcDev,

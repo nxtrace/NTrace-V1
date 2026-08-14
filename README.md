@@ -303,7 +303,7 @@ Normal traceroute reports why it stopped: destination reached, a terminal unreac
 When multiple normal-trace output modes are selected, precedence is `--json` > `--table` > `--classic` > `--raw` > `--output` > realtime output. If a higher-priority mode overrides an explicit `--output` or `--output-default`, NextTrace reports that choice on stderr and does not create the ignored log file.
 
 PS: The route visualization module is an independent component, You can find its source code at [nxtrace/traceMap](https://github.com/nxtrace/traceMap).  
-The routing visualization function requires the geographical coordinates of each Hop, but third-party APIs generally do not provide this information, so this function is currently only supported when used with LeoMoeAPI.
+The routing visualization function requires the geographical coordinates of each hop. It is currently available with NextTrace API, IPInfo, and IP-API.com.
 
 #### Mandatory Configuration Steps for `Windows` Users
 
@@ -591,7 +591,7 @@ When running in a terminal (TTY), MTR mode uses an **interactive full-screen TUI
 - **`d` / `D`** — toggle the optional history display; the default TUI remains the classic metric table
 - **`g` / `G`** — in history display only, cycle History chart mode: heatmap → bars → sparkline
 - The TUI header displays **source → destination**, with `--source`/`--dev` information when specified.
-- When using LeoMoeAPI, the preferred API IP address is shown in the header.
+- When using NextTrace API, the preferred API IP address is shown in the header.
 - Uses the **alternate screen buffer**, so your previous terminal history is preserved on exit.
 - When stdin is not a TTY (e.g. piped), it falls back to a simple table refresh.
 
@@ -621,7 +621,7 @@ Wide report mode (`-w` / `--wide`) keeps the current full-information behavior, 
 
 When `--raw` is used together with MTR (`--mtr`, `-r`, or `-w`), NextTrace enters **MTR raw stream mode**.
 
-If the active data provider is `LeoMoeAPI`, NextTrace first prints one uncolored API info preamble line:
+If the active data provider is `NextTrace-API`, NextTrace first prints one uncolored API info preamble line:
 
 ```text
 [NextTrace API] preferred API IP - [2403:18c0:1001:462:dd:38ff:fe48:e0c5] - 21.33ms - DMIT.NRT
@@ -649,10 +649,14 @@ In MTR mode (`--mtr`, `-r`, `-w`, including `--raw`), `-i/--ttl-time` sets the *
 >
 > Note: `--mtr` cannot be used together with `--table`, `--classic`, `--json`, `--output`, `--output-default`, `--route-path`, `--from`, `--fast-trace`, `--file`, or `--deploy`.
 
-#### `NextTrace` supports users to select their own IP API (currently supports: `LeoMoeAPI`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `CHUNZHEN`)
+#### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `CHUNZHEN`)
+
+##### LeoMoeAPI name migration
+
+`LeoMoeAPI` is the retired name of the project's official API. The current name is **NextTrace API**, and its machine-readable `data_provider` value is `NextTrace-API`. The former `LeoMoeAPI` and `LeoMoe` values remain accepted as silent, case-insensitive compatibility aliases for existing scripts, but NextTrace always reports the canonical value. The WebSocket/PoW implementation is called **NextTrace API v3**, while the token-authenticated HTTP implementation is called **NextTrace API v4**.
 
 ```bash
-# You can specify the IP database by yourself [IP-API.com here], if not specified, LeoMoeAPI will be used
+# You can specify the IP database by yourself [IP-API.com here]; NextTrace API is used by default
 nexttrace --data-provider ip-api.com
 ## Note There are frequency limits for free queries of the ipinfo and IPInsight APIs. You can purchase services from these providers to remove the limits
 ##      If necessary, you can clone this project, add the token provided by ipinfo or IPInsight and compile it yourself
@@ -673,7 +677,7 @@ export NEXTTRACE_CHUNZHENURL=http://127.0.0.1:2060
 export NEXTTRACE_DATAPROVIDER=ipinfo
 ```
 
-LeoMoeAPI keeps the old v3 WebSocket API as the default when no NextTrace API v4 token is available. To use the NextTrace API v4 HTTP GeoIP endpoint for the current shell session, run the setup command and paste your token:
+NextTrace API v3 WebSocket/PoW remains the default when no NextTrace API v4 token is available. To use the NextTrace API v4 HTTP GeoIP endpoint for the current shell session, run the setup command and paste your token:
 
 ```bash
 # Token page:
@@ -684,7 +688,7 @@ nexttrace -x
 
 `nexttrace -x` stores the token in temporary files: one scoped to the parent process ID, which is normally your current shell, and one same-user fallback file for wrapper commands such as `go run`. Later `nexttrace` commands first read the real `NEXTTRACE_API_V4_TOKEN`, then the parent-PID file, then the fallback file, and load the value into the process-local environment. The command does not write shell profiles, permanent environment variables, or `nt_config.yaml`.
 
-With `NEXTTRACE_API_V4_TOKEN` set and the active provider still `LeoMoeAPI`, NextTrace queries `GET https://api.nxtrace.org/v4/ipGeo?ip=<ip>` with `X-NextTrace-Token: <token>`. The request has no JSON body. Successful responses are direct GeoIP JSON mapped to the normal output fields; quota metadata is exposed only in headers (`X-NextTrace-Quota-Remaining`, `X-NextTrace-Quota-Expires-At`, `X-NextTrace-Quota-Cost`, `X-NextTrace-Quota-Source`) and does not change the default output format. Error responses prefer `{"error":{"message":"..."}}`; known statuses include `400` for empty/illegal IP, `401` unauthorized, `429` quota exhausted, and `500` internal server error. NextTrace API v4 token failures do not fall back to the old v3 WebSocket API.
+With `NEXTTRACE_API_V4_TOKEN` set and the active provider still `NextTrace-API`, NextTrace queries `GET https://api.nxtrace.org/v4/ipGeo?ip=<ip>` with `X-NextTrace-Token: <token>`. The request has no JSON body. Successful responses are direct GeoIP JSON mapped to the normal output fields; quota metadata is exposed only in headers (`X-NextTrace-Quota-Remaining`, `X-NextTrace-Quota-Expires-At`, `X-NextTrace-Quota-Cost`, `X-NextTrace-Quota-Source`) and does not change the default output format. Error responses prefer `{"error":{"message":"..."}}`; known statuses include `400` for empty/illegal IP, `401` unauthorized, `429` quota exhausted, and `500` internal server error. NextTrace API v4 token failures do not fall back to NextTrace API v3.
 
 #### `NextTrace` supports mixed parameters and shortened parameters
 
@@ -723,7 +727,7 @@ NextTrace BackEnd is now open-source.
 
 https://github.com/sjlleo/nexttrace-backend
 
-NextTrace `LeoMoeAPI` now utilizes the Proof of Work (POW) mechanism to prevent abuse, where NextTrace introduces the powclient library as a client-side component. Both the POW CLIENT and SERVER are open source, and everyone is welcome to use them. (Please direct any POW module-related questions to the corresponding repositories)
+NextTrace API v3 utilizes the Proof of Work (PoW) mechanism to prevent abuse, with NextTrace using the powclient library as its client component. Both the PoW client and server are open source. Please direct PoW-related questions to their respective repositories.
 
 - [GitHub - tsosunchia/powclient: Proof of Work CLIENT for NextTrace](https://github.com/tsosunchia/powclient)
 - [GitHub - tsosunchia/powserver: Proof of Work SERVER for NextTrace](https://github.com/tsosunchia/powserver)
@@ -753,10 +757,10 @@ NextTrace currently reads the following environment variables. For `NEXTTRACE_*`
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `NEXTTRACE_HOSTPORT` | `api.nxtrace.org` | Override the backend host or `host:port` used by LeoMoeAPI, tracemap, and FastIP flows. |
-| `NEXTTRACE_TOKEN` | unset | Pre-supplied LeoMoeAPI bearer token; when present, token fetching via PoW is skipped. |
-| `NEXTTRACE_API_V4_TOKEN` | unset | LeoMoeAPI NextTrace API v4 HTTP GeoIP token. When unset, NextTrace also checks the temporary token files written by `nexttrace -x`; if neither exists, LeoMoeAPI keeps using the old v3 WebSocket / PoW flow. |
-| `NEXTTRACE_POWPROVIDER` | `api.nxtrace.org` | Select the PoW provider. The built-in non-default alias is `sakura`. |
+| `NEXTTRACE_HOSTPORT` | `api.nxtrace.org` | Override the backend host or `host:port` used by NextTrace API v3, tracemap, and FastIP flows. |
+| `NEXTTRACE_TOKEN` | unset | Pre-supplied NextTrace API v3 bearer token; when present, token fetching via PoW is skipped. |
+| `NEXTTRACE_API_V4_TOKEN` | unset | NextTrace API v4 HTTP GeoIP token. When unset, NextTrace also checks the temporary token files written by `nexttrace -x`; if neither exists, NextTrace API v3 WebSocket/PoW remains active. |
+| `NEXTTRACE_POWPROVIDER` | `api.nxtrace.org` | Select the PoW provider for NextTrace API v3. The built-in non-default alias is `sakura`. |
 | `NEXTTRACE_DEPLOY_ADDR` | unset | Default listen address for `--deploy` when `--listen` is not provided. |
 | `NEXTTRACE_DEPLOY_TOKEN` | unset | Token for `--deploy` WebUI/API/WebSocket/MCP access. CLI `--deploy-token` takes precedence. |
 | `NEXTTRACE_ALLOW_CROSS_ORIGIN` | `0` | Only for `--deploy`: allow cross-origin browser access to the Web UI / API. Disabled by default for safety. |
@@ -799,7 +803,7 @@ Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
                  [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
                  [--max-attempts <integer>] [--parallel-requests <integer>]
                  [-m|--max-hops <integer>] [-d|--data-provider
-                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|LeoMoeAPI|leomoeapi|ipdb.one|disable-geoip)]
+                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip)]
                  [--pow-provider (api.nxtrace.org|sakura)] [-n|--no-rdns]
                  [-a|--always-rdns] [-P|--route-path] [--dn42] [-o|--output
                  "<value>"] [-O|--output-default] [--table] [--raw]
@@ -851,13 +855,14 @@ Arguments:
                                      Default: 18
   -m  --max-hops                     Set the max number of hops (max TTL to be
                                      reached). Default: 30
-  -d  --data-provider                Choose IP Geograph Data Provider [IP.SB,
-                                     IPInfo, IPInsight, IP-API.com,
-                                     IPInfoLocal, CHUNZHEN, disable-geoip].
-                                     Default: LeoMoeAPI
-      --pow-provider                 Choose PoW Provider [api.nxtrace.org,
-                                     sakura] For China mainland users, please
-                                     use sakura. Default: api.nxtrace.org
+  -d  --data-provider                Choose IP Geograph Data Provider
+                                     [NextTrace-API, IP.SB, IPInfo, IPInsight,
+                                     IP-API.com, IPInfoLocal, CHUNZHEN,
+                                     disable-geoip]. Default: NextTrace-API
+      --pow-provider                 Choose PoW Provider for NextTrace API v3
+                                     [api.nxtrace.org, sakura] For China
+                                     mainland users, please use sakura.
+                                     Default: api.nxtrace.org
   -n  --no-rdns                      Do not resolve IP addresses to their
                                      domain names
   -a  --always-rdns                  Always resolve IP addresses to their
@@ -1052,19 +1057,19 @@ Thank you to all the test users for your enthusiastic support. This app has succ
 [https://github.com/nxtrace/NextTraceroute](https://github.com/nxtrace/NextTraceroute)  
 <a href='https://play.google.com/store/apps/details?id=com.surfaceocean.nexttraceroute&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1'><img alt='Get it on Google Play' width="128" height="48" src='https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png'/></a>
 
-## LeoMoeAPI Credits
+## NextTrace API Credits
 
-NextTrace focuses on Golang Traceroute implementations, and its LeoMoeAPI geolocation information is not supported by raw data, so a commercial version is not possible.
+NextTrace focuses on Golang traceroute implementations, and its NextTrace API geolocation information is not supported by raw data, so a commercial version is not possible.
 
-The LeoMoeAPI data is subject to copyright restrictions from multiple data sources, and is only used for the purpose of displaying the geolocation of route tracing.
+The NextTrace API data is subject to copyright restrictions from multiple data sources and is only used to display traceroute geolocation.
 
 1. We would like to credit samleong123 for providing nodes in Malaysia, TOHUNET Looking Glass for global nodes, and Ping.sx from Misaka, where more than 80% of reliable calibration data comes from ping/mtr reports.
 
-2. At the same time, we would like to credit isyekong for their contribution to rDNS-based calibration ideas and data. LeoMoeAPI is accelerating the development of rDNS resolution function, and has already achieved automated geolocation resolution for some backbone networks, but there are some misjudgments. We hope that NextTrace will become a One-Man ISP-friendly traceroute tool in the future, and we are working on improving the calibration of these ASN micro-backbones as much as possible.
+2. At the same time, we would like to credit isyekong for their contribution to rDNS-based calibration ideas and data. NextTrace API is accelerating the development of rDNS resolution and has already achieved automated geolocation resolution for some backbone networks, though some results remain inaccurate. We hope that NextTrace will become a One-Man ISP-friendly traceroute tool in the future, and we are working on improving the calibration of these ASN micro-backbones as much as possible.
 
 3. In terms of development, I would like to credit missuo and zhshch for their help with Go cross-compilation, design concepts and TCP/UDP Traceroute refactoring, and tsosunchia for their support on TraceMap.
 
-4. I would also like to credit FFEE_CO, TheresaQWQ, stydxm and others for their help. LeoMoeAPI has received a lot of support since its first release, so I would like to credit them all!
+4. I would also like to credit FFEE_CO, TheresaQWQ, stydxm and others for their help. NextTrace API has received a lot of support since its first release, so I would like to credit them all!
 
 We hope you can give us as much feedback as possible on IP geolocation errors (see issue) so that it can be calibrated in the first place and others can benefit from it.
 

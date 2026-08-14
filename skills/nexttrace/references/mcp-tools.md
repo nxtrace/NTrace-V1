@@ -36,7 +36,7 @@ Supported:
   "begin_hop": 1,
   "ipv4_only": false,
   "ipv6_only": false,
-  "data_provider": "LeoMoeAPI|IP.SB|IPInfo|IPInfoLocal|IPInsight|ip-api.com|chunzhen|DN42|disable-geoip|ipdb.one",
+  "data_provider": "NextTrace-API|IP.SB|IPInfo|IPInfoLocal|IPInsight|ip-api.com|chunzhen|DN42|disable-geoip|ipdb.one",
   "pow_provider": "api.nxtrace.org|sakura",
   "dot_server": "dnssb|aliyun|dnspod|google|cloudflare",
   "disable_rdns": false,
@@ -53,6 +53,8 @@ Supported:
   "max_attempts": 0
 }
 ```
+
+`NextTrace-API` is the canonical `data_provider` value for the official API and is always used in responses.
 
 Output includes `target`, `resolved_ip`, `protocol`, `data_provider`, `language`, `hops[]`, `duration_ms`, and optional `stop_reason`.
 

@@ -13,6 +13,58 @@ import (
 	"github.com/nxtrace/NTrace-core/util"
 )
 
+func TestNormalizeDataProviderCanonicalizesNextTraceAPIAliases(t *testing.T) {
+	for _, input := range []string{
+		ipgeo.NextTraceAPIProvider,
+		"nexttrace-api",
+		"NEXTTRACE-API",
+		"LeoMoeAPI",
+		"leomoeapi",
+		"LeoMoe",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if got := normalizeDataProvider(input, ""); got != ipgeo.NextTraceAPIProvider {
+				t.Fatalf("normalizeDataProvider(%q) = %q, want %q", input, got, ipgeo.NextTraceAPIProvider)
+			}
+		})
+	}
+}
+
+func TestResolveDataProviderCanonicalizesEnvironmentOverride(t *testing.T) {
+	oldEnvDataProvider := util.EnvDataProvider
+	defer func() { util.EnvDataProvider = oldEnvDataProvider }()
+	util.EnvDataProvider = "leomoeapi"
+
+	req := TraceRequest{DataProvider: "NEXTTRACE-API"}
+	got, needsV3 := resolveDataProvider(&req)
+	if got != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("resolveDataProvider() = %q, want %q", got, ipgeo.NextTraceAPIProvider)
+	}
+	if !needsV3 {
+		t.Fatal("resolveDataProvider() needsV3 = false, want true")
+	}
+}
+
+func TestMCPTracerouteServiceResponseCanonicalizesLegacyProvider(t *testing.T) {
+	restore := stubServiceRuntimeForTests(t)
+	defer restore()
+	tracerouteWithContextFn = func(context.Context, trace.Method, trace.Config) (*trace.Result, error) {
+		return &trace.Result{}, nil
+	}
+
+	response, err := New().Traceroute(context.Background(), TraceRequest{
+		Target:          "192.0.2.1",
+		DataProvider:    "lEoMoEaPi",
+		DisableMaptrace: true,
+	})
+	if err != nil {
+		t.Fatalf("Traceroute returned error: %v", err)
+	}
+	if response.DataProvider != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("data_provider = %q, want %q", response.DataProvider, ipgeo.NextTraceAPIProvider)
+	}
+}
+
 func TestMTRParameterBoundariesMatchMCPBehavior(t *testing.T) {
 	caps, err := New().Capabilities(context.Background(), CapabilitiesRequest{})
 	if err != nil {
@@ -209,12 +261,12 @@ func TestNewTraceStopReasonCopiesStableFields(t *testing.T) {
 	}
 }
 
-func TestMTUTraceInitializesDefaultLeoMoeRuntime(t *testing.T) {
+func TestMTUTraceInitializesDefaultNextTraceAPIV3Runtime(t *testing.T) {
 	restore := stubServiceRuntimeForTests(t)
 	defer restore()
 
 	var ensureCalls int
-	ensureLeoMoeConnectionFn = func(context.Context) {
+	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
 	runMTUTraceFn = func(_ context.Context, cfg mtutrace.Config) (*mtutrace.Result, error) {
@@ -233,19 +285,19 @@ func TestMTUTraceInitializesDefaultLeoMoeRuntime(t *testing.T) {
 		t.Fatalf("MTUTrace returned error: %v", err)
 	}
 	if ensureCalls != 1 {
-		t.Fatalf("ensureLeoMoeConnection calls = %d, want 1", ensureCalls)
+		t.Fatalf("ensureNextTraceAPIV3Connection calls = %d, want 1", ensureCalls)
 	}
 	if resp.ResolvedIP != "192.0.2.1" {
 		t.Fatalf("ResolvedIP = %q, want 192.0.2.1", resp.ResolvedIP)
 	}
 }
 
-func TestAnnotateIPsAndGeoLookupInitializeDefaultLeoMoeRuntime(t *testing.T) {
+func TestAnnotateIPsAndGeoLookupInitializeDefaultNextTraceAPIV3Runtime(t *testing.T) {
 	restore := stubServiceRuntimeForTests(t)
 	defer restore()
 
 	var ensureCalls int
-	ensureLeoMoeConnectionFn = func(context.Context) {
+	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
 	lookupIPGeoFn = func(_ context.Context, _ ipgeo.Source, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
@@ -259,18 +311,18 @@ func TestAnnotateIPsAndGeoLookupInitializeDefaultLeoMoeRuntime(t *testing.T) {
 		t.Fatalf("GeoLookup returned error: %v", err)
 	}
 	if ensureCalls != 2 {
-		t.Fatalf("ensureLeoMoeConnection calls = %d, want 2", ensureCalls)
+		t.Fatalf("ensureNextTraceAPIV3Connection calls = %d, want 2", ensureCalls)
 	}
 }
 
-func TestGeoLookupUsesAPIV4FastIPInsteadOfLeoWSWhenTokenConfigured(t *testing.T) {
+func TestGeoLookupUsesNextTraceAPIV4FastIPInsteadOfV3WebSocketWhenTokenConfigured(t *testing.T) {
 	restore := stubServiceRuntimeForTests(t)
 	defer restore()
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "v4-token")
 
 	var ensureCalls int
 	var prepareCalls int
-	ensureLeoMoeConnectionFn = func(context.Context) {
+	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
 	prepareNextTraceAPIV4FastIPFn = func(ctx context.Context, enableOutput bool) error {
@@ -291,21 +343,21 @@ func TestGeoLookupUsesAPIV4FastIPInsteadOfLeoWSWhenTokenConfigured(t *testing.T)
 		t.Fatalf("GeoLookup returned error: %v", err)
 	}
 	if ensureCalls != 0 {
-		t.Fatalf("ensureLeoMoeConnection calls = %d, want 0 with API v4 token", ensureCalls)
+		t.Fatalf("ensureNextTraceAPIV3Connection calls = %d, want 0 with API v4 token", ensureCalls)
 	}
 	if prepareCalls != 1 {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
 	}
 }
 
-func TestGeoLookupFallsBackToLeoWSWhenAPIV4FastIPFails(t *testing.T) {
+func TestGeoLookupFallsBackToNextTraceAPIV3WebSocketWhenV4FastIPFails(t *testing.T) {
 	restore := stubServiceRuntimeForTests(t)
 	defer restore()
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "v4-token")
 
 	var ensureCalls int
 	var prepareCalls int
-	ensureLeoMoeConnectionFn = func(context.Context) {
+	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
 	prepareNextTraceAPIV4FastIPFn = func(context.Context, bool) error {
@@ -323,16 +375,16 @@ func TestGeoLookupFallsBackToLeoWSWhenAPIV4FastIPFails(t *testing.T) {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
 	}
 	if ensureCalls != 1 {
-		t.Fatalf("ensureLeoMoeConnection calls = %d, want 1 after API v4 preheat failure", ensureCalls)
+		t.Fatalf("ensureNextTraceAPIV3Connection calls = %d, want 1 after API v4 preheat failure", ensureCalls)
 	}
 }
 
-func TestAnnotateIPsAndGeoLookupSkipLeoRuntimeForDisabledGeoIP(t *testing.T) {
+func TestAnnotateIPsAndGeoLookupSkipNextTraceAPIRuntimeForDisabledGeoIP(t *testing.T) {
 	restore := stubServiceRuntimeForTests(t)
 	defer restore()
 
 	var ensureCalls int
-	ensureLeoMoeConnectionFn = func(context.Context) {
+	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
 	lookupIPGeoFn = func(_ context.Context, _ ipgeo.Source, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
@@ -346,7 +398,7 @@ func TestAnnotateIPsAndGeoLookupSkipLeoRuntimeForDisabledGeoIP(t *testing.T) {
 		t.Fatalf("GeoLookup returned error: %v", err)
 	}
 	if ensureCalls != 0 {
-		t.Fatalf("ensureLeoMoeConnection calls = %d, want 0", ensureCalls)
+		t.Fatalf("ensureNextTraceAPIV3Connection calls = %d, want 0", ensureCalls)
 	}
 }
 
@@ -379,8 +431,9 @@ func assertMTRBoundaries(t *testing.T, name string, boundaries ParameterBoundari
 func stubServiceRuntimeForTests(t *testing.T) func() {
 	t.Helper()
 
-	oldEnsureLeo := ensureLeoMoeConnectionFn
+	oldEnsureNextTraceAPIV3 := ensureNextTraceAPIV3ConnectionFn
 	oldPrepareFastIP := prepareNextTraceAPIV4FastIPFn
+	oldTracerouteWithContext := tracerouteWithContextFn
 	oldLookupIPGeo := lookupIPGeoFn
 	oldRunMTR := runMTRFn
 	oldRunMTRRaw := runMTRRawFn
@@ -392,11 +445,12 @@ func stubServiceRuntimeForTests(t *testing.T) func() {
 	t.Setenv("TMP", tokenDir)
 	t.Setenv("TEMP", tokenDir)
 	util.EnvDataProvider = ""
-	ensureLeoMoeConnectionFn = func(context.Context) {}
+	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {}
 	prepareNextTraceAPIV4FastIPFn = func(context.Context, bool) error { return nil }
 	return func() {
-		ensureLeoMoeConnectionFn = oldEnsureLeo
+		ensureNextTraceAPIV3ConnectionFn = oldEnsureNextTraceAPIV3
 		prepareNextTraceAPIV4FastIPFn = oldPrepareFastIP
+		tracerouteWithContextFn = oldTracerouteWithContext
 		lookupIPGeoFn = oldLookupIPGeo
 		runMTRFn = oldRunMTR
 		runMTRRawFn = oldRunMTRRaw

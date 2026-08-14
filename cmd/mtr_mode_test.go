@@ -194,23 +194,23 @@ func TestChooseMTRRunMode_RawPriority(t *testing.T) {
 	}
 }
 
-func TestShouldUseAsyncLeoForMTR_RequiresTrueTTYMode(t *testing.T) {
+func TestShouldUseAsyncNextTraceAPIV3ForMTR_RequiresTrueTTYMode(t *testing.T) {
 	modes := effectiveMTRModes{mtr: true}
 
-	if !shouldUseAsyncLeoForMTR(modes, true, true) {
-		t.Fatal("TTY MTR should use async Leo startup")
+	if !shouldUseAsyncNextTraceAPIV3ForMTR(modes, true, true) {
+		t.Fatal("TTY MTR should use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(modes, false, true) {
-		t.Fatal("non-TTY stdin should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(modes, false, true) {
+		t.Fatal("non-TTY stdin should not use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(modes, true, false) {
-		t.Fatal("non-TTY stdout should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(modes, true, false) {
+		t.Fatal("non-TTY stdout should not use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(effectiveMTRModes{mtr: true, raw: true}, true, true) {
-		t.Fatal("raw MTR should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(effectiveMTRModes{mtr: true, raw: true}, true, true) {
+		t.Fatal("raw MTR should not use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(effectiveMTRModes{mtr: true, report: true}, true, true) {
-		t.Fatal("report MTR should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(effectiveMTRModes{mtr: true, report: true}, true, true) {
+		t.Fatal("report MTR should not use async NextTrace API v3 startup")
 	}
 }
 
@@ -525,7 +525,7 @@ func TestNormalizeMTRReportConfig_WidePreservesGeoSettings(t *testing.T) {
 	}
 }
 
-func TestBuildRawAPIInfoLine_LeoMoeAPI(t *testing.T) {
+func TestBuildRawAPIInfoLine_NextTraceAPI(t *testing.T) {
 	oldCache := util.GetFastIPCache()
 	oldMeta := util.GetFastIPMetaCache()
 	t.Cleanup(func() {
@@ -538,7 +538,7 @@ func TestBuildRawAPIInfoLine_LeoMoeAPI(t *testing.T) {
 		NodeName: "DMIT.NRT",
 	})
 
-	got := buildRawAPIInfoLine("LeoMoeAPI")
+	got := buildRawAPIInfoLine(ipgeo.NextTraceAPIProvider)
 	want := "[NextTrace API] preferred API IP - [2403:18c0:1001:462:dd:38ff:fe48:e0c5] - 21.33ms - DMIT.NRT"
 	if got != want {
 		t.Fatalf("buildRawAPIInfoLine() = %q, want %q", got, want)

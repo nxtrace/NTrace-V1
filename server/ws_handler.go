@@ -390,15 +390,15 @@ func executeMTRRaw(ctx context.Context, session *wsTraceSession, setup *traceExe
 	}
 
 	if opts.HopInterval > 0 {
-		// Per-hop scheduling only needs LeoMoe/FastIP setup now; the trace runtime
+		// Per-hop scheduling only needs NextTrace API/FastIP setup now; the trace runtime
 		// itself no longer depends on per-session mutable globals.
 		log.Printf("[deploy] (ws) starting MTR per-hop trace target=%s resolved=%s method=%s lang=%s maxHops=%d hopInterval=%s maxPerHop=%d",
 			sanitizeLogParam(setup.Target), setup.IP.String(), string(setup.Method), sanitizeLogParam(config.Lang), config.MaxHops, opts.HopInterval, opts.MaxPerHop)
 
 		traceMu.Lock()
 		_, err := withTraceSetupContext(setup, func() (struct{}, error) {
-			if setup.NeedsLeoWS {
-				ensureLeoMoeConnection()
+			if setup.NeedsNextTraceAPIV3 {
+				ensureNextTraceAPIV3ConnectionFn()
 			}
 			return struct{}{}, nil
 		})
@@ -419,8 +419,8 @@ func executeMTRRaw(ctx context.Context, session *wsTraceSession, setup *traceExe
 		defer traceMu.Unlock()
 
 		return withTraceSetupContext(setup, func() (*trace.Result, error) {
-			if setup.NeedsLeoWS {
-				ensureLeoMoeConnection()
+			if setup.NeedsNextTraceAPIV3 {
+				ensureNextTraceAPIV3ConnectionFn()
 			}
 			return traceTracerouteFn(method, cfg)
 		})
@@ -446,8 +446,8 @@ func executeTrace(ctx context.Context, session *wsTraceSession, setup *traceExec
 	log.Printf("[deploy] (ws) starting trace target=%s resolved=%s method=%s lang=%s queries=%d maxHops=%d", sanitizeLogParam(setup.Target), setup.IP.String(), string(setup.Method), sanitizeLogParam(config.Lang), config.NumMeasurements, config.MaxHops)
 	start := time.Now()
 	res, err := withTraceSetupContext(setup, func() (*trace.Result, error) {
-		if setup.NeedsLeoWS {
-			ensureLeoMoeConnection()
+		if setup.NeedsNextTraceAPIV3 {
+			ensureNextTraceAPIV3ConnectionFn()
 		}
 		return traceTracerouteFn(setup.Method, config)
 	})
