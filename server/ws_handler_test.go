@@ -17,6 +17,7 @@ import (
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
+	"github.com/nxtrace/NTrace-core/util"
 )
 
 type fakeWSConn struct {
@@ -176,11 +177,14 @@ func TestTraceWebsocketCanonicalizesLegacyProviderInStartAndComplete(t *testing.
 	oldLookup := traceDomainLookupFn
 	oldTraceroute := traceTracerouteFn
 	oldEnsure := ensureNextTraceAPIV3ConnectionFn
+	oldEnvDataProvider := util.EnvDataProvider
 	t.Cleanup(func() {
 		traceDomainLookupFn = oldLookup
 		traceTracerouteFn = oldTraceroute
 		ensureNextTraceAPIV3ConnectionFn = oldEnsure
+		util.EnvDataProvider = oldEnvDataProvider
 	})
+	util.EnvDataProvider = ""
 	traceDomainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
 		return net.ParseIP("192.0.2.1"), nil
 	}

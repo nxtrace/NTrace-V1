@@ -391,7 +391,7 @@ func registerICMPModeFlag(parser *argparse.Parser) *int {
 func registerDataProviderFlag(parser *argparse.Parser) *string {
 	return parser.Selector("d", "data-provider", []string{"IP.SB", "ip.sb", "IPInfo", "ipinfo", "IPInsight", "ipinsight", "IPAPI.com", "ip-api.com", "IPInfoLocal", "ipinfolocal", "chunzhen", ipgeo.NextTraceAPIProvider, "ipdb.one", "disable-geoip"}, &argparse.Options{
 		Default: ipgeo.NextTraceAPIProvider,
-		Help:    "Choose IP Geograph Data Provider [NextTrace-API, IP.SB, IPInfo, IPInsight, IP-API.com, IPInfoLocal, CHUNZHEN, disable-geoip]",
+		Help:    "Choose IP Geographic Data Provider [NextTrace-API, IP.SB, IPInfo, IPInsight, IP-API.com, IPInfoLocal, IPDB.One, CHUNZHEN, disable-geoip]",
 	})
 }
 

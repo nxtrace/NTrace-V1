@@ -583,7 +583,7 @@ nexttrace -t --tcp --max-hops 20 --first 3 --no-rdns 8.8.8.8
 - **`d` / `D`** — 切换可选历史显示；默认 TUI 仍是经典指标表
 - **`g` / `G`** — 仅在历史显示中循环切换 History 图表：heatmap → bars → sparkline
 - TUI 标题栏显示**源 → 目标**路由信息，指定 `--source`/`--dev` 时会展示对应信息。
-- 使用 NextTrace API 时，标题栏会显示首选 API IP 地址。
+- 使用 NextTrace API 且首选 API 元数据可用时，标题栏会显示首选 API IP 地址。
 - 使用**备用屏幕缓冲区**，退出后恢复之前的终端历史记录。
 - 当 stdin 非 TTY（如管道输入）时，降级为简单表格刷新模式。
 
@@ -613,7 +613,7 @@ wide 报告模式（`-w` / `--wide`）继续保留当前完整信息行为，包
 
 当 `--raw` 与 MTR（`--mtr`、`-r`、`-w`）一起使用时，会进入 **MTR 原始流式模式**。
 
-如果当前数据源是 `NextTrace-API`，会先输出一行无色的 API 信息头：
+如果当前数据源是 `NextTrace-API` 且首选 API 元数据可用，会先输出一行无色的 API 信息头：
 
 ```text
 [NextTrace API] preferred API IP - [2403:18c0:1001:462:dd:38ff:fe48:e0c5] - 21.33ms - DMIT.NRT
@@ -641,7 +641,7 @@ raw stdout 契约仍严格保持 12 列。无限运行的 MTR 中，unreachable 
 >
 > 注意：`--mtr` 不可与 `--table`、`--classic`、`--json`、`--output`、`--output-default`、`--route-path`、`--from`、`--fast-trace`、`--file`、`--deploy` 同时使用。
 
-#### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `CHUNZHEN`）
+#### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`）
 
 ##### LeoMoeAPI 名称迁移
 
@@ -831,10 +831,11 @@ Arguments:
                                      Default: 18
   -m  --max-hops                     Set the max number of hops (max TTL to be
                                      reached). Default: 30
-  -d  --data-provider                Choose IP Geograph Data Provider
+  -d  --data-provider                Choose IP Geographic Data Provider
                                      [NextTrace-API, IP.SB, IPInfo, IPInsight,
-                                     IP-API.com, IPInfoLocal, CHUNZHEN,
-                                     disable-geoip]. Default: NextTrace-API
+                                     IP-API.com, IPInfoLocal, IPDB.One,
+                                     CHUNZHEN, disable-geoip]. Default:
+                                     NextTrace-API
       --pow-provider                 Choose PoW Provider for NextTrace API v3
                                      [api.nxtrace.org, sakura] For China
                                      mainland users, please use sakura.

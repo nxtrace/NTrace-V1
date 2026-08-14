@@ -591,7 +591,7 @@ When running in a terminal (TTY), MTR mode uses an **interactive full-screen TUI
 - **`d` / `D`** — toggle the optional history display; the default TUI remains the classic metric table
 - **`g` / `G`** — in history display only, cycle History chart mode: heatmap → bars → sparkline
 - The TUI header displays **source → destination**, with `--source`/`--dev` information when specified.
-- When using NextTrace API, the preferred API IP address is shown in the header.
+- When using NextTrace API and preferred API metadata is available, the preferred API IP address is shown in the header.
 - Uses the **alternate screen buffer**, so your previous terminal history is preserved on exit.
 - When stdin is not a TTY (e.g. piped), it falls back to a simple table refresh.
 
@@ -621,7 +621,7 @@ Wide report mode (`-w` / `--wide`) keeps the current full-information behavior, 
 
 When `--raw` is used together with MTR (`--mtr`, `-r`, or `-w`), NextTrace enters **MTR raw stream mode**.
 
-If the active data provider is `NextTrace-API`, NextTrace first prints one uncolored API info preamble line:
+If the active data provider is `NextTrace-API` and preferred API metadata is available, NextTrace first prints one uncolored API info preamble line:
 
 ```text
 [NextTrace API] preferred API IP - [2403:18c0:1001:462:dd:38ff:fe48:e0c5] - 21.33ms - DMIT.NRT
@@ -649,7 +649,7 @@ In MTR mode (`--mtr`, `-r`, `-w`, including `--raw`), `-i/--ttl-time` sets the *
 >
 > Note: `--mtr` cannot be used together with `--table`, `--classic`, `--json`, `--output`, `--output-default`, `--route-path`, `--from`, `--fast-trace`, `--file`, or `--deploy`.
 
-#### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `CHUNZHEN`)
+#### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`)
 
 ##### LeoMoeAPI name migration
 
@@ -855,10 +855,11 @@ Arguments:
                                      Default: 18
   -m  --max-hops                     Set the max number of hops (max TTL to be
                                      reached). Default: 30
-  -d  --data-provider                Choose IP Geograph Data Provider
+  -d  --data-provider                Choose IP Geographic Data Provider
                                      [NextTrace-API, IP.SB, IPInfo, IPInsight,
-                                     IP-API.com, IPInfoLocal, CHUNZHEN,
-                                     disable-geoip]. Default: NextTrace-API
+                                     IP-API.com, IPInfoLocal, IPDB.One,
+                                     CHUNZHEN, disable-geoip]. Default:
+                                     NextTrace-API
       --pow-provider                 Choose PoW Provider for NextTrace API v3
                                      [api.nxtrace.org, sakura] For China
                                      mainland users, please use sakura.
