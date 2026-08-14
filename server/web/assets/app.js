@@ -1327,6 +1327,14 @@ function renderMTRStats(stats) {
     if (!hostParts.ip && !hostParts.host) {
       hostCell.textContent = '--';
     }
+    const marker = stat && stat.response && stat.response.kind === 'unreachable'
+      ? String(stat.response.marker || '').trim() : '';
+    if (marker) {
+      const markerSpan = document.createElement('span');
+      markerSpan.className = 'mtr-response-marker';
+      markerSpan.textContent = ` ${marker}`;
+      hostCell.appendChild(markerSpan);
+    }
     if (geoText) {
       const geoDiv = document.createElement('div');
       geoDiv.className = 'attempt__geo';
@@ -1338,14 +1346,6 @@ function renderMTRStats(stats) {
       mplsDiv.className = 'mtr-mpls';
       mplsDiv.textContent = mplsText;
       hostCell.appendChild(mplsDiv);
-    }
-    const marker = stat && stat.response && stat.response.kind === 'unreachable'
-      ? String(stat.response.marker || '').trim() : '';
-    if (marker) {
-      const markerSpan = document.createElement('span');
-      markerSpan.className = 'mtr-response-marker';
-      markerSpan.textContent = ` ${marker}`;
-      hostCell.appendChild(markerSpan);
     }
 
     tbody.appendChild(row);

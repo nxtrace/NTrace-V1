@@ -11,15 +11,23 @@ function loadAppRawIngestor() {
   const classList = {add() {}, remove() {}, toggle() {}};
   const element = () => ({
     classList,
+    children: [],
     dataset: {},
     parentElement: {classList},
     addEventListener() {},
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    },
   });
+  const resultNode = element();
   const context = vm.createContext({
     console,
     document: {
       body: {classList},
-      getElementById: element,
+      createElement: element,
+      createTextNode: (text) => ({nodeType: 3, textContent: text}),
+      getElementById: (id) => id === 'result' ? resultNode : element(),
       addEventListener() {},
     },
     window: {
@@ -30,7 +38,7 @@ function loadAppRawIngestor() {
   const appPath = path.join(__dirname, 'app.js');
   vm.runInContext(fs.readFileSync(appPath, 'utf8'), context, {filename: appPath});
 
-  return (records, summary) => {
+  const ingest = (records, summary) => {
     context.__records = records;
     context.__summary = summary;
     vm.runInContext(`
@@ -42,6 +50,14 @@ function loadAppRawIngestor() {
     `, context);
     return JSON.parse(JSON.stringify(context.__rows));
   };
+
+  ingest.render = (stats) => {
+    context.__stats = stats;
+    resultNode.children = [];
+    vm.runInContext('renderMTRStats(__stats);', context);
+    return resultNode;
+  };
+  return ingest;
 }
 
 const rows = [
@@ -101,4 +117,28 @@ test('unreachable marker follows the current path edge, not a stale raw response
     marker: '!H',
   });
   assert.equal(responseForRow(row, {hop: 2, reason: 'destination_reached'}), undefined);
+});
+
+test('unreachable marker stays beside the host before block metadata', () => {
+  const app = loadAppRawIngestor();
+  const result = app.render([{
+    ttl: 2,
+    sent: 1,
+    received: 1,
+    loss_count: 0,
+    ip: '192.0.2.2',
+    host: 'router.example',
+    geo: {country: 'CN'},
+    mpls: ['L=100'],
+    response: {kind: 'unreachable', marker: '!H'},
+  }]);
+  const table = result.children[0];
+  const tbody = table.children[1];
+  const row = tbody.children[0];
+  const hostCell = row.children[6];
+
+  assert.deepEqual(
+    hostCell.children.map((child) => child.className).filter(Boolean),
+    ['mtr-hostname', 'mtr-response-marker', 'attempt__geo', 'mtr-mpls'],
+  );
 });
