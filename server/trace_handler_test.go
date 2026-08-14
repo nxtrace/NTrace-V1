@@ -14,9 +14,110 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/nxtrace/NTrace-core/internal/service"
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
 )
+
+func TestNormalizeDataProviderCanonicalizesNextTraceAPIAliases(t *testing.T) {
+	for _, input := range []string{
+		ipgeo.NextTraceAPIProvider,
+		"nexttrace-api",
+		"NEXTTRACE-API",
+		"LeoMoeAPI",
+		"leomoeapi",
+		"LeoMoe",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if got := normalizeDataProvider(input, ""); got != ipgeo.NextTraceAPIProvider {
+				t.Fatalf("normalizeDataProvider(%q) = %q, want %q", input, got, ipgeo.NextTraceAPIProvider)
+			}
+		})
+	}
+}
+
+func TestOptionsExposeOnlyCanonicalNextTraceAPIProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	optionsHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var body struct {
+		DataProviders []string       `json:"dataProviders"`
+		Defaults      map[string]any `json:"defaultOptions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode options: %v", err)
+	}
+	if len(body.DataProviders) == 0 || body.DataProviders[0] != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("dataProviders = %v, want canonical provider first", body.DataProviders)
+	}
+	if got := body.Defaults["data_provider"]; got != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("default data_provider = %v, want %q", got, ipgeo.NextTraceAPIProvider)
+	}
+	for _, provider := range body.DataProviders {
+		if strings.Contains(strings.ToUpper(provider), "LEOMOE") {
+			t.Fatalf("dataProviders leaked legacy name: %v", body.DataProviders)
+		}
+	}
+}
+
+func TestResolveTraceDataProviderCanonicalizesEnvironmentOverride(t *testing.T) {
+	oldEnvDataProvider := util.EnvDataProvider
+	defer func() { util.EnvDataProvider = oldEnvDataProvider }()
+	util.EnvDataProvider = "leomoe"
+
+	req := traceRequest{DataProvider: "nexttrace-api"}
+	got, needsV3 := resolveTraceDataProvider(&req)
+	if got != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("resolveTraceDataProvider() = %q, want %q", got, ipgeo.NextTraceAPIProvider)
+	}
+	if !needsV3 {
+		t.Fatal("resolveTraceDataProvider() needsV3 = false, want true")
+	}
+}
+
+func TestTraceHandlerCanonicalizesLegacyProviderInJSONResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLookup := traceDomainLookupFn
+	oldTraceroute := traceTracerouteFn
+	oldEnsure := ensureNextTraceAPIV3ConnectionFn
+	t.Cleanup(func() {
+		traceDomainLookupFn = oldLookup
+		traceTracerouteFn = oldTraceroute
+		ensureNextTraceAPIV3ConnectionFn = oldEnsure
+	})
+	traceDomainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
+		return net.ParseIP("192.0.2.1"), nil
+	}
+	traceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return &trace.Result{}, nil
+	}
+	ensureNextTraceAPIV3ConnectionFn = func() {}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/trace", strings.NewReader(`{"target":"example.test","data_provider":"lEoMoEaPi","disable_maptrace":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	traceHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var response traceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.DataProvider != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("data_provider = %q, want %q", response.DataProvider, ipgeo.NextTraceAPIProvider)
+	}
+}
 
 func TestPrepareTrace_DoesNotForceLegacyInterval(t *testing.T) {
 	setup, statusCode, err := prepareTrace(context.Background(), traceRequest{

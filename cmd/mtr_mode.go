@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nxtrace/NTrace-core/config"
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/printer"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
@@ -279,9 +280,9 @@ func resolveSrcIP(conf trace.Config) string {
 	return "unknown"
 }
 
-// buildAPIInfo 生成首行 preferred API 扩展信息（纯文本，不含 ANSI；仅 LeoMoeAPI）。
+// buildAPIInfo 生成首行 preferred API 扩展信息（纯文本，不含 ANSI；仅 NextTrace API）。
 func buildAPIInfo(dataOrigin string) string {
-	if !strings.EqualFold(dataOrigin, "LeoMoeAPI") {
+	if !ipgeo.IsNextTraceAPIProvider(dataOrigin) {
 		return ""
 	}
 	meta := util.GetFastIPMetaCache()
@@ -296,7 +297,7 @@ func buildAPIInfo(dataOrigin string) string {
 }
 
 func buildRawAPIInfoLine(dataOrigin string) string {
-	if !strings.EqualFold(dataOrigin, "LeoMoeAPI") {
+	if !ipgeo.IsNextTraceAPIProvider(dataOrigin) {
 		return ""
 	}
 	meta := util.GetFastIPMetaCache()

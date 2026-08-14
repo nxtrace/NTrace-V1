@@ -63,4 +63,10 @@ func TestNextTraceSkillFilesAndToolNames(t *testing.T) {
 	if !strings.Contains(string(skillDoc), "server/mcp.go") {
 		t.Fatal("SKILL.md missing server/mcp.go sync reminder")
 	}
+	if !strings.Contains(string(toolsDoc), "NextTrace-API") {
+		t.Fatal("mcp-tools.md missing canonical NextTrace-API provider")
+	}
+	if strings.Contains(string(toolsDoc), "LeoMoeAPI") {
+		t.Fatal("mcp-tools.md exposes legacy provider name")
+	}
 }

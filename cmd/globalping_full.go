@@ -13,7 +13,6 @@ import (
 	"github.com/nxtrace/NTrace-core/printer"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/tracemap"
-	"github.com/nxtrace/NTrace-core/util"
 )
 
 func handleGlobalpingTrace(opts *trace.GlobalpingOptions, config *trace.Config) {
@@ -27,8 +26,7 @@ func handleGlobalpingTrace(opts *trace.GlobalpingOptions, config *trace.Config) 
 		return
 	}
 
-	if !opts.DisableMaptrace &&
-		(util.StringInSlice(strings.ToUpper(opts.DataOrigin), []string{"LEOMOEAPI", "IPINFO", "IP-API.COM", "IPAPI.COM"})) {
+	if !opts.DisableMaptrace && supportsMapTrace(opts.DataOrigin) {
 		r, err := json.Marshal(res)
 		if err != nil {
 			fmt.Println(err)

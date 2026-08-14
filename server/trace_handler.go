@@ -26,7 +26,8 @@ import (
 )
 
 var traceMu = &service.RuntimeMu
-var leoConnMu sync.Mutex
+var nextTraceAPIV3ConnMu sync.Mutex
+var ensureNextTraceAPIV3ConnectionFn = ensureNextTraceAPIV3Connection
 var traceMapURLFn = tracemap.GetMapUrlWithContext
 var traceDomainLookupFn = util.DomainLookUpWithContext
 var withTraceMapScopeFn = func(setup *traceExecution, callback func() (string, error)) (string, error) {
@@ -34,15 +35,15 @@ var withTraceMapScopeFn = func(setup *traceExecution, callback func() (string, e
 }
 
 type traceExecution struct {
-	Req          traceRequest
-	Target       string
-	Protocol     string
-	DataProvider string
-	Method       trace.Method
-	IP           net.IP
-	Config       trace.Config
-	NeedsLeoWS   bool
-	PowProvider  string
+	Req                 traceRequest
+	Target              string
+	Protocol            string
+	DataProvider        string
+	Method              trace.Method
+	IP                  net.IP
+	Config              trace.Config
+	NeedsNextTraceAPIV3 bool
+	PowProvider         string
 }
 
 type traceRequest struct {
@@ -190,13 +191,13 @@ func resolveTraceDataProvider(req *traceRequest) (string, bool) {
 		dataProvider = "DN42"
 	}
 
-	needsLeoWS := strings.EqualFold(dataProvider, "LEOMOEAPI")
-	if needsLeoWS && util.EnvDataProvider != "" {
-		dataProvider = util.EnvDataProvider
-		needsLeoWS = strings.EqualFold(dataProvider, "LEOMOEAPI")
+	needsNextTraceAPIV3 := ipgeo.IsNextTraceAPIProvider(dataProvider)
+	if needsNextTraceAPIV3 && util.EnvDataProvider != "" {
+		dataProvider = normalizeDataProvider(util.EnvDataProvider, "")
+		needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(dataProvider)
 	}
 
-	return dataProvider, needsLeoWS
+	return dataProvider, needsNextTraceAPIV3
 }
 
 func resolveTraceIPVersion(req traceRequest) string {
@@ -232,7 +233,7 @@ func prepareTrace(ctx context.Context, req traceRequest) (*traceExecution, int, 
 	exec.Protocol = protocol.protocol
 	exec.Method = protocol.method
 
-	dataProvider, needsLeoWS := resolveTraceDataProvider(&exec.Req)
+	dataProvider, needsNextTraceAPIV3 := resolveTraceDataProvider(&exec.Req)
 	ip, err := traceDomainLookupFn(ctx, target, resolveTraceIPVersion(exec.Req), strings.ToLower(exec.Req.DotServer), true)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -241,7 +242,7 @@ func prepareTrace(ctx context.Context, req traceRequest) (*traceExecution, int, 
 
 	exec.DataProvider = dataProvider
 	exec.PowProvider = strings.TrimSpace(exec.Req.PowProvider)
-	exec.NeedsLeoWS = needsLeoWS
+	exec.NeedsNextTraceAPIV3 = needsNextTraceAPIV3
 	exec.Config, err = buildTraceConfig(exec.Req, exec.Method, ip, dataProvider, protocol.dstPort)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
@@ -287,12 +288,12 @@ func traceHandler(c *gin.Context) {
 	traceMu.Lock()
 	defer traceMu.Unlock()
 
-	if setup.NeedsLeoWS {
+	if setup.NeedsNextTraceAPIV3 {
 		if _, err := withTraceSetupContext(setup, func() (struct{}, error) {
-			ensureLeoMoeConnection()
+			ensureNextTraceAPIV3ConnectionFn()
 			return struct{}{}, nil
 		}); err != nil {
-			log.Printf("[deploy] failed to initialize LeoMoeAPI connection target=%s error=%v", sanitizeLogParam(setup.Target), err)
+			log.Printf("[deploy] failed to initialize NextTrace API v3 connection target=%s error=%v", sanitizeLogParam(setup.Target), err)
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
@@ -437,11 +438,11 @@ func withTraceSetupContext[T any](setup *traceExecution, callback func() (T, err
 	util.PowProviderParam = ""
 	if setup != nil {
 		util.PowProviderParam = setup.PowProvider
-		if setup.NeedsLeoWS {
+		if setup.NeedsNextTraceAPIV3 {
 			if setup.PowProvider != "" {
-				log.Printf("[deploy] LeoMoeAPI using custom PoW provider=%s", sanitizeLogParam(setup.PowProvider))
+				log.Printf("[deploy] NextTrace API v3 using custom PoW provider=%s", sanitizeLogParam(setup.PowProvider))
 			} else {
-				log.Printf("[deploy] LeoMoeAPI using default PoW provider")
+				log.Printf("[deploy] NextTrace API v3 using default PoW provider")
 			}
 		} else if setup.PowProvider != "" {
 			log.Printf("[deploy] overriding PoW provider=%s", sanitizeLogParam(setup.PowProvider))
@@ -635,6 +636,9 @@ func normalizeDataProvider(provider string, alias string) string {
 	if candidate == "" {
 		return ""
 	}
+	if canonical := ipgeo.CanonicalizeNextTraceAPIProvider(candidate); canonical != candidate {
+		return canonical
+	}
 
 	upper := strings.ToUpper(candidate)
 	switch upper {
@@ -648,8 +652,6 @@ func normalizeDataProvider(provider string, alias string) string {
 		return "IPInsight"
 	case "IPINFOLOCAL", "IP INFO LOCAL":
 		return "IPInfoLocal"
-	case "LEOMOEAPI", "LEOMOE":
-		return "LeoMoeAPI"
 	case "CHUNZHEN":
 		return "chunzhen"
 	case "DN42":
@@ -673,7 +675,10 @@ func contains(list []string, v string) bool {
 }
 
 func shouldGenerateMap(provider string) bool {
-	allowed := []string{"LEOMOEAPI", "IPINFO", "IP-API.COM", "IPAPI.COM"}
+	if ipgeo.IsNextTraceAPIProvider(provider) {
+		return true
+	}
+	allowed := []string{"IPINFO", "IP-API.COM", "IPAPI.COM"}
 	for _, item := range allowed {
 		if strings.EqualFold(provider, item) {
 			return true
@@ -682,19 +687,19 @@ func shouldGenerateMap(provider string) bool {
 	return false
 }
 
-func ensureLeoMoeConnection() {
-	leoConnMu.Lock()
-	defer leoConnMu.Unlock()
+func ensureNextTraceAPIV3Connection() {
+	nextTraceAPIV3ConnMu.Lock()
+	defer nextTraceAPIV3ConnMu.Unlock()
 
 	conn := wshandle.GetWsConn()
 	if conn == nil || conn.MsgSendCh == nil || conn.MsgReceiveCh == nil {
-		log.Println("[deploy] establishing initial LeoMoeAPI websocket")
+		log.Println("[deploy] establishing initial NextTrace API v3 websocket")
 		wshandle.New()
 		return
 	}
 
 	if !conn.IsConnected() && !conn.IsConnecting() {
-		log.Println("[deploy] reconnecting LeoMoeAPI websocket")
+		log.Println("[deploy] reconnecting NextTrace API v3 websocket")
 		wshandle.New()
 	}
 }

@@ -11,36 +11,36 @@ import (
 	"github.com/nxtrace/NTrace-core/wshandle"
 )
 
-func TestLeoIPWaitsForConnectionBeforeSending(t *testing.T) {
-	oldGet := getLeoWsConn
+func TestNextTraceAPIV3GeoIPWaitsForConnectionBeforeSending(t *testing.T) {
+	oldGet := getNextTraceAPIV3WSConn
 	oldPools := IPPools.pool
-	oldRunning, oldRestart := receiveParseState()
+	oldRunning, oldRestart := nextTraceAPIV3ReceiveState()
 	var conn *wshandle.WsConn
-	receiveParseStarted := make(chan struct{})
+	nextTraceAPIV3ReceiveStarted := make(chan struct{})
 	var getConnCalls int32
 	var closeStarted sync.Once
 	defer func() {
 		if conn != nil && conn.MsgReceiveCh != nil {
 			close(conn.MsgReceiveCh)
 		}
-		waitForReceiveParseStart(t, receiveParseStarted)
-		waitForReceiveParseStop(t)
-		getLeoWsConn = oldGet
+		waitForNextTraceAPIV3ReceiveStart(t, nextTraceAPIV3ReceiveStarted)
+		waitForNextTraceAPIV3ReceiveStop(t)
+		getNextTraceAPIV3WSConn = oldGet
 		IPPools.pool = oldPools
-		setReceiveParseState(oldRunning, oldRestart)
+		setNextTraceAPIV3ReceiveState(oldRunning, oldRestart)
 	}()
 
 	IPPools.pool = make(map[string]chan IPGeoData)
-	setReceiveParseState(false, false)
+	setNextTraceAPIV3ReceiveState(false, false)
 
 	conn = &wshandle.WsConn{
 		MsgSendCh:    make(chan string, 1),
 		MsgReceiveCh: make(chan string, 1),
 		Interrupt:    make(chan os.Signal, 1),
 	}
-	getLeoWsConn = func() *wshandle.WsConn {
+	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
 		if atomic.AddInt32(&getConnCalls, 1) >= 3 {
-			closeStarted.Do(func() { close(receiveParseStarted) })
+			closeStarted.Do(func() { close(nextTraceAPIV3ReceiveStarted) })
 		}
 		return conn
 	}
@@ -58,13 +58,13 @@ func TestLeoIPWaitsForConnectionBeforeSending(t *testing.T) {
 	)
 	done := make(chan struct{})
 	go func() {
-		gotGeo, gotErr = LeoIP("1.1.1.1", 300*time.Millisecond, "en", false)
+		gotGeo, gotErr = NextTraceAPIV3GeoIP("1.1.1.1", 300*time.Millisecond, "en", false)
 		close(done)
 	}()
 
 	select {
 	case <-sent:
-		t.Fatal("LeoIP sent request before websocket became connected")
+		t.Fatal("NextTraceAPIV3GeoIP sent request before websocket became connected")
 	case <-time.After(60 * time.Millisecond):
 	}
 
@@ -76,53 +76,53 @@ func TestLeoIPWaitsForConnectionBeforeSending(t *testing.T) {
 			t.Fatalf("sent request = %q, want 1.1.1.1", msg)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("LeoIP did not send request after websocket became connected")
+		t.Fatal("NextTraceAPIV3GeoIP did not send request after websocket became connected")
 	}
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("LeoIP did not complete")
+		t.Fatal("NextTraceAPIV3GeoIP did not complete")
 	}
 
 	if gotErr != nil {
-		t.Fatalf("LeoIP error = %v, want nil", gotErr)
+		t.Fatalf("NextTraceAPIV3GeoIP error = %v, want nil", gotErr)
 	}
 	if gotGeo == nil || gotGeo.Asnumber != "13335" {
-		t.Fatalf("LeoIP geo = %+v, want ASN 13335", gotGeo)
+		t.Fatalf("NextTraceAPIV3GeoIP geo = %+v, want ASN 13335", gotGeo)
 	}
 }
 
-func TestLeoIPUsesSingleTimeoutBudget(t *testing.T) {
-	oldGet := getLeoWsConn
+func TestNextTraceAPIV3GeoIPUsesSingleTimeoutBudget(t *testing.T) {
+	oldGet := getNextTraceAPIV3WSConn
 	oldPools := IPPools.pool
-	oldRunning, oldRestart := receiveParseState()
+	oldRunning, oldRestart := nextTraceAPIV3ReceiveState()
 	var conn *wshandle.WsConn
-	receiveParseStarted := make(chan struct{})
+	nextTraceAPIV3ReceiveStarted := make(chan struct{})
 	var getConnCalls int32
 	var closeStarted sync.Once
 	defer func() {
 		if conn != nil && conn.MsgReceiveCh != nil {
 			close(conn.MsgReceiveCh)
 		}
-		waitForReceiveParseStart(t, receiveParseStarted)
-		waitForReceiveParseStop(t)
-		getLeoWsConn = oldGet
+		waitForNextTraceAPIV3ReceiveStart(t, nextTraceAPIV3ReceiveStarted)
+		waitForNextTraceAPIV3ReceiveStop(t)
+		getNextTraceAPIV3WSConn = oldGet
 		IPPools.pool = oldPools
-		setReceiveParseState(oldRunning, oldRestart)
+		setNextTraceAPIV3ReceiveState(oldRunning, oldRestart)
 	}()
 
 	IPPools.pool = make(map[string]chan IPGeoData)
-	setReceiveParseState(false, false)
+	setNextTraceAPIV3ReceiveState(false, false)
 
 	conn = &wshandle.WsConn{
 		MsgSendCh:    make(chan string, 1),
 		MsgReceiveCh: make(chan string),
 		Interrupt:    make(chan os.Signal, 1),
 	}
-	getLeoWsConn = func() *wshandle.WsConn {
+	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
 		if atomic.AddInt32(&getConnCalls, 1) >= 3 {
-			closeStarted.Do(func() { close(receiveParseStarted) })
+			closeStarted.Do(func() { close(nextTraceAPIV3ReceiveStarted) })
 		}
 		return conn
 	}
@@ -130,7 +130,7 @@ func TestLeoIPUsesSingleTimeoutBudget(t *testing.T) {
 	start := time.Now()
 	done := make(chan error, 1)
 	go func() {
-		_, err := LeoIP("1.1.1.1", 2*time.Second, "en", false)
+		_, err := NextTraceAPIV3GeoIP("1.1.1.1", 2*time.Second, "en", false)
 		done <- err
 	}()
 
@@ -140,41 +140,41 @@ func TestLeoIPUsesSingleTimeoutBudget(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil || err.Error() != "TimeOut" {
-			t.Fatalf("LeoIP error = %v, want TimeOut", err)
+			t.Fatalf("NextTraceAPIV3GeoIP error = %v, want TimeOut", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("LeoIP exceeded expected shared timeout budget")
+		t.Fatal("NextTraceAPIV3GeoIP exceeded expected shared timeout budget")
 	}
 
 	if elapsed := time.Since(start); elapsed > 2800*time.Millisecond {
-		t.Fatalf("LeoIP elapsed = %s, want <= 2.8s", elapsed)
+		t.Fatalf("NextTraceAPIV3GeoIP elapsed = %s, want <= 2.8s", elapsed)
 	}
 }
 
-func TestReceiveParseReturnsWhenWebsocketMissing(t *testing.T) {
-	oldGet := getLeoWsConn
-	defer func() { getLeoWsConn = oldGet }()
+func TestNextTraceAPIV3ReceiveReturnsWhenWebsocketMissing(t *testing.T) {
+	oldGet := getNextTraceAPIV3WSConn
+	defer func() { getNextTraceAPIV3WSConn = oldGet }()
 
-	getLeoWsConn = func() *wshandle.WsConn { return nil }
+	getNextTraceAPIV3WSConn = func() *wshandle.WsConn { return nil }
 
 	done := make(chan struct{})
 	go func() {
-		receiveParse()
+		receiveNextTraceAPIV3Responses()
 		close(done)
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse should return when websocket is nil")
+		t.Fatal("receiveNextTraceAPIV3Responses should return when websocket is nil")
 	}
 }
 
-func TestReceiveParseContinuesAfterWebsocketReplacement(t *testing.T) {
-	oldGet := getLeoWsConn
+func TestNextTraceAPIV3ReceiveContinuesAfterWebsocketReplacement(t *testing.T) {
+	oldGet := getNextTraceAPIV3WSConn
 	oldPools := IPPools.pool
 	defer func() {
-		getLeoWsConn = oldGet
+		getNextTraceAPIV3WSConn = oldGet
 		IPPools.pool = oldPools
 	}()
 
@@ -187,7 +187,7 @@ func TestReceiveParseContinuesAfterWebsocketReplacement(t *testing.T) {
 		Interrupt:    make(chan os.Signal, 1),
 	}
 	current := oldConn
-	getLeoWsConn = func() *wshandle.WsConn {
+	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
 		return current
 	}
 
@@ -200,14 +200,14 @@ func TestReceiveParseContinuesAfterWebsocketReplacement(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		receiveParse()
+		receiveNextTraceAPIV3Responses()
 		close(done)
 	}()
 
 	select {
 	case oldConn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`:
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not consume from the original websocket")
+		t.Fatal("receiveNextTraceAPIV3Responses did not consume from the original websocket")
 	}
 	select {
 	case geo := <-oldResult:
@@ -215,7 +215,7 @@ func TestReceiveParseContinuesAfterWebsocketReplacement(t *testing.T) {
 			t.Fatalf("old websocket geo ASN = %q, want 13335", geo.Asnumber)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not dispatch original websocket data")
+		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch original websocket data")
 	}
 
 	current = newConn
@@ -224,7 +224,7 @@ func TestReceiveParseContinuesAfterWebsocketReplacement(t *testing.T) {
 	select {
 	case newConn.MsgReceiveCh <- `{"ip":"2.2.2.2","asnumber":"64512"}`:
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not switch to replacement websocket")
+		t.Fatal("receiveNextTraceAPIV3Responses did not switch to replacement websocket")
 	}
 	select {
 	case geo := <-newResult:
@@ -232,21 +232,21 @@ func TestReceiveParseContinuesAfterWebsocketReplacement(t *testing.T) {
 			t.Fatalf("new websocket geo ASN = %q, want 64512", geo.Asnumber)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not dispatch replacement websocket data")
+		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch replacement websocket data")
 	}
 
 	close(newConn.MsgReceiveCh)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not exit after replacement websocket closed")
+		t.Fatal("receiveNextTraceAPIV3Responses did not exit after replacement websocket closed")
 	}
 }
 
-func TestStartReceiveParseRestartsAfterQueuedStart(t *testing.T) {
-	oldGet := getLeoWsConn
+func TestStartNextTraceAPIV3ReceiverRestartsAfterQueuedStart(t *testing.T) {
+	oldGet := getNextTraceAPIV3WSConn
 	oldPools := IPPools.pool
-	oldRunning, oldRestart := receiveParseState()
+	oldRunning, oldRestart := nextTraceAPIV3ReceiveState()
 	var closeOld, closeNew sync.Once
 	var oldConn, newConn *wshandle.WsConn
 	defer func() {
@@ -256,10 +256,10 @@ func TestStartReceiveParseRestartsAfterQueuedStart(t *testing.T) {
 		if newConn != nil {
 			closeNew.Do(func() { close(newConn.MsgReceiveCh) })
 		}
-		waitForReceiveParseStop(t)
-		getLeoWsConn = oldGet
+		waitForNextTraceAPIV3ReceiveStop(t)
+		getNextTraceAPIV3WSConn = oldGet
 		IPPools.pool = oldPools
-		setReceiveParseState(oldRunning, oldRestart)
+		setNextTraceAPIV3ReceiveState(oldRunning, oldRestart)
 	}()
 
 	oldConn = &wshandle.WsConn{
@@ -272,7 +272,7 @@ func TestStartReceiveParseRestartsAfterQueuedStart(t *testing.T) {
 	}
 	afterOldClose := atomic.Bool{}
 	afterOldCloseCalls := atomic.Int32{}
-	getLeoWsConn = func() *wshandle.WsConn {
+	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
 		if afterOldClose.Load() {
 			if afterOldCloseCalls.Add(1) == 1 {
 				return oldConn
@@ -288,13 +288,13 @@ func TestStartReceiveParseRestartsAfterQueuedStart(t *testing.T) {
 		"1.1.1.1": oldResult,
 		"2.2.2.2": newResult,
 	}
-	setReceiveParseState(false, false)
+	setNextTraceAPIV3ReceiveState(false, false)
 
-	startReceiveParse()
+	startNextTraceAPIV3Receiver()
 	select {
 	case oldConn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`:
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not consume from the original websocket")
+		t.Fatal("receiveNextTraceAPIV3Responses did not consume from the original websocket")
 	}
 	select {
 	case geo := <-oldResult:
@@ -302,17 +302,17 @@ func TestStartReceiveParseRestartsAfterQueuedStart(t *testing.T) {
 			t.Fatalf("old websocket geo ASN = %q, want 13335", geo.Asnumber)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not dispatch original websocket data")
+		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch original websocket data")
 	}
 
-	startReceiveParse()
+	startNextTraceAPIV3Receiver()
 	afterOldClose.Store(true)
 	closeOld.Do(func() { close(oldConn.MsgReceiveCh) })
 
 	select {
 	case newConn.MsgReceiveCh <- `{"ip":"2.2.2.2","asnumber":"64512"}`:
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not restart for a queued start")
+		t.Fatal("receiveNextTraceAPIV3Responses did not restart for a queued start")
 	}
 	select {
 	case geo := <-newResult:
@@ -320,44 +320,44 @@ func TestStartReceiveParseRestartsAfterQueuedStart(t *testing.T) {
 			t.Fatalf("new websocket geo ASN = %q, want 64512", geo.Asnumber)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("receiveParse did not dispatch restarted websocket data")
+		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch restarted websocket data")
 	}
 
 	closeNew.Do(func() { close(newConn.MsgReceiveCh) })
 }
 
-func TestSendIPRequestHonorsContextWhenQueueIsFull(t *testing.T) {
-	oldGet := getLeoWsConn
-	defer func() { getLeoWsConn = oldGet }()
+func TestSendNextTraceAPIV3IPRequestHonorsContextWhenQueueIsFull(t *testing.T) {
+	oldGet := getNextTraceAPIV3WSConn
+	defer func() { getNextTraceAPIV3WSConn = oldGet }()
 
 	conn := &wshandle.WsConn{
 		MsgSendCh: make(chan string, 1),
 		Interrupt: make(chan os.Signal, 1),
 	}
 	conn.MsgSendCh <- "blocked"
-	getLeoWsConn = func() *wshandle.WsConn {
+	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
 		return conn
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if sendIPRequest(ctx, conn, "1.1.1.1") {
-		t.Fatal("sendIPRequest() = true, want false when context expires")
+	if sendNextTraceAPIV3IPRequest(ctx, conn, "1.1.1.1") {
+		t.Fatal("sendNextTraceAPIV3IPRequest() = true, want false when context expires")
 	}
 }
 
-func TestSendIPRequestUsesProvidedConnection(t *testing.T) {
-	oldGet := getLeoWsConn
-	defer func() { getLeoWsConn = oldGet }()
+func TestSendNextTraceAPIV3IPRequestUsesProvidedConnection(t *testing.T) {
+	oldGet := getNextTraceAPIV3WSConn
+	defer func() { getNextTraceAPIV3WSConn = oldGet }()
 
 	conn := &wshandle.WsConn{
 		MsgSendCh: make(chan string, 1),
 		Interrupt: make(chan os.Signal, 1),
 	}
-	getLeoWsConn = func() *wshandle.WsConn { return nil }
+	getNextTraceAPIV3WSConn = func() *wshandle.WsConn { return nil }
 
-	if !sendIPRequest(context.Background(), conn, "1.1.1.1") {
-		t.Fatal("sendIPRequest() = false, want true")
+	if !sendNextTraceAPIV3IPRequest(context.Background(), conn, "1.1.1.1") {
+		t.Fatal("sendNextTraceAPIV3IPRequest() = false, want true")
 	}
 	select {
 	case got := <-conn.MsgSendCh:
@@ -369,7 +369,7 @@ func TestSendIPRequestUsesProvidedConnection(t *testing.T) {
 	}
 }
 
-func TestDispatchLeoMessageReplacesStaleBufferedResponse(t *testing.T) {
+func TestDispatchNextTraceAPIV3MessageReplacesStaleBufferedResponse(t *testing.T) {
 	oldPools := IPPools.pool
 	defer func() { IPPools.pool = oldPools }()
 
@@ -377,7 +377,7 @@ func TestDispatchLeoMessageReplacesStaleBufferedResponse(t *testing.T) {
 	ch <- IPGeoData{Asnumber: "STALE"}
 	IPPools.pool = map[string]chan IPGeoData{"1.1.1.1": ch}
 
-	dispatchLeoMessage(`{"ip":"1.1.1.1","asnumber":"13335"}`)
+	dispatchNextTraceAPIV3Message(`{"ip":"1.1.1.1","asnumber":"13335"}`)
 
 	select {
 	case geo := <-ch:
@@ -389,42 +389,42 @@ func TestDispatchLeoMessageReplacesStaleBufferedResponse(t *testing.T) {
 	}
 }
 
-func waitForReceiveParseStart(t *testing.T, started <-chan struct{}) {
+func waitForNextTraceAPIV3ReceiveStart(t *testing.T, started <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-started:
 	case <-time.After(time.Second):
-		t.Fatal("waitForReceiveParseStart: receiveParse did not start")
+		t.Fatal("waitForNextTraceAPIV3ReceiveStart: receiveNextTraceAPIV3Responses did not start")
 	}
 }
 
-func waitForReceiveParseStop(t *testing.T) {
+func waitForNextTraceAPIV3ReceiveStop(t *testing.T) {
 	t.Helper()
 	deadline := time.After(time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		running, _ := receiveParseState()
+		running, _ := nextTraceAPIV3ReceiveState()
 		if !running {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatal("waitForReceiveParseStop: receiveParse did not stop")
+			t.Fatal("waitForNextTraceAPIV3ReceiveStop: receiveNextTraceAPIV3Responses did not stop")
 		case <-ticker.C:
 		}
 	}
 }
 
-func receiveParseState() (bool, bool) {
-	receiveParseMu.Lock()
-	defer receiveParseMu.Unlock()
-	return receiveParseRunning, receiveParseRestart
+func nextTraceAPIV3ReceiveState() (bool, bool) {
+	nextTraceAPIV3ReceiveMu.Lock()
+	defer nextTraceAPIV3ReceiveMu.Unlock()
+	return nextTraceAPIV3ReceiveRunning, nextTraceAPIV3ReceiveRestart
 }
 
-func setReceiveParseState(running, restart bool) {
-	receiveParseMu.Lock()
-	defer receiveParseMu.Unlock()
-	receiveParseRunning = running
-	receiveParseRestart = restart
+func setNextTraceAPIV3ReceiveState(running, restart bool) {
+	nextTraceAPIV3ReceiveMu.Lock()
+	defer nextTraceAPIV3ReceiveMu.Unlock()
+	nextTraceAPIV3ReceiveRunning = running
+	nextTraceAPIV3ReceiveRestart = restart
 }

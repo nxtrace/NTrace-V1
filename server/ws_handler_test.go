@@ -6,13 +6,18 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
+	"github.com/nxtrace/NTrace-core/util"
 )
 
 type fakeWSConn struct {
@@ -164,6 +169,63 @@ func TestReadWSInitMessage_ReturnsClearDeadlineError(t *testing.T) {
 
 	if _, err := readWSInitMessage(conn); err == nil || err.Error() != "clear deadline failed" {
 		t.Fatalf("readWSInitMessage error = %v, want clear deadline error", err)
+	}
+}
+
+func TestTraceWebsocketCanonicalizesLegacyProviderInStartAndComplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLookup := traceDomainLookupFn
+	oldTraceroute := traceTracerouteFn
+	oldEnsure := ensureNextTraceAPIV3ConnectionFn
+	oldEnvDataProvider := util.EnvDataProvider
+	t.Cleanup(func() {
+		traceDomainLookupFn = oldLookup
+		traceTracerouteFn = oldTraceroute
+		ensureNextTraceAPIV3ConnectionFn = oldEnsure
+		util.EnvDataProvider = oldEnvDataProvider
+	})
+	util.EnvDataProvider = ""
+	traceDomainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
+		return net.ParseIP("192.0.2.1"), nil
+	}
+	traceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return &trace.Result{}, nil
+	}
+	ensureNextTraceAPIV3ConnectionFn = func() {}
+
+	router := gin.New()
+	router.GET("/ws", traceWebsocketHandler)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws", nil)
+	if err != nil {
+		t.Fatalf("websocket dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := conn.WriteJSON(map[string]any{
+		"target":           "example.test",
+		"data_provider":    "LeOmOe",
+		"disable_maptrace": true,
+	}); err != nil {
+		t.Fatalf("write init request: %v", err)
+	}
+
+	for _, wantType := range []string{"start", "complete"} {
+		var envelope wsEnvelope
+		if err := conn.ReadJSON(&envelope); err != nil {
+			t.Fatalf("read %s envelope: %v", wantType, err)
+		}
+		if envelope.Type != wantType {
+			t.Fatalf("envelope type = %q, want %q", envelope.Type, wantType)
+		}
+		data, ok := envelope.Data.(map[string]any)
+		if !ok {
+			t.Fatalf("%s data = %T, want object", wantType, envelope.Data)
+		}
+		if got := data["data_provider"]; got != ipgeo.NextTraceAPIProvider {
+			t.Fatalf("%s data_provider = %v, want %q", wantType, got, ipgeo.NextTraceAPIProvider)
+		}
 	}
 }
 

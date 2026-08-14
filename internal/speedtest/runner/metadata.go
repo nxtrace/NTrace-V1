@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultSpeedGeoSourceProvider   = "LeoMoeAPI"
+	defaultSpeedGeoSourceProvider   = ipgeo.NextTraceAPIProvider
 	defaultSpeedGeoLookupRetryCount = 3
 )
 

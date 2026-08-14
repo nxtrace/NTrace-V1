@@ -253,7 +253,7 @@
   - `MaxRounds` → `MaxPerHop`（0 = 无限运行直到客户端断开）。
   - 不再使用 legacy round-based 的 `Interval` / `RunRound`。
 - `executeMTRRaw()` 两路分支：
-  - `HopInterval > 0`：per-hop 模式，仅在 LeoMoe/FastIP 初始化阶段短暂加锁；长期探测不再依赖 `SrcDev` / `DisableMPLS` 等进程级全局。
+  - `HopInterval > 0`：per-hop 模式，仅在 NextTrace API/FastIP 初始化阶段短暂加锁；长期探测不再依赖 `SrcDev` / `DisableMPLS` 等进程级全局。
   - fallback：legacy round-based 模式（保留兼容），`RunRound` 回调内 per-round 锁定。
   - `trace/runMTRRawRoundBased()` 也会先做 `normalizeRuntimeConfig(&cfg)`，因此 legacy raw 路径同样能继承 `SourceDevice`；`DisableMPLS` 不再从全局反向覆盖会话配置。
 - `traceRequest` 新增 `HopIntervalMs` 字段（`json:"hop_interval_ms"`），与 `IntervalMs` 解耦。
@@ -317,24 +317,24 @@
 
 ## DoT 与 Geo DNS
 
-- `--dot-server` 不仅影响目标域名解析，也影响 GeoIP API / LeoMoe FastIP 的域名解析链路。
+- `--dot-server` 不仅影响目标域名解析，也影响 GeoIP API / NextTrace API FastIP 的域名解析链路。
 - 关键文件：`util/dns_resolver.go`
   - `SetGeoDNSResolver(dotServer)`
   - `WithGeoDNSResolver(dotServer, fn)`：为 Web/API 请求提供作用域化的 resolver 切换；不同 resolver 串行切换，相同 resolver 允许安全嵌套，避免 `GetSourceWithGeoDNS` + 外层作用域组合时死锁。
   - `geoResolverOverride` 的读写现在也走 `geoMu`，避免测试覆盖 resolver 时的数据竞争。
   - `LookupHostForGeo(ctx, host)`：IP 字面量短路 -> DoT -> 失败时按配置 fallback 系统 DNS
 - `cmd/cmd.go` 在早期阶段（fast-trace / ws 初始化之前）注入 DoT 解析策略，避免早期分支绕过。
-- `server/trace_handler.go` 通过 `ipgeo.GetSourceWithGeoDNS(...)` + `WithGeoDNSResolver(...)` 让 Web/API 请求也遵守 `dot_server`，包括 LeoMoe/FastIP 初始化阶段。
+- `server/trace_handler.go` 通过 `ipgeo.GetSourceWithGeoDNS(...)` + `WithGeoDNSResolver(...)` 让 Web/API 请求也遵守 `dot_server`，包括 NextTrace API/FastIP 初始化阶段。
 - Geo HTTP 请求统一走 `util.NewGeoHTTPClient(...)`（`util/http_client_geo.go`），其 Transport 现在从默认 Transport `Clone()` 而来，保留代理/HTTP2/连接池等标准行为。
 
-## LeoMoe FastIP 与 MTR 首行
+## NextTrace API FastIP 与 MTR 首行
 
 - `util/latency.go`：
   - `FastIPMetaCache` 缓存节点元数据（IP/Latency/NodeName）
   - `SuppressFastIPOutput` 可抑制彩色横幅
 - `GetFastIP(...)` 的 DNS 阶段现在显式受 `timeout` 限制；`FastIPMetaCache` 也改为在 fallback/default IP 决定后再写入，避免缓存空 IP。
 - MTR 模式在进入 TUI 前会设 `SuppressFastIPOutput=true`，避免污染主终端历史。
-- MTR TUI/report 首行 `APIInfo` 由 `cmd/mtr_mode.go` 的 `buildAPIInfo(...)` 生成（仅 LeoMoeAPI 且有元数据时显示）。
+- MTR TUI/report 首行 `APIInfo` 由 `cmd/mtr_mode.go` 的 `buildAPIInfo(...)` 生成（仅 NextTrace API 且有元数据时显示）。
 - MTR raw 首行由 `buildRawAPIInfoLine(...)` 生成（格式略不同，包含延迟信息）。
 
 ## `--source` / `--dev` 现状
