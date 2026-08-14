@@ -67,6 +67,7 @@ func TestOptionsExposeOnlyCanonicalNextTraceAPIProvider(t *testing.T) {
 }
 
 func TestResolveTraceDataProviderCanonicalizesEnvironmentOverride(t *testing.T) {
+	isolateServerNextTraceAPIV4Token(t, "")
 	oldEnvDataProvider := util.EnvDataProvider
 	defer func() { util.EnvDataProvider = oldEnvDataProvider }()
 	util.EnvDataProvider = "leomoe"
@@ -79,6 +80,37 @@ func TestResolveTraceDataProviderCanonicalizesEnvironmentOverride(t *testing.T) 
 	if !needsV3 {
 		t.Fatal("resolveTraceDataProvider() needsV3 = false, want true")
 	}
+}
+
+func TestResolveTraceDataProviderSkipsV3ForV4Token(t *testing.T) {
+	isolateServerNextTraceAPIV4Token(t, "v4-token")
+	oldEnvDataProvider := util.EnvDataProvider
+	t.Cleanup(func() { util.EnvDataProvider = oldEnvDataProvider })
+	util.EnvDataProvider = ""
+
+	req := traceRequest{DataProvider: "nexttrace-api"}
+	got, needsV3 := resolveTraceDataProvider(&req)
+	if got != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("resolveTraceDataProvider() = %q, want %q", got, ipgeo.NextTraceAPIProvider)
+	}
+	if needsV3 {
+		t.Fatal("resolveTraceDataProvider() needsV3 = true with v4 token")
+	}
+
+	util.EnvDataProvider = "disable-geoip"
+	got, needsV3 = resolveTraceDataProvider(&req)
+	if got != "disable-geoip" || needsV3 {
+		t.Fatalf("resolveTraceDataProvider() = (%q, %v), want (disable-geoip, false)", got, needsV3)
+	}
+}
+
+func isolateServerNextTraceAPIV4Token(t *testing.T, token string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(key, dir)
+	}
+	t.Setenv(util.EnvNextTraceAPIV4TokenKey, token)
 }
 
 func TestTraceHandlerCanonicalizesLegacyProviderInJSONResponse(t *testing.T) {

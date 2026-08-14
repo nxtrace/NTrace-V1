@@ -196,6 +196,7 @@ func resolveTraceDataProvider(req *traceRequest) (string, bool) {
 		dataProvider = normalizeDataProvider(util.EnvDataProvider, "")
 		needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(dataProvider)
 	}
+	needsNextTraceAPIV3 = needsNextTraceAPIV3 && !ipgeo.NextTraceAPIV4TokenConfigured()
 
 	return dataProvider, needsNextTraceAPIV3
 }
