@@ -192,6 +192,9 @@ func ipv4UnreachableDescription(code, info int) string {
 	case 2:
 		return "ICMP Protocol Unreachable"
 	case 4:
+		if info <= 0 {
+			return "ICMP Fragmentation Needed"
+		}
 		return fmt.Sprintf("ICMP Fragmentation Needed (MTU %d)", info)
 	case 5:
 		return "ICMP Source Route Failed"
@@ -235,6 +238,9 @@ func ipv6UnreachableDescription(code int) string {
 }
 
 func fragmentationMarker(mtu int) string {
+	if mtu <= 0 {
+		return "!F"
+	}
 	return fmt.Sprintf("!F-%d", mtu)
 }
 

@@ -286,6 +286,64 @@ func TestClassifySocketICMPResponse(t *testing.T) {
 	}
 }
 
+func TestClassifyICMPFragmentationMTU(t *testing.T) {
+	tests := []struct {
+		name       string
+		ipVersion  int
+		typeID     int
+		code       int
+		info       int
+		wantDetail string
+		wantMarker string
+	}{
+		{
+			name:       "IPv4 unknown MTU",
+			ipVersion:  4,
+			typeID:     3,
+			code:       4,
+			info:       0,
+			wantDetail: "ICMP Fragmentation Needed",
+			wantMarker: "!F",
+		},
+		{
+			name:       "IPv4 known MTU",
+			ipVersion:  4,
+			typeID:     3,
+			code:       4,
+			info:       1400,
+			wantDetail: "ICMP Fragmentation Needed (MTU 1400)",
+			wantMarker: "!F-1400",
+		},
+		{
+			name:       "IPv6 unknown MTU",
+			ipVersion:  6,
+			typeID:     2,
+			code:       0,
+			info:       0,
+			wantDetail: "ICMPv6 Packet Too Big",
+			wantMarker: "!F",
+		},
+		{
+			name:       "IPv6 known MTU",
+			ipVersion:  6,
+			typeID:     2,
+			code:       0,
+			info:       1280,
+			wantDetail: "ICMPv6 Packet Too Big",
+			wantMarker: "!F-1280",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyICMPResponse(tt.ipVersion, tt.typeID, tt.code, tt.info)
+			if got.Kind != ICMPResponseUnreachable || got.Description != tt.wantDetail || got.Marker != tt.wantMarker {
+				t.Fatalf("classifyICMPResponse() = (%v, %q, %q), want (%v, %q, %q)", got.Kind, got.Description, got.Marker, ICMPResponseUnreachable, tt.wantDetail, tt.wantMarker)
+			}
+		})
+	}
+}
+
 func TestExtractSocketICMPPayloadIPv4(t *testing.T) {
 	dstIP := net.ParseIP("8.8.8.8")
 	inner := buildIPv4InnerPacket(dstIP, 13, 99)
