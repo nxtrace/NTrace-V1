@@ -833,8 +833,8 @@ Arguments:
                                      reached). Default: 30
   -d  --data-provider                Choose IP Geographic Data Provider
                                      [NextTrace-API, IP.SB, IPInfo, IPInsight,
-                                     IP-API.com, IPInfoLocal, IPDB.One,
-                                     CHUNZHEN, disable-geoip]. Default:
+                                     IP-API.com, IPInfoLocal, ipdb.one,
+                                     chunzhen, disable-geoip]. Default:
                                      NextTrace-API
       --pow-provider                 Choose PoW Provider for NextTrace API v3
                                      [api.nxtrace.org, sakura] For China

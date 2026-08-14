@@ -54,7 +54,7 @@ Supported:
 }
 ```
 
-`NextTrace-API` is the canonical `data_provider` value for the official API and is always used in responses.
+`NextTrace-API` is the canonical `data_provider` value for the official API. Requests that select the official API or one of its legacy aliases emit `NextTrace-API` in responses.
 
 Output includes `target`, `resolved_ip`, `protocol`, `data_provider`, `language`, `hops[]`, `duration_ms`, and optional `stop_reason`.
 
