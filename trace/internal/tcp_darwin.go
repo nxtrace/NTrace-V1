@@ -87,8 +87,8 @@ func (s *TCPSpec) captureDevice() string {
 
 func (s *TCPSpec) tcpCaptureFilter() string {
 	return fmt.Sprintf(
-		"%s and tcp and src host %s and dst host %s and src port %d",
-		tcpIPVersionPrefix(s.IPVersion), s.DstIP.String(), s.SrcIP.String(), s.DstPort,
+		"%s and tcp and dst host %s and src port %d",
+		tcpIPVersionPrefix(s.IPVersion), s.SrcIP.String(), s.DstPort,
 	)
 }
 

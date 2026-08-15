@@ -67,34 +67,36 @@ func (s *ICMPSpec) listenICMPSock(ctx context.Context, ready chan struct{}, onIC
 			if !ok {
 				return
 			}
-			finish, seq, ok := s.decodeICMPSocketMessage(msg)
+			finish, seq, response, ok := s.decodeICMPSocketMessage(msg)
 			if ok {
+				msg.ICMP = response
 				onICMP(msg, finish, seq)
 			}
 		}
 	}
 }
 
-func (s *ICMPSpec) decodeICMPSocketMessage(msg ReceivedMessage) (time.Time, int, bool) {
+func (s *ICMPSpec) decodeICMPSocketMessage(msg ReceivedMessage) (time.Time, int, ICMPResponse, bool) {
 	if msg.Err != nil {
-		return time.Time{}, 0, false
+		return time.Time{}, 0, ICMPResponse{}, false
 	}
 
 	finish := time.Now()
 	rm, ok := parseSocketICMPMessage(s.IPVersion, msg.Msg)
 	if !ok {
-		return finish, 0, false
+		return finish, 0, ICMPResponse{}, false
 	}
+	response := classifySocketICMPResponse(s.IPVersion, rm, msg.Msg)
 
-	if seq, ok := matchSocketICMPEchoReply(s.IPVersion, rm, util.AddrIP(msg.Peer), s.DstIP, s.EchoID); ok {
-		return finish, seq, true
+	if seq, ok := matchSocketICMPEchoReply(s.IPVersion, rm, s.EchoID, msg.Peer, s.DstIP); ok {
+		return finish, seq, response, true
 	}
 
 	data, ok := extractSocketICMPPayload(s.IPVersion, rm, s.DstIP)
 	if !ok {
-		return finish, 0, false
+		return finish, 0, ICMPResponse{}, false
 	}
 
 	seq, ok := extractEmbeddedICMPSeq(data, s.EchoID)
-	return finish, seq, ok
+	return finish, seq, response, ok
 }

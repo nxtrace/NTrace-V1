@@ -8,6 +8,7 @@ import (
 	"github.com/fatih/color"
 
 	"github.com/nxtrace/NTrace-core/config"
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
 )
@@ -58,6 +59,7 @@ func sponsor() {
 }
 
 func PrintTraceRouteNav(ip net.IP, domain string, dataOrigin string, maxHops int, packetSize int, srcAddr string, mode string) {
+	dataOrigin = ipgeo.CanonicalizeNextTraceAPIProvider(dataOrigin)
 	fmt.Println("IP Geo Data Provider: " + dataOrigin)
 	if srcAddr == "" {
 		srcAddr = "traceroute to"
@@ -84,7 +86,7 @@ func applyLangSetting(h *trace.Hop) {
 		if h.Geo.Whois != "" {
 			h.Geo.Country = h.Geo.Whois
 		} else {
-			if h.Geo.Source != "LeoMoeAPI" {
+			if !ipgeo.IsNextTraceAPIProvider(h.Geo.Source) {
 				h.Geo.Country = "网络故障"
 				h.Geo.CountryEn = "Network Error"
 			} else {

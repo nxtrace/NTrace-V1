@@ -93,10 +93,6 @@ func (s *TCPSpec) ListenTCP(ctx context.Context, ready chan struct{}, onTCP func
 			}
 			finish := time.Now()
 
-			if ip := util.AddrIP(msg.Peer); ip == nil || !ip.Equal(s.DstIP) {
-				continue
-			}
-
 			// 解包
 			packet := gopacket.NewPacket(msg.Msg, layers.LayerTypeTCP, gopacket.Default)
 			if packet.ErrorLayer() != nil {

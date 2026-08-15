@@ -27,6 +27,11 @@ type FastTracer struct {
 	ParamsFastTrace  ParamsFastTrace
 }
 
+var (
+	fastTraceTracerouteFn   = trace.Traceroute
+	fastTraceDomainLookupFn = util.DomainLookUpWithContext
+)
+
 type ParamsFastTrace struct {
 	Context         context.Context
 	OSType          int
@@ -216,8 +221,8 @@ func loadIPList(ctx context.Context, filePath string) []IpListElement {
 	return ipList
 }
 
-func printFileTraceHeader(ip IpListElement, params ParamsFastTrace, tracerouteMethod trace.Method) {
-	fmt.Fprintf(color.Output, "%s\n", color.New(color.FgYellow, color.Bold).Sprint("『 "+ip.Desc+"』"))
+func printFileTraceHeader(ip IpListElement, params ParamsFastTrace, tracerouteMethod trace.Method) error {
+	_, titleErr := fmt.Fprintf(color.Output, "%s\n", color.New(color.FgYellow, color.Bold).Sprint("『 "+ip.Desc+"』"))
 	dst := ip.Ip
 	if util.EnableHidDstIP {
 		dst = util.HideIPPart(ip.Ip)
@@ -227,6 +232,7 @@ func printFileTraceHeader(ip IpListElement, params ParamsFastTrace, tracerouteMe
 		displayPacketSize = trace.DefaultPacketSize(tracerouteMethod, net.ParseIP(ip.Ip))
 	}
 	fmt.Printf("traceroute to %s, %d hops max, %s, %s mode\n", dst, params.MaxHops, trace.FormatPacketSizeLabel(displayPacketSize), strings.ToUpper(string(tracerouteMethod)))
+	return titleErr
 }
 
 func buildFileTraceConfig(params ParamsFastTrace, tracerouteMethod trace.Method, ip IpListElement) (trace.Config, error) {
@@ -253,7 +259,7 @@ func buildFileTraceConfig(params ParamsFastTrace, tracerouteMethod trace.Method,
 		AlwaysWaitRDNS:   params.AlwaysWaitRDNS,
 		PacketInterval:   100,
 		TTLInterval:      500,
-		IPGeoSource:      ipgeo.GetSource("LeoMoeAPI"),
+		IPGeoSource:      ipgeo.GetSource(ipgeo.NextTraceAPIProvider),
 		Timeout:          params.Timeout,
 		SrcAddr:          params.SrcAddr,
 		SourceDevice:     params.SrcDev,
@@ -268,30 +274,76 @@ func normalizeFastTraceConfig(method trace.Method, conf trace.Config) (trace.Con
 	return trace.NormalizeExplicitSourceConfig(method, conf)
 }
 
-func configureFastTraceRealtimePrinter(conf *trace.Config, outputPath, header string) (func() error, error) {
+type fastTraceOutputPlan struct {
+	file io.WriteCloser
+}
+
+func (plan *fastTraceOutputPlan) printStopReason(reason *trace.StopReason) error {
+	terminalErr := printer.PrintTraceStopReason(reason)
+	var fileErr error
+	if plan != nil && plan.file != nil {
+		fileErr = printer.WriteTraceStopReason(plan.file, reason)
+	}
+	return errors.Join(terminalErr, fileErr)
+}
+
+func (plan *fastTraceOutputPlan) close() error {
+	if plan == nil || plan.file == nil {
+		return nil
+	}
+	return plan.file.Close()
+}
+
+func configureFastTraceRealtimePrinter(conf *trace.Config, outputPath, header string) (*fastTraceOutputPlan, error) {
+	plan := &fastTraceOutputPlan{}
 	if strings.TrimSpace(outputPath) == "" {
 		conf.RealtimePrinter = printer.RealtimePrinter
-		return nil, nil
+		return plan, nil
 	}
 
 	fp, err := tracelog.OpenFile(outputPath)
 	if err != nil {
 		log.Printf("fast trace output open failed for %q: %v; falling back to stdout", outputPath, err)
 		conf.RealtimePrinter = printer.RealtimePrinter
-		return nil, nil
+		return plan, nil
 	}
 	if err := tracelog.WriteHeader(fp, header); err != nil {
-		_ = fp.Close()
+		if closeErr := fp.Close(); closeErr != nil {
+			log.Printf("fast trace output close failed for %q: %v", outputPath, closeErr)
+		}
 		log.Printf("fast trace output header write failed for %q: %v; falling back to stdout", outputPath, err)
 		conf.RealtimePrinter = printer.RealtimePrinter
-		return nil, nil
+		return plan, nil
 	}
-	conf.RealtimePrinter = tracelog.NewRealtimePrinter(io.MultiWriter(os.Stdout, fp))
-	return fp.Close, nil
+	conf.RealtimePrinter = func(res *trace.Result, ttl int) {
+		printer.RealtimePrinter(res, ttl)
+		if err := tracelog.WriteRealtime(fp, res, ttl); err != nil {
+			log.Printf("fast trace output write failed for %q: %v", outputPath, err)
+		}
+	}
+	plan.file = fp
+	return plan, nil
+}
+
+func runFastTraceOnce(method trace.Method, conf trace.Config, outputPlan *fastTraceOutputPlan) bool {
+	res, err := fastTraceTracerouteFn(method, conf)
+	if shouldStopFastTrace(err) {
+		return false
+	}
+	if res == nil {
+		log.Println("fast trace returned no result")
+		return false
+	}
+	if err := outputPlan.printStopReason(res.StopReason); err != nil {
+		log.Printf("fast trace stop reason write failed: %v", err)
+	}
+	return true
 }
 
 func runFileTraceTarget(params ParamsFastTrace, tracerouteMethod trace.Method, ip IpListElement) {
-	printFileTraceHeader(ip, params, tracerouteMethod)
+	if err := printFileTraceHeader(ip, params, tracerouteMethod); err != nil {
+		log.Printf("fast trace title write failed: %v", err)
+	}
 
 	conf, err := buildFileTraceConfig(params, tracerouteMethod, ip)
 	if shouldStopFastTrace(err) {
@@ -306,27 +358,27 @@ func runFileTraceTarget(params ParamsFastTrace, tracerouteMethod trace.Method, i
 		displayPacketSize = trace.DefaultPacketSize(tracerouteMethod, net.ParseIP(ip.Ip))
 	}
 	header := fmt.Sprintf("『%s』\ntraceroute to %s, %d hops max, %s, %s mode\n", ip.Desc, ip.Ip, params.MaxHops, trace.FormatPacketSizeLabel(displayPacketSize), strings.ToUpper(string(tracerouteMethod)))
-	cleanup, err := configureFastTraceRealtimePrinter(&conf, params.OutputPath, header)
+	outputPlan, err := configureFastTraceRealtimePrinter(&conf, params.OutputPath, header)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	if cleanup != nil {
-		defer func() {
-			if closeErr := cleanup(); closeErr != nil {
-				log.Println(closeErr)
-			}
-		}()
-	}
+	defer func() {
+		if closeErr := outputPlan.close(); closeErr != nil {
+			log.Println(closeErr)
+		}
+	}()
 
-	if _, err := trace.Traceroute(tracerouteMethod, conf); shouldStopFastTrace(err) {
+	if !runFastTraceOnce(tracerouteMethod, conf, outputPlan) {
 		return
 	}
 	fmt.Println()
 }
 
 func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
-	fmt.Fprintf(color.Output, "%s\n", color.New(color.FgYellow, color.Bold).Sprintf("『%s %s 』", location, ispCollection.ISPName))
+	if _, err := fmt.Fprintf(color.Output, "%s\n", color.New(color.FgYellow, color.Bold).Sprintf("『%s %s 』", location, ispCollection.ISPName)); err != nil {
+		log.Printf("fast trace title write failed: %v", err)
+	}
 	displayPacketSize := f.ParamsFastTrace.PktSize
 	if !f.ParamsFastTrace.PacketSizeSet {
 		displayPacketSize = trace.DefaultPacketSize(f.TracerouteMethod, net.ParseIP(ispCollection.IP))
@@ -334,7 +386,7 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 	fmt.Printf("traceroute to %s, %d hops max, %s, %s mode\n", ispCollection.IP, f.ParamsFastTrace.MaxHops, trace.FormatPacketSizeLabel(displayPacketSize), strings.ToUpper(string(f.TracerouteMethod)))
 
 	// ip, err := util.DomainLookUp(ispCollection.IP, "4", "", true)
-	ip, err := util.DomainLookUpWithContext(f.ParamsFastTrace.Context, ispCollection.IP, "4", f.ParamsFastTrace.Dot, true)
+	ip, err := fastTraceDomainLookupFn(f.ParamsFastTrace.Context, ispCollection.IP, "4", f.ParamsFastTrace.Dot, true)
 	if shouldStopFastTrace(err) {
 		return
 	}
@@ -361,7 +413,7 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 		AlwaysWaitRDNS:   f.ParamsFastTrace.AlwaysWaitRDNS,
 		PacketInterval:   100,
 		TTLInterval:      500,
-		IPGeoSource:      ipgeo.GetSource("LeoMoeAPI"),
+		IPGeoSource:      ipgeo.GetSource(ipgeo.NextTraceAPIProvider),
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
 		SourceDevice:     f.ParamsFastTrace.SrcDev,
@@ -377,22 +429,18 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 
 	header := fmt.Sprintf("『%s %s 』\ntraceroute to %s, %d hops max, %s, %s mode\n",
 		location, ispCollection.ISPName, ispCollection.IP, f.ParamsFastTrace.MaxHops, trace.FormatPacketSizeLabel(displayPacketSize), strings.ToUpper(string(f.TracerouteMethod)))
-	cleanup, err := configureFastTraceRealtimePrinter(&conf, f.ParamsFastTrace.OutputPath, header)
+	outputPlan, err := configureFastTraceRealtimePrinter(&conf, f.ParamsFastTrace.OutputPath, header)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	if cleanup != nil {
-		defer func() {
-			if closeErr := cleanup(); closeErr != nil {
-				log.Println(closeErr)
-			}
-		}()
-	}
+	defer func() {
+		if closeErr := outputPlan.close(); closeErr != nil {
+			log.Println(closeErr)
+		}
+	}()
 
-	_, err = trace.Traceroute(f.TracerouteMethod, conf)
-
-	if shouldStopFastTrace(err) {
+	if !runFastTraceOnce(f.TracerouteMethod, conf, outputPlan) {
 		return
 	}
 	fmt.Println()

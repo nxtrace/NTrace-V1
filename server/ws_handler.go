@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
+	"github.com/nxtrace/NTrace-core/internal/service"
 	"github.com/nxtrace/NTrace-core/trace"
 )
 
@@ -335,6 +336,7 @@ func runSingleTrace(ctx context.Context, session *wsTraceSession, setup *traceEx
 		Language:     setup.Config.Lang,
 		Hops:         convertHops(res, setup.Config.Lang),
 		DurationMs:   duration.Milliseconds(),
+		StopReason:   service.NewTraceStopReason(res.StopReason),
 	}
 
 	if err := session.send(wsEnvelope{Type: "complete", Data: final}); err != nil {
@@ -348,12 +350,19 @@ func runMTRTrace(parentCtx context.Context, session *wsTraceSession, setup *trac
 	maxPerHop := setup.Req.MaxRounds // 0 = unlimited
 
 	iteration := 0
+	var pathEnd *service.TraceStopReason
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	err := executeMTRRaw(ctx, session, setup, trace.MTRRawOptions{
 		HopInterval: hopInterval,
 		MaxPerHop:   maxPerHop,
+		OnPathEnd: func(reason *trace.StopReason) {
+			pathEnd = service.NewTraceStopReason(reason)
+			if err := session.send(wsEnvelope{Type: "path_end", Data: pathEnd}); err != nil {
+				cancel()
+			}
+		},
 	}, func(rec trace.MTRRawRecord) {
 		if rec.Iteration > iteration {
 			iteration = rec.Iteration
@@ -369,7 +378,7 @@ func runMTRTrace(parentCtx context.Context, session *wsTraceSession, setup *trac
 	}
 
 	if !session.closed.Load() {
-		_ = session.send(wsEnvelope{Type: "complete", Data: gin.H{"iteration": iteration}})
+		_ = session.send(wsEnvelope{Type: "complete", Data: gin.H{"iteration": iteration, "path_end": pathEnd}})
 	}
 }
 
@@ -381,15 +390,15 @@ func executeMTRRaw(ctx context.Context, session *wsTraceSession, setup *traceExe
 	}
 
 	if opts.HopInterval > 0 {
-		// Per-hop scheduling only needs LeoMoe/FastIP setup now; the trace runtime
+		// Per-hop scheduling only needs NextTrace API/FastIP setup now; the trace runtime
 		// itself no longer depends on per-session mutable globals.
 		log.Printf("[deploy] (ws) starting MTR per-hop trace target=%s resolved=%s method=%s lang=%s maxHops=%d hopInterval=%s maxPerHop=%d",
 			sanitizeLogParam(setup.Target), setup.IP.String(), string(setup.Method), sanitizeLogParam(config.Lang), config.MaxHops, opts.HopInterval, opts.MaxPerHop)
 
 		traceMu.Lock()
 		_, err := withTraceSetupContext(setup, func() (struct{}, error) {
-			if setup.NeedsLeoWS {
-				ensureLeoMoeConnection()
+			if setup.NeedsNextTraceAPIV3 {
+				ensureNextTraceAPIV3ConnectionFn()
 			}
 			return struct{}{}, nil
 		})
@@ -410,8 +419,8 @@ func executeMTRRaw(ctx context.Context, session *wsTraceSession, setup *traceExe
 		defer traceMu.Unlock()
 
 		return withTraceSetupContext(setup, func() (*trace.Result, error) {
-			if setup.NeedsLeoWS {
-				ensureLeoMoeConnection()
+			if setup.NeedsNextTraceAPIV3 {
+				ensureNextTraceAPIV3ConnectionFn()
 			}
 			return traceTracerouteFn(method, cfg)
 		})
@@ -437,8 +446,8 @@ func executeTrace(ctx context.Context, session *wsTraceSession, setup *traceExec
 	log.Printf("[deploy] (ws) starting trace target=%s resolved=%s method=%s lang=%s queries=%d maxHops=%d", sanitizeLogParam(setup.Target), setup.IP.String(), string(setup.Method), sanitizeLogParam(config.Lang), config.NumMeasurements, config.MaxHops)
 	start := time.Now()
 	res, err := withTraceSetupContext(setup, func() (*trace.Result, error) {
-		if setup.NeedsLeoWS {
-			ensureLeoMoeConnection()
+		if setup.NeedsNextTraceAPIV3 {
+			ensureNextTraceAPIV3ConnectionFn()
 		}
 		return traceTracerouteFn(setup.Method, config)
 	})

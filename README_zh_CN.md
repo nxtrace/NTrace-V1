@@ -296,8 +296,12 @@ nexttrace --disable-mpls example.com
 export NEXTTRACE_DISABLEMPLS=1
 ```
 
+普通 traceroute 会报告停止原因：到达目标、收到终止性的 unreachable 响应（含 marker），或达到配置的最大跳数。`--json` 保持既有顶层结果结构，并新增可选 `StopReason`；其嵌套字段固定为小写 `hop`、`reason`、`responses`、`markers`，其中 `responses` 是人类可读描述，`markers` 是机器可读代码。classic/raw/JSON 不追加人类可读 footer；`--output` 会把同一停止原因以无 ANSI 的纯文本写入日志。
+
+普通 traceroute 同时指定多个输出模式时，优先级为 `--json` > `--table` > `--classic` > `--raw` > `--output` > 实时输出。高优先级模式覆盖显式 `--output` 或 `--output-default` 时，NextTrace 会在 stderr 说明该选择，且不会创建被忽略的日志文件。
+
 PS: 路由可视化的绘制模块为独立模块，具体代码可在 [nxtrace/traceMap](https://github.com/nxtrace/traceMap) 查看  
-路由可视化功能因为需要每个 Hop 的地理位置坐标，而第三方 API 通常不提供此类信息，所以此功能目前只支持搭配 LeoMoeAPI 使用。
+路由可视化功能需要每个 Hop 的地理位置坐标，目前支持搭配 NextTrace API、IPInfo 和 IP-API.com 使用。
 
 #### `Windows` 用户必须完成的配置步骤
 
@@ -579,7 +583,7 @@ nexttrace -t --tcp --max-hops 20 --first 3 --no-rdns 8.8.8.8
 - **`d` / `D`** — 切换可选历史显示；默认 TUI 仍是经典指标表
 - **`g` / `G`** — 仅在历史显示中循环切换 History 图表：heatmap → bars → sparkline
 - TUI 标题栏显示**源 → 目标**路由信息，指定 `--source`/`--dev` 时会展示对应信息。
-- 使用 LeoMoeAPI 时，标题栏会显示首选 API IP 地址。
+- 使用 NextTrace API 且首选 API 元数据可用时，标题栏会显示首选 API IP 地址。
 - 使用**备用屏幕缓冲区**，退出后恢复之前的终端历史记录。
 - 当 stdin 非 TTY（如管道输入）时，降级为简单表格刷新模式。
 
@@ -609,7 +613,7 @@ wide 报告模式（`-w` / `--wide`）继续保留当前完整信息行为，包
 
 当 `--raw` 与 MTR（`--mtr`、`-r`、`-w`）一起使用时，会进入 **MTR 原始流式模式**。
 
-如果当前数据源是 `LeoMoeAPI`，会先输出一行无色的 API 信息头：
+如果当前数据源是 `NextTrace-API` 且首选 API 元数据可用，会先输出一行无色的 API 信息头：
 
 ```text
 [NextTrace API] preferred API IP - [2403:18c0:1001:462:dd:38ff:fe48:e0c5] - 21.33ms - DMIT.NRT
@@ -629,16 +633,22 @@ wide 报告模式（`-w` / `--wide`）继续保留当前完整信息行为，包
 
 `ttl|*||||||||||`
 
+raw stdout 契约仍严格保持 12 列。无限运行的 MTR 中，unreachable 边界是临时状态：后续 transit 证据可以重新开放更高跳数，之后新的 unreachable 边界可能再次输出 stderr 诊断。有限运行以最终结构化 `path_end` 为准。Web/API/MCP 的结构化记录通过逐 probe `response` 和最终 `path_end` 表达语义，不再按 responder IP 是否等于目标 IP 推断。
+
 在 MTR 模式（`--mtr`、`-r`、`-w`，包括 `--raw`）下，`-i/--ttl-time` 设置的是**每个跳点的探测间隔**：同一跳点两次连续探测之间的等待时间（未显式指定时默认 1000ms）。`-z/--send-time` 在 MTR 模式下被忽略。
 
 > 注意：`--show-ips` 仅在 MTR 模式（`--mtr`、`-r`、`-w`）生效，其他模式会忽略。
 >
 > 注意：`--mtr` 不可与 `--table`、`--classic`、`--json`、`--output`、`--output-default`、`--route-path`、`--from`、`--fast-trace`、`--file`、`--deploy` 同时使用。
 
-#### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`LeoMoeAPI`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `CHUNZHEN`)
+#### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`）
+
+##### LeoMoeAPI 名称迁移
+
+`LeoMoeAPI` 是本项目官方 API 已停止使用的旧名称，现统一称为 **NextTrace API**，其机器可读的 `data_provider` 规范值为 `NextTrace-API`。为兼容现有脚本，旧值 `LeoMoeAPI` 和 `LeoMoe` 仍作为大小写不敏感的静默输入别名保留，但 NextTrace 始终输出规范值。WebSocket/PoW 实现称为 **NextTrace API v3**，使用 token 鉴权的 HTTP 实现称为 **NextTrace API v4**。
 
 ```bash
-# 可以自行指定IP数据库[此处为IP-API.com]，不指定则默认为LeoMoeAPI
+# 可以自行指定 IP 数据库[此处为 IP-API.com]，不指定则默认使用 NextTrace API
 nexttrace --data-provider ip-api.com
 ## 特别的: 其中 ipinfo 和 IPInsight API 对于免费版查询有频率限制，可从这些服务商自行购买服务以解除限制，如有需要可以 clone 本项目添加其提供的 token 自行编译
 ##        TOKEN填写路径：ipgeo/tokens.go
@@ -658,7 +668,7 @@ export NEXTTRACE_CHUNZHENURL=http://127.0.0.1:2060
 export NEXTTRACE_DATAPROVIDER=ipinfo
 ```
 
-没有可用的 NextTrace API v4 token 时，LeoMoeAPI 默认仍使用旧 v3 WebSocket API。只想在当前 shell 会话启用 NextTrace API v4 HTTP GeoIP 接口时，运行设置命令并粘贴 token：
+没有可用的 NextTrace API v4 token 时，默认使用 NextTrace API v3 WebSocket/PoW。只想在当前 shell 会话启用 NextTrace API v4 HTTP GeoIP 接口时，运行设置命令并粘贴 token：
 
 ```bash
 # Token 页面：
@@ -669,7 +679,7 @@ nexttrace -x
 
 `nexttrace -x` 会把 token 写入临时文件：一个按父进程 PID 区分（父进程通常就是当前 shell），另一个是同用户 fallback 文件，用于 `go run` 这类 wrapper 命令。之后启动的 `nexttrace` 会按真实 `NEXTTRACE_API_V4_TOKEN`、父 PID 文件、fallback 文件的顺序读取，并把值加载到当前进程环境。该命令不会写 shell profile、永久环境变量或 `nt_config.yaml`。
 
-设置 `NEXTTRACE_API_V4_TOKEN` 且当前数据源仍为 `LeoMoeAPI` 时，NextTrace 会请求 `GET https://api.nxtrace.org/v4/ipGeo?ip=<ip>`，并只通过 `X-NextTrace-Token: <token>` 请求头传 token；请求没有 JSON body。成功响应是直接映射到现有输出字段的 GeoIP JSON；配额信息只解析响应头（`X-NextTrace-Quota-Remaining`、`X-NextTrace-Quota-Expires-At`、`X-NextTrace-Quota-Cost`、`X-NextTrace-Quota-Source`），不改变默认输出格式。错误响应优先解析 `{"error":{"message":"..."}}`；已知状态包括 `400` 空/非法 IP、`401` unauthorized、`429` quota exhausted、`500` internal server error。NextTrace API v4 token 模式下的错误不会 fallback 到旧 v3 WebSocket API。
+设置 `NEXTTRACE_API_V4_TOKEN` 且当前数据源仍为 `NextTrace-API` 时，NextTrace 会请求 `GET https://api.nxtrace.org/v4/ipGeo?ip=<ip>`，并只通过 `X-NextTrace-Token: <token>` 请求头传 token；请求没有 JSON body。成功响应是直接映射到现有输出字段的 GeoIP JSON；配额信息只解析响应头（`X-NextTrace-Quota-Remaining`、`X-NextTrace-Quota-Expires-At`、`X-NextTrace-Quota-Cost`、`X-NextTrace-Quota-Source`），不改变默认输出格式。错误响应优先解析 `{"error":{"message":"..."}}`；已知状态包括 `400` 空/非法 IP、`401` unauthorized、`429` quota exhausted、`500` internal server error。NextTrace API v4 token 模式下的错误不会 fallback 到 NextTrace API v3。
 
 #### `NextTrace`支持使用混合参数和简略参数
 
@@ -723,10 +733,10 @@ NextTrace 当前会读取下列环境变量。对于 `NEXTTRACE_*` 布尔开关�
 
 | 变量名 | 默认值 | 说明 |
 | --- | --- | --- |
-| `NEXTTRACE_HOSTPORT` | `api.nxtrace.org` | 覆盖 LeoMoeAPI、tracemap、FastIP 等使用的后端地址，支持 `host` 或 `host:port`。 |
-| `NEXTTRACE_TOKEN` | 未设置 | 预置 LeoMoeAPI Bearer Token；设置后将跳过 PoW 取 token 流程。 |
-| `NEXTTRACE_API_V4_TOKEN` | 未设置 | LeoMoeAPI NextTrace API v4 HTTP GeoIP token。未设置时，NextTrace 还会检查 `nexttrace -x` 写入的临时 token 文件；两者都不存在时，LeoMoeAPI 仍使用旧 v3 WebSocket / PoW 流程。 |
-| `NEXTTRACE_POWPROVIDER` | `api.nxtrace.org` | 指定 PoW 服务提供方；当前内置的非默认别名为 `sakura`。 |
+| `NEXTTRACE_HOSTPORT` | `api.nxtrace.org` | 覆盖 NextTrace API v3、tracemap、FastIP 等使用的后端地址，支持 `host` 或 `host:port`。 |
+| `NEXTTRACE_TOKEN` | 未设置 | 预置 NextTrace API v3 Bearer Token；设置后将跳过 PoW 取 token 流程。 |
+| `NEXTTRACE_API_V4_TOKEN` | 未设置 | NextTrace API v4 HTTP GeoIP token。未设置时，NextTrace 还会检查 `nexttrace -x` 写入的临时 token 文件；两者都不存在时，继续使用 NextTrace API v3 WebSocket/PoW。 |
+| `NEXTTRACE_POWPROVIDER` | `api.nxtrace.org` | 指定 NextTrace API v3 的 PoW 服务提供方；当前内置的非默认别名为 `sakura`。 |
 | `NEXTTRACE_DEPLOY_ADDR` | 未设置 | `--deploy` 模式下，当未传 `--listen` 时使用的默认监听地址。 |
 | `NEXTTRACE_DEPLOY_TOKEN` | 未设置 | `--deploy` WebUI/API/WebSocket/MCP 访问 token。CLI `--deploy-token` 优先级更高。 |
 | `NEXTTRACE_ALLOW_CROSS_ORIGIN` | `0` | 仅对 `--deploy` 生效：是否允许跨站浏览器访问 Web UI / API。默认关闭以保证安全。 |
@@ -769,7 +779,7 @@ Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
                  [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
                  [--max-attempts <integer>] [--parallel-requests <integer>]
                  [-m|--max-hops <integer>] [-d|--data-provider
-                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|LeoMoeAPI|leomoeapi|ipdb.one|disable-geoip)]
+                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip)]
                  [--pow-provider (api.nxtrace.org|sakura)] [-n|--no-rdns]
                  [-a|--always-rdns] [-P|--route-path] [--dn42] [-o|--output
                  "<value>"] [-O|--output-default] [--table] [--raw]
@@ -821,13 +831,15 @@ Arguments:
                                      Default: 18
   -m  --max-hops                     Set the max number of hops (max TTL to be
                                      reached). Default: 30
-  -d  --data-provider                Choose IP Geograph Data Provider [IP.SB,
-                                     IPInfo, IPInsight, IP-API.com,
-                                     IPInfoLocal, CHUNZHEN, disable-geoip].
-                                     Default: LeoMoeAPI
-      --pow-provider                 Choose PoW Provider [api.nxtrace.org,
-                                     sakura] For China mainland users, please
-                                     use sakura. Default: api.nxtrace.org
+  -d  --data-provider                Choose IP Geographic Data Provider
+                                     [NextTrace-API, IP.SB, IPInfo, IPInsight,
+                                     IP-API.com, IPInfoLocal, ipdb.one,
+                                     chunzhen, disable-geoip]. Default:
+                                     NextTrace-API
+      --pow-provider                 Choose PoW Provider for NextTrace API v3
+                                     [api.nxtrace.org, sakura] For China
+                                     mainland users, please use sakura.
+                                     Default: api.nxtrace.org
   -n  --no-rdns                      Do not resolve IP addresses to their
                                      domain names
   -a  --always-rdns                  Always resolve IP addresses to their
@@ -930,13 +942,13 @@ Arguments:
 
 NextTrace 所有的的 IP 地理位置 `API DEMO` 可以参考[这里](https://github.com/nxtrace/NTrace-core/blob/main/ipgeo/)
 
-你可以在这里添加你自己的 API 接口，为了 NextTrace 能够正确显示你接口中的内容，请参考 `leo.go` 中所需要的信息
+你可以在这里添加自己的 API 接口。为了让 NextTrace 正确显示返回内容，请参考 `ipgeo/ipgeo.go` 中的 `IPGeoData` 字段。
 
-✨NextTrace `LeoMoeAPI` 的后端 Demo
+✨NextTrace API 的后端 Demo
 
 [GitHub - sjlleo/nexttrace-backend: NextTrace BackEnd](https://github.com/sjlleo/nexttrace-backend)
 
-NextTrace `LeoMoeAPI`现已使用Proof of Work(POW)机制来防止滥用，其中NextTrace作为客户端引入了powclient库，POW CLIENT/SERVER均已开源，欢迎大家使用。(POW模块相关问题请发到对应的仓库)
+NextTrace API v3 使用 Proof of Work（PoW）机制防止滥用，NextTrace 客户端使用 powclient 库。PoW 客户端与服务端均已开源，相关问题请提交到对应仓库。
 
 - [GitHub - tsosunchia/powclient: Proof of Work CLIENT for NextTrace](https://github.com/tsosunchia/powclient)
 - [GitHub - tsosunchia/powserver: Proof of Work SERVER for NextTrace](https://github.com/tsosunchia/powserver)
@@ -1118,21 +1130,21 @@ openclaw mcp set nexttrace '{
 > - 本项目的GITHUB ISSUES区中的[IP 错误报告汇总帖](https://github.com/orgs/nxtrace/discussions/222)
 > - 本项目的纠错专用邮箱: `correct#nxtrace.org` （请注意此邮箱仅供IP相关信息纠错专用，其他反馈请发送ISSUE）
 
-NextTrace 有多个数据源可以选择，目前默认使用的 LeoMoeAPI 为我们项目维护的数据源。
+NextTrace 有多个数据源可以选择，目前默认使用由本项目维护的 NextTrace API。
 
 该项目由 OwO Network 的 [Missuo](https://github.com/missuo) && [Leo](https://github.com/sjlleo) 发起，由 [Zhshch](https://github.com/zhshch2002/) 完成最早期架构的编写和指导，后由 Leo 完成了大部分开发工作，现主要交由 [tsosunchia](https://github.com/tsosunchia) 完成后续的二开和维护工作。
 
-LeoMoeAPI 是 [Leo](https://github.com/sjlleo) 的作品，归属于 Leo Network，由 [Leo](https://github.com/sjlleo) 完成整套后端 API 编写，该接口未经允许不可用于任何第三方用途。
+NextTrace API 最初由 [Leo](https://github.com/sjlleo) 为 Leo Network 开发整套后端 API；该接口未经允许不可用于任何第三方用途。
 
-LeoMoeAPI 早期数据主要来自 IPInsight、IPInfo，随着项目发展，越来越多的志愿者参与进了这个项目。目前 LeoMoeAPI 有近一半的数据是社区提供的，而另外一半主要来自于包含 IPInfo、IPData、BigDataCloud、IPGeoLocation 在内的多个第三方数据。
+NextTrace API 早期数据主要来自 IPInsight、IPInfo。随着项目发展，越来越多的志愿者参与进来；目前近一半数据由社区提供，另一半主要来自 IPInfo、IPData、BigDataCloud、IPGeoLocation 等第三方数据。
 
-LeoMoeAPI 的骨干网数据有近 70% 是社区自发反馈又或者是项目组成员校准的，这给本项目的路由跟踪基础功能带来了一定的保证，但是全球骨干网的体量庞大，我们并无能力如 IPIP 等商业公司拥有海量监测节点，这使得 LeoMoeAPI 的数据精准度无法和形如 BestTrace（IPIP）相提并论。
+NextTrace API 的骨干网数据有近 70% 来自社区反馈或项目组成员校准，这为本项目的路由跟踪基础功能提供了一定保障。但全球骨干网体量庞大，我们没有 IPIP 等商业公司拥有的海量监测节点，因此数据精准度无法与 BestTrace（IPIP）相提并论。
 
-LeoMoeAPI 已经尽力校准了比较常见的骨干网路由，这部分在测试的时候经常会命中，但是如果遇到封闭型 ISP 的路由，大概率可以遇到错误，此类数据不仅是我们，哪怕 IPInsight、IPInfo 也无法正确定位，目前只有 IPIP 能够标记正确，如对此类数据的精确性有着非常高的要求，请务必使用 BestTrace 作为首选。
+NextTrace API 已尽力校准常见骨干网路由，但封闭型 ISP 的路由仍可能定位错误；IPInsight、IPInfo 对此类数据也可能无法正确定位。如对此类数据的精确性要求很高，请优先使用 BestTrace。
 
 我们不保证我们的数据一定会及时更新，也不保证数据的精确性，我们希望您在发现数据错误的时候可以前往 issue 页面提交错误报告，谢谢。
 
-当您使用 LeoMoeAPI 即视为您已经完全了解 NextTrace LeoMoeAPI 的数据精确性，并且同意如果您引用 LeoMoeAPI 其中的数据从而引发的一切问题，均由您自己承担。
+使用 NextTrace API 即表示您已了解其数据精确性限制；引用其中数据所引发的问题由使用者自行承担。
 
 ## DN42 模式使用说明
 
@@ -1178,4 +1190,4 @@ LAX,US,California,Los Anegles
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=nxtrace/NTrace-core&type=Date)](https://star-history.com/#nxtrace/NTrace-core&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=nxtrace/NTrace-core&type=Date)](https://star-history.dera.page/#nxtrace/NTrace-core&type=Date)

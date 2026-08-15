@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,38 @@ import (
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
 )
+
+func TestWriteMTRRawPathEnd(t *testing.T) {
+	reason := &trace.StopReason{
+		Hop:       4,
+		Reason:    trace.StopReasonUnreachable,
+		Responses: []string{"ICMP Host Unreachable"},
+		Markers:   []string{"!H"},
+	}
+	var output bytes.Buffer
+	if err := writeMTRRawPathEnd(&output, reason); err != nil {
+		t.Fatalf("writeMTRRawPathEnd() error = %v", err)
+	}
+	for _, want := range []string{"No Continuing Route Observed", "ICMP Host Unreachable", "!H"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q: %q", want, output.String())
+		}
+	}
+
+	for _, ignored := range []*trace.StopReason{
+		nil,
+		{Hop: 4, Reason: trace.StopReasonDestination},
+		{Hop: 30, Reason: trace.StopReasonMaxHops},
+	} {
+		output.Reset()
+		if err := writeMTRRawPathEnd(&output, ignored); err != nil {
+			t.Fatalf("writeMTRRawPathEnd(%v) error = %v", ignored, err)
+		}
+		if output.Len() != 0 {
+			t.Fatalf("writeMTRRawPathEnd(%v) output = %q, want empty", ignored, output.String())
+		}
+	}
+}
 
 func TestCheckMTRConflicts_NoConflict(t *testing.T) {
 	flags := map[string]bool{
@@ -161,23 +194,23 @@ func TestChooseMTRRunMode_RawPriority(t *testing.T) {
 	}
 }
 
-func TestShouldUseAsyncLeoForMTR_RequiresTrueTTYMode(t *testing.T) {
+func TestShouldUseAsyncNextTraceAPIV3ForMTR_RequiresTrueTTYMode(t *testing.T) {
 	modes := effectiveMTRModes{mtr: true}
 
-	if !shouldUseAsyncLeoForMTR(modes, true, true) {
-		t.Fatal("TTY MTR should use async Leo startup")
+	if !shouldUseAsyncNextTraceAPIV3ForMTR(modes, true, true) {
+		t.Fatal("TTY MTR should use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(modes, false, true) {
-		t.Fatal("non-TTY stdin should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(modes, false, true) {
+		t.Fatal("non-TTY stdin should not use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(modes, true, false) {
-		t.Fatal("non-TTY stdout should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(modes, true, false) {
+		t.Fatal("non-TTY stdout should not use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(effectiveMTRModes{mtr: true, raw: true}, true, true) {
-		t.Fatal("raw MTR should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(effectiveMTRModes{mtr: true, raw: true}, true, true) {
+		t.Fatal("raw MTR should not use async NextTrace API v3 startup")
 	}
-	if shouldUseAsyncLeoForMTR(effectiveMTRModes{mtr: true, report: true}, true, true) {
-		t.Fatal("report MTR should not use async Leo startup")
+	if shouldUseAsyncNextTraceAPIV3ForMTR(effectiveMTRModes{mtr: true, report: true}, true, true) {
+		t.Fatal("report MTR should not use async NextTrace API v3 startup")
 	}
 }
 
@@ -492,7 +525,7 @@ func TestNormalizeMTRReportConfig_WidePreservesGeoSettings(t *testing.T) {
 	}
 }
 
-func TestBuildRawAPIInfoLine_LeoMoeAPI(t *testing.T) {
+func TestBuildRawAPIInfoLine_NextTraceAPI(t *testing.T) {
 	oldCache := util.GetFastIPCache()
 	oldMeta := util.GetFastIPMetaCache()
 	t.Cleanup(func() {
@@ -505,7 +538,7 @@ func TestBuildRawAPIInfoLine_LeoMoeAPI(t *testing.T) {
 		NodeName: "DMIT.NRT",
 	})
 
-	got := buildRawAPIInfoLine("LeoMoeAPI")
+	got := buildRawAPIInfoLine(ipgeo.NextTraceAPIProvider)
 	want := "[NextTrace API] preferred API IP - [2403:18c0:1001:462:dd:38ff:fe48:e0c5] - 21.33ms - DMIT.NRT"
 	if got != want {
 		t.Fatalf("buildRawAPIInfoLine() = %q, want %q", got, want)

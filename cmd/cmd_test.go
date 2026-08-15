@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -11,12 +13,59 @@ import (
 	"time"
 
 	"github.com/akamensky/argparse"
+	"github.com/fatih/color"
 	fastTrace "github.com/nxtrace/NTrace-core/fast_trace"
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/tracelog"
 	"github.com/nxtrace/NTrace-core/util"
 	"github.com/nxtrace/NTrace-core/wshandle"
 )
+
+var errCmdOutputWriter = errors.New("cmd output writer failed")
+
+type failingCmdOutputWriter struct{}
+
+func (failingCmdOutputWriter) Write([]byte) (int, error) {
+	return 0, errCmdOutputWriter
+}
+
+func TestMarshalTraceMapPayloadKeepsHistoricalShape(t *testing.T) {
+	res := &trace.Result{
+		Hops:        [][]trace.Hop{{{TTL: 1}}},
+		StopReason:  &trace.StopReason{Hop: 1, Reason: trace.StopReasonDestination},
+		TraceMapUrl: "https://map.example.test",
+	}
+
+	payload, err := marshalTraceMapPayload(res)
+	if err != nil {
+		t.Fatalf("marshalTraceMapPayload() error = %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("trace map payload decode: %v", err)
+	}
+	if len(fields) != 2 {
+		t.Fatalf("trace map payload fields = %v, want historical Hops and TraceMapUrl only", fields)
+	}
+	if _, ok := fields["Hops"]; !ok {
+		t.Fatalf("trace map payload missing Hops: %s", payload)
+	}
+	if got := string(fields["TraceMapUrl"]); got != `"https://map.example.test"` {
+		t.Fatalf("trace map payload TraceMapUrl = %s", got)
+	}
+	if _, ok := fields["StopReason"]; ok {
+		t.Fatalf("trace map payload leaked StopReason: %s", payload)
+	}
+
+	fullResult, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("full result marshal: %v", err)
+	}
+	if !bytes.Contains(fullResult, []byte(`"StopReason"`)) {
+		t.Fatalf("full JSON result lost StopReason: %s", fullResult)
+	}
+}
 
 func TestLookupTargetIPHonorsContextCancellation(t *testing.T) {
 	oldLookup := domainLookupFn
@@ -71,10 +120,10 @@ func TestLookupTargetIPOrExitReturnsFalseOnContextDeadline(t *testing.T) {
 	}
 }
 
-func TestInitLeoWebsocketSkipsV3WhenNextTraceAPIV4TokenConfigured(t *testing.T) {
+func TestInitNextTraceAPIV3WebSocketSkipsV3WhenNextTraceAPIV4TokenConfigured(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "v4-token")
 	oldPrepare := prepareNextTraceAPIV4FastIPFn
-	oldNewLeo := newLeoWebsocketFn
+	oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 	var prepareCalls int
 	var wsCalls int
 	prepareNextTraceAPIV4FastIPFn = func(ctx context.Context, enableOutput bool) error {
@@ -87,29 +136,29 @@ func TestInitLeoWebsocketSkipsV3WhenNextTraceAPIV4TokenConfigured(t *testing.T) 
 		}
 		return nil
 	}
-	newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+	newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 		wsCalls++
 		return nil
 	}
 	t.Cleanup(func() {
 		prepareNextTraceAPIV4FastIPFn = oldPrepare
-		newLeoWebsocketFn = oldNewLeo
+		newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 	})
-	dataProvider := "LeoMoeAPI"
+	dataProvider := ipgeo.NextTraceAPIProvider
 	powProvider := "api.nxtrace.org"
 
-	if got := initLeoWebsocket(context.Background(), &dataProvider, &powProvider, false); got != nil {
-		t.Fatalf("initLeoWebsocket() = %+v, want nil when NextTrace API v4 token is configured", got)
+	if got := initNextTraceAPIV3WebSocket(context.Background(), &dataProvider, &powProvider, false); got != nil {
+		t.Fatalf("initNextTraceAPIV3WebSocket() = %+v, want nil when NextTrace API v4 token is configured", got)
 	}
 	if prepareCalls != 1 {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
 	}
 	if wsCalls != 0 {
-		t.Fatalf("Leo WS calls = %d, want 0 when API v4 preheat succeeds", wsCalls)
+		t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 0 when API v4 preheat succeeds", wsCalls)
 	}
 }
 
-func TestInitLeoWebsocketSkipsV3WhenNextTraceAPIV4TokenFileConfigured(t *testing.T) {
+func TestInitNextTraceAPIV3WebSocketSkipsV3WhenNextTraceAPIV4TokenFileConfigured(t *testing.T) {
 	tests := []struct {
 		name      string
 		writePath func(paths nextTraceAPIV4TokenPaths) string
@@ -133,7 +182,7 @@ func TestInitLeoWebsocketSkipsV3WhenNextTraceAPIV4TokenFileConfigured(t *testing
 			paths := isolateCmdNextTraceAPIV4TokenFiles(t)
 			writeNextTraceAPIV4TokenFileForTest(t, tt.writePath(paths), "file-token\n")
 			oldPrepare := prepareNextTraceAPIV4FastIPFn
-			oldNewLeo := newLeoWebsocketFn
+			oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 			var prepareCalls int
 			var wsCalls int
 			prepareNextTraceAPIV4FastIPFn = func(ctx context.Context, enableOutput bool) error {
@@ -146,25 +195,25 @@ func TestInitLeoWebsocketSkipsV3WhenNextTraceAPIV4TokenFileConfigured(t *testing
 				}
 				return nil
 			}
-			newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+			newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 				wsCalls++
 				return nil
 			}
 			t.Cleanup(func() {
 				prepareNextTraceAPIV4FastIPFn = oldPrepare
-				newLeoWebsocketFn = oldNewLeo
+				newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 			})
-			dataProvider := "LeoMoeAPI"
+			dataProvider := ipgeo.NextTraceAPIProvider
 			powProvider := "api.nxtrace.org"
 
-			if got := initLeoWebsocket(context.Background(), &dataProvider, &powProvider, false); got != nil {
-				t.Fatalf("initLeoWebsocket() = %+v, want nil when NextTrace API v4 token file is configured", got)
+			if got := initNextTraceAPIV3WebSocket(context.Background(), &dataProvider, &powProvider, false); got != nil {
+				t.Fatalf("initNextTraceAPIV3WebSocket() = %+v, want nil when NextTrace API v4 token file is configured", got)
 			}
 			if prepareCalls != 1 {
 				t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
 			}
 			if wsCalls != 0 {
-				t.Fatalf("Leo WS calls = %d, want 0 when API v4 preheat succeeds", wsCalls)
+				t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 0 when API v4 preheat succeeds", wsCalls)
 			}
 			if got := os.Getenv(util.EnvNextTraceAPIV4TokenKey); got != "file-token" {
 				t.Fatalf("%s = %q, want token loaded from file", util.EnvNextTraceAPIV4TokenKey, got)
@@ -173,70 +222,70 @@ func TestInitLeoWebsocketSkipsV3WhenNextTraceAPIV4TokenFileConfigured(t *testing
 	}
 }
 
-func TestInitLeoWebsocketFallsBackToV3WhenAPIV4FastIPFails(t *testing.T) {
+func TestInitNextTraceAPIV3WebSocketFallsBackToV3WhenAPIV4FastIPFails(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "v4-token")
 	oldPrepare := prepareNextTraceAPIV4FastIPFn
-	oldNewLeo := newLeoWebsocketFn
+	oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 	var prepareCalls int
 	var wsCalls int
 	prepareNextTraceAPIV4FastIPFn = func(context.Context, bool) error {
 		prepareCalls++
 		return errors.New("fastip unavailable")
 	}
-	newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+	newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 		wsCalls++
 		return nil
 	}
 	t.Cleanup(func() {
 		prepareNextTraceAPIV4FastIPFn = oldPrepare
-		newLeoWebsocketFn = oldNewLeo
+		newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 	})
-	dataProvider := "LeoMoeAPI"
+	dataProvider := ipgeo.NextTraceAPIProvider
 	powProvider := "api.nxtrace.org"
 
-	_ = initLeoWebsocket(context.Background(), &dataProvider, &powProvider, false)
+	_ = initNextTraceAPIV3WebSocket(context.Background(), &dataProvider, &powProvider, false)
 	if prepareCalls != 1 {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
 	}
 	if wsCalls != 1 {
-		t.Fatalf("Leo WS calls = %d, want 1 after API v4 preheat failure", wsCalls)
+		t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 1 after API v4 preheat failure", wsCalls)
 	}
 }
 
-func TestInitLeoWebsocketFallsBackToV3WhenAPIV4TokenMissing(t *testing.T) {
+func TestInitNextTraceAPIV3WebSocketFallsBackToV3WhenAPIV4TokenMissing(t *testing.T) {
 	isolateCmdNextTraceAPIV4TokenFiles(t)
 	oldPrepare := prepareNextTraceAPIV4FastIPFn
-	oldNewLeo := newLeoWebsocketFn
+	oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 	var prepareCalls int
 	var wsCalls int
 	prepareNextTraceAPIV4FastIPFn = func(context.Context, bool) error {
 		prepareCalls++
 		return nil
 	}
-	newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+	newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 		wsCalls++
 		return nil
 	}
 	t.Cleanup(func() {
 		prepareNextTraceAPIV4FastIPFn = oldPrepare
-		newLeoWebsocketFn = oldNewLeo
+		newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 	})
-	dataProvider := "LeoMoeAPI"
+	dataProvider := ipgeo.NextTraceAPIProvider
 	powProvider := "api.nxtrace.org"
 
-	_ = initLeoWebsocket(context.Background(), &dataProvider, &powProvider, false)
+	_ = initNextTraceAPIV3WebSocket(context.Background(), &dataProvider, &powProvider, false)
 	if prepareCalls != 0 {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 0 without API v4 token", prepareCalls)
 	}
 	if wsCalls != 1 {
-		t.Fatalf("Leo WS calls = %d, want 1 without API v4 token", wsCalls)
+		t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 1 without API v4 token", wsCalls)
 	}
 }
 
 func TestRunFastTraceModePreparesRuntimeAndMarksParams(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "v4-token")
 	oldPrepare := prepareNextTraceAPIV4FastIPFn
-	oldNewLeo := newLeoWebsocketFn
+	oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 	oldRunFastTrace := runFastTraceFn
 	var prepareCalls int
 	var wsCalls int
@@ -246,7 +295,7 @@ func TestRunFastTraceModePreparesRuntimeAndMarksParams(t *testing.T) {
 		prepareCalls++
 		return nil
 	}
-	newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+	newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 		wsCalls++
 		return nil
 	}
@@ -256,10 +305,10 @@ func TestRunFastTraceModePreparesRuntimeAndMarksParams(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		prepareNextTraceAPIV4FastIPFn = oldPrepare
-		newLeoWebsocketFn = oldNewLeo
+		newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 		runFastTraceFn = oldRunFastTrace
 	})
-	dataProvider := "LeoMoeAPI"
+	dataProvider := ipgeo.NextTraceAPIProvider
 	disableMaptrace := false
 	powProvider := "api.nxtrace.org"
 
@@ -270,7 +319,7 @@ func TestRunFastTraceModePreparesRuntimeAndMarksParams(t *testing.T) {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
 	}
 	if wsCalls != 0 {
-		t.Fatalf("Leo WS calls = %d, want 0 when API v4 preheat succeeds", wsCalls)
+		t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 0 when API v4 preheat succeeds", wsCalls)
 	}
 	if runCalls != 1 {
 		t.Fatalf("FastTest calls = %d, want 1", runCalls)
@@ -283,7 +332,7 @@ func TestRunFastTraceModePreparesRuntimeAndMarksParams(t *testing.T) {
 func TestRunFastTraceModeMarksRuntimePreparedAfterAPIV4FallbackToV3(t *testing.T) {
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "v4-token")
 	oldPrepare := prepareNextTraceAPIV4FastIPFn
-	oldNewLeo := newLeoWebsocketFn
+	oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 	oldRunFastTrace := runFastTraceFn
 	var prepareCalls int
 	var wsCalls int
@@ -292,7 +341,7 @@ func TestRunFastTraceModeMarksRuntimePreparedAfterAPIV4FallbackToV3(t *testing.T
 		prepareCalls++
 		return errors.New("fastip unavailable")
 	}
-	newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+	newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 		wsCalls++
 		return &wshandle.WsConn{}
 	}
@@ -301,10 +350,10 @@ func TestRunFastTraceModeMarksRuntimePreparedAfterAPIV4FallbackToV3(t *testing.T
 	}
 	t.Cleanup(func() {
 		prepareNextTraceAPIV4FastIPFn = oldPrepare
-		newLeoWebsocketFn = oldNewLeo
+		newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 		runFastTraceFn = oldRunFastTrace
 	})
-	dataProvider := "LeoMoeAPI"
+	dataProvider := ipgeo.NextTraceAPIProvider
 	disableMaptrace := false
 	powProvider := "api.nxtrace.org"
 
@@ -315,21 +364,21 @@ func TestRunFastTraceModeMarksRuntimePreparedAfterAPIV4FallbackToV3(t *testing.T
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
 	}
 	if wsCalls != 1 {
-		t.Fatalf("Leo WS calls = %d, want 1 after API v4 preheat failure", wsCalls)
+		t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 1 after API v4 preheat failure", wsCalls)
 	}
 	if !gotRuntimePrepared {
 		t.Fatal("FastTest RuntimePrepared = false, want true after v3 fallback")
 	}
 }
 
-func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonLeoProvider(t *testing.T) {
+func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonNextTraceAPIProvider(t *testing.T) {
 	tests := []struct {
 		name         string
 		dataProvider string
 		envProvider  string
 	}{
 		{name: "cli provider", dataProvider: "IPInfo"},
-		{name: "env override", dataProvider: "LeoMoeAPI", envProvider: "IPInfo"},
+		{name: "env override", dataProvider: ipgeo.NextTraceAPIProvider, envProvider: "IPInfo"},
 	}
 
 	for _, tt := range tests {
@@ -338,7 +387,7 @@ func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonLeoProvider(t *testing.T) 
 			oldEnvDataProvider := util.EnvDataProvider
 			util.EnvDataProvider = tt.envProvider
 			oldPrepare := prepareNextTraceAPIV4FastIPFn
-			oldNewLeo := newLeoWebsocketFn
+			oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 			oldRunFastTrace := runFastTraceFn
 			var prepareCalls int
 			var wsCalls int
@@ -348,7 +397,7 @@ func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonLeoProvider(t *testing.T) 
 				prepareCalls++
 				return nil
 			}
-			newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+			newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 				wsCalls++
 				return &wshandle.WsConn{}
 			}
@@ -359,7 +408,7 @@ func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonLeoProvider(t *testing.T) 
 			t.Cleanup(func() {
 				util.EnvDataProvider = oldEnvDataProvider
 				prepareNextTraceAPIV4FastIPFn = oldPrepare
-				newLeoWebsocketFn = oldNewLeo
+				newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 				runFastTraceFn = oldRunFastTrace
 			})
 			dataProvider := tt.dataProvider
@@ -370,16 +419,16 @@ func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonLeoProvider(t *testing.T) 
 				t.Fatal("runFastTraceModeWithRuntime returned false, want true")
 			}
 			if prepareCalls != 0 {
-				t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 0 for non-Leo provider", prepareCalls)
+				t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 0 for non-NextTrace API provider", prepareCalls)
 			}
 			if wsCalls != 0 {
-				t.Fatalf("Leo WS calls = %d, want 0 for non-Leo provider", wsCalls)
+				t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 0 for non-NextTrace API provider", wsCalls)
 			}
 			if runCalls != 1 {
 				t.Fatalf("FastTest calls = %d, want 1", runCalls)
 			}
 			if gotRuntimePrepared {
-				t.Fatal("FastTest RuntimePrepared = true, want false for non-Leo provider")
+				t.Fatal("FastTest RuntimePrepared = true, want false for non-NextTrace API provider")
 			}
 		})
 	}
@@ -387,7 +436,7 @@ func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonLeoProvider(t *testing.T) 
 
 func TestRunFastTraceModeSkipsRuntimeForGlobalpingFrom(t *testing.T) {
 	oldPrepare := prepareNextTraceAPIV4FastIPFn
-	oldNewLeo := newLeoWebsocketFn
+	oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
 	oldRunFastTrace := runFastTraceFn
 	var prepareCalls int
 	var wsCalls int
@@ -396,7 +445,7 @@ func TestRunFastTraceModeSkipsRuntimeForGlobalpingFrom(t *testing.T) {
 		prepareCalls++
 		return nil
 	}
-	newLeoWebsocketFn = func(context.Context) *wshandle.WsConn {
+	newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
 		wsCalls++
 		return nil
 	}
@@ -405,10 +454,10 @@ func TestRunFastTraceModeSkipsRuntimeForGlobalpingFrom(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		prepareNextTraceAPIV4FastIPFn = oldPrepare
-		newLeoWebsocketFn = oldNewLeo
+		newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
 		runFastTraceFn = oldRunFastTrace
 	})
-	dataProvider := "LeoMoeAPI"
+	dataProvider := ipgeo.NextTraceAPIProvider
 	disableMaptrace := false
 	powProvider := "api.nxtrace.org"
 
@@ -419,7 +468,7 @@ func TestRunFastTraceModeSkipsRuntimeForGlobalpingFrom(t *testing.T) {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 0 for --from", prepareCalls)
 	}
 	if wsCalls != 0 {
-		t.Fatalf("Leo WS calls = %d, want 0 for --from", wsCalls)
+		t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 0 for --from", wsCalls)
 	}
 	if runCalls != 0 {
 		t.Fatalf("FastTest calls = %d, want 0 for --from", runCalls)
@@ -468,6 +517,265 @@ func TestMaybeRunUninterruptedRawReturnsOnCanceledContext(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("maybeRunUninterruptedRaw returned too slowly after cancel: %v", elapsed)
+	}
+}
+
+func TestSelectTraceOutputModePriority(t *testing.T) {
+	tests := []struct {
+		name         string
+		tablePrint   bool
+		classicPrint bool
+		jsonPrint    bool
+		rawPrint     bool
+		outputPath   string
+		want         traceOutputMode
+	}{
+		{name: "realtime", want: traceOutputRealtime},
+		{name: "output", outputPath: "trace.log", want: traceOutputFile},
+		{name: "raw over output", rawPrint: true, outputPath: "trace.log", want: traceOutputRaw},
+		{name: "classic over raw", classicPrint: true, rawPrint: true, outputPath: "trace.log", want: traceOutputClassic},
+		{name: "table over classic", tablePrint: true, classicPrint: true, rawPrint: true, outputPath: "trace.log", want: traceOutputTable},
+		{name: "JSON over table and output", tablePrint: true, classicPrint: true, jsonPrint: true, rawPrint: true, outputPath: "trace.log", want: traceOutputJSON},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectTraceOutputMode(tt.tablePrint, tt.classicPrint, tt.jsonPrint, tt.rawPrint, tt.outputPath)
+			if got != tt.want {
+				t.Fatalf("selectTraceOutputMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTraceOutputPlanStopReasonVisibility(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+	color.NoColor = true
+
+	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination}
+	tests := []struct {
+		name string
+		mode traceOutputMode
+		want bool
+	}{
+		{name: "default", mode: traceOutputRealtime, want: true},
+		{name: "table", mode: traceOutputTable, want: true},
+		{name: "output", mode: traceOutputFile, want: true},
+		{name: "classic", mode: traceOutputClassic},
+		{name: "raw", mode: traceOutputRaw},
+		{name: "JSON", mode: traceOutputJSON},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var terminal bytes.Buffer
+			color.Output = &terminal
+			plan := &traceOutputPlan{mode: tt.mode}
+			if err := plan.printStopReason(reason); err != nil {
+				t.Fatalf("printStopReason() error = %v", err)
+			}
+			if got := strings.Contains(terminal.String(), "Trace Stopped:"); got != tt.want {
+				t.Fatalf("terminal stop reason present = %v, want %v; output=%q", got, tt.want, terminal.String())
+			}
+		})
+	}
+}
+
+func TestWriteIgnoredTraceOutputWarning(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       traceOutputMode
+		outputPath string
+		want       string
+	}{
+		{name: "JSON overrides output", mode: traceOutputJSON, outputPath: "trace.log", want: "JSON"},
+		{name: "table overrides output", mode: traceOutputTable, outputPath: "trace.log", want: "table"},
+		{name: "classic overrides output", mode: traceOutputClassic, outputPath: "trace.log", want: "classic"},
+		{name: "raw overrides output", mode: traceOutputRaw, outputPath: "trace.log", want: "raw"},
+		{name: "file output active", mode: traceOutputFile, outputPath: "trace.log"},
+		{name: "no output requested", mode: traceOutputJSON},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := writeIgnoredTraceOutputWarning(&output, tt.mode, tt.outputPath); err != nil {
+				t.Fatalf("writeIgnoredTraceOutputWarning() error = %v", err)
+			}
+			if tt.want == "" {
+				if output.Len() != 0 {
+					t.Fatalf("warning = %q, want empty", output.String())
+				}
+				return
+			}
+			if got := output.String(); !strings.Contains(got, "output file is ignored") || !strings.Contains(got, tt.want) {
+				t.Fatalf("warning = %q, want ignored warning for %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestJSONOutputOverridesFileWithoutSideEffects(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = true
+	path := filepath.Join(t.TempDir(), "trace.log")
+	mode := selectTraceOutputMode(false, false, true, false, path)
+	if mode != traceOutputJSON {
+		t.Fatalf("selectTraceOutputMode() = %v, want JSON", mode)
+	}
+
+	conf := trace.Config{
+		RealtimePrinter: func(*trace.Result, int) {},
+		AsyncPrinter:    func(*trace.Result) {},
+	}
+	plan, err := configureTracePrinters(&conf, mode, path)
+	if err != nil {
+		t.Fatalf("configureTracePrinters() error = %v", err)
+	}
+	if plan.file != nil {
+		t.Fatal("JSON output opened a trace file")
+	}
+	if conf.RealtimePrinter != nil || conf.AsyncPrinter != nil {
+		t.Fatal("JSON output left a human-readable printer enabled")
+	}
+	if err := plan.printStopReason(&trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination}); err != nil {
+		t.Fatalf("printStopReason() error = %v", err)
+	}
+	if terminal.Len() != 0 {
+		t.Fatalf("JSON output wrote a stop footer: %q", terminal.String())
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("JSON output file stat error = %v, want not exist", err)
+	}
+}
+
+func TestTraceOutputFileWritesPlainStopReason(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = false
+	path := filepath.Join(t.TempDir(), "trace.log")
+	conf := trace.Config{}
+	plan, err := configureTracePrinters(&conf, traceOutputFile, path)
+	if err != nil {
+		t.Fatalf("configureTracePrinters() error = %v", err)
+	}
+	if conf.RealtimePrinter == nil {
+		t.Fatal("RealtimePrinter = nil, want output printer")
+	}
+	conf.RealtimePrinter(&trace.Result{Hops: [][]trace.Hop{{}}}, 0)
+	if !strings.Contains(terminal.String(), "\x1b[") {
+		t.Fatalf("terminal hop output is not styled: %q", terminal.String())
+	}
+	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination, Responses: []string{"ICMP Echo Reply"}}
+	if err := plan.printStopReason(reason); err != nil {
+		t.Fatalf("printStopReason() error = %v", err)
+	}
+	if err := plan.close(); err != nil {
+		t.Fatalf("close() error = %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(got), "1   *\n") {
+		t.Fatalf("output file missing plain hop output: %q", got)
+	}
+	wantStop := "Trace Stopped: Destination Reached at Hop 5 (ICMP Echo Reply)\n"
+	if !strings.Contains(string(got), wantStop) {
+		t.Fatalf("output file = %q, want stop line %q", got, wantStop)
+	}
+	if bytes.Contains(got, []byte("\x1b[")) {
+		t.Fatalf("output file contains ANSI escapes: %q", got)
+	}
+	if !strings.Contains(terminal.String(), "Trace Stopped:") {
+		t.Fatalf("terminal missing stop reason: %q", terminal.String())
+	}
+	if !strings.Contains(terminal.String(), "\x1b[") {
+		t.Fatalf("terminal stop reason is not styled: %q", terminal.String())
+	}
+}
+
+func TestTraceOutputFileStillWritesWhenTerminalFails(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	color.Output = failingCmdOutputWriter{}
+	color.NoColor = true
+	path := filepath.Join(t.TempDir(), "trace.log")
+	plan, err := configureTracePrinters(&trace.Config{}, traceOutputFile, path)
+	if err != nil {
+		t.Fatalf("configureTracePrinters() error = %v", err)
+	}
+	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination}
+	if err := plan.printStopReason(reason); !errors.Is(err, errCmdOutputWriter) {
+		t.Fatalf("printStopReason() error = %v, want %v", err, errCmdOutputWriter)
+	}
+	if err := plan.close(); err != nil {
+		t.Fatalf("close() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "Trace Stopped: Destination Reached at Hop 5\n"; string(got) != want {
+		t.Fatalf("output file = %q, want %q", got, want)
+	}
+}
+
+func TestFinalizeTraceResultRoutePathPrintsStopReason(t *testing.T) {
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	defer func() {
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	}()
+
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = true
+	res := &trace.Result{
+		Hops:       [][]trace.Hop{},
+		StopReason: &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination},
+	}
+	finalizeTraceResult(
+		context.Background(),
+		res,
+		&traceOutputPlan{mode: traceOutputRealtime},
+		false,
+		true,
+		net.ParseIP("192.0.2.1"),
+		true,
+		"disable-geoip",
+	)
+	if !strings.Contains(terminal.String(), "Trace Stopped: Destination Reached at Hop 5") {
+		t.Fatalf("route-path output missing stop reason: %q", terminal.String())
 	}
 }
 
@@ -734,6 +1042,116 @@ func TestNormalizeNegativePacketSizeArgs(t *testing.T) {
 	}
 }
 
+func TestNormalizeDataProviderArgsAcceptsNextTraceAPIAndLegacyAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "canonical mixed case separated short flag",
+			args: []string{"nexttrace", "-d", "nExTtRaCe-aPi", "1.1.1.1"},
+			want: []string{"nexttrace", "-d", ipgeo.NextTraceAPIProvider, "1.1.1.1"},
+		},
+		{
+			name: "legacy LeoMoeAPI separated long flag",
+			args: []string{"nexttrace", "--data-provider", "lEoMoEaPi", "1.1.1.1"},
+			want: []string{"nexttrace", "--data-provider", ipgeo.NextTraceAPIProvider, "1.1.1.1"},
+		},
+		{
+			name: "legacy LeoMoe equals long flag",
+			args: []string{"nexttrace", "--data-provider=LEOMOE", "1.1.1.1"},
+			want: []string{"nexttrace", "--data-provider=" + ipgeo.NextTraceAPIProvider, "1.1.1.1"},
+		},
+		{
+			name: "canonical lowercase equals short flag",
+			args: []string{"nexttrace", "-d=nexttrace-api", "1.1.1.1"},
+			want: []string{"nexttrace", "-d=" + ipgeo.NextTraceAPIProvider, "1.1.1.1"},
+		},
+		{
+			name: "unrelated provider unchanged",
+			args: []string{"nexttrace", "--data-provider=IPInfo", "1.1.1.1"},
+			want: []string{"nexttrace", "--data-provider=IPInfo", "1.1.1.1"},
+		},
+		{
+			name: "positional text after separator unchanged",
+			args: []string{"nexttrace", "--", "--data-provider=LEOMOE"},
+			want: []string{"nexttrace", "--", "--data-provider=LEOMOE"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := append([]string(nil), tt.args...)
+			got := normalizeDataProviderArgs(tt.args)
+			if strings.Join(got, "\x00") != strings.Join(tt.want, "\x00") {
+				t.Fatalf("normalizeDataProviderArgs() = %#v, want %#v", got, tt.want)
+			}
+			if strings.Join(tt.args, "\x00") != strings.Join(original, "\x00") {
+				t.Fatalf("normalizeDataProviderArgs() mutated input to %#v", tt.args)
+			}
+		})
+	}
+}
+
+func TestNormalizedNextTraceAPIProviderArgsParseAgainstCanonicalSelector(t *testing.T) {
+	for _, args := range [][]string{
+		{"nexttrace", "-d", "lEoMoEaPi"},
+		{"nexttrace", "--data-provider=LEOMOE"},
+		{"nexttrace", "-d=nexttrace-api"},
+	} {
+		parser := argparse.NewParser("nexttrace", "")
+		provider := registerDataProviderFlag(parser)
+		if err := parser.Parse(normalizeDataProviderArgs(args)); err != nil {
+			t.Fatalf("Parse(%q) error = %v", args, err)
+		}
+		if *provider != ipgeo.NextTraceAPIProvider {
+			t.Fatalf("Parse(%q) provider = %q, want %q", args, *provider, ipgeo.NextTraceAPIProvider)
+		}
+		usage := parser.Usage(nil)
+		if strings.Contains(strings.ToUpper(usage), "LEOMOE") {
+			t.Fatalf("Parse(%q) usage exposes legacy provider name: %s", args, usage)
+		}
+	}
+}
+
+func TestInitNextTraceAPIRuntimeCanonicalizesLegacyEnvironmentAlias(t *testing.T) {
+	isolateCmdNextTraceAPIV4TokenFiles(t)
+	oldEnvDataProvider := util.EnvDataProvider
+	oldNewNextTraceAPIV3 := newNextTraceAPIV3WebSocketFn
+	util.EnvDataProvider = "lEoMoE"
+	var wsCalls int
+	newNextTraceAPIV3WebSocketFn = func(context.Context) *wshandle.WsConn {
+		wsCalls++
+		return nil
+	}
+	t.Cleanup(func() {
+		util.EnvDataProvider = oldEnvDataProvider
+		newNextTraceAPIV3WebSocketFn = oldNewNextTraceAPIV3
+	})
+
+	dataProvider := ipgeo.NextTraceAPIProvider
+	powProvider := "api.nxtrace.org"
+	_, _ = initNextTraceAPIRuntime(context.Background(), &dataProvider, &powProvider, false)
+	if dataProvider != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("data provider = %q, want canonical %q", dataProvider, ipgeo.NextTraceAPIProvider)
+	}
+	if wsCalls != 1 {
+		t.Fatalf("NextTrace API v3 WebSocket calls = %d, want 1", wsCalls)
+	}
+}
+
+func TestSupportsMapTraceRecognizesNextTraceAPIProviderAliases(t *testing.T) {
+	for _, provider := range []string{ipgeo.NextTraceAPIProvider, "nExTtRaCe-aPi", "lEoMoEaPi", "LEOMOE", "IPInfo"} {
+		if !supportsMapTrace(provider) {
+			t.Errorf("supportsMapTrace(%q) = false, want true", provider)
+		}
+	}
+	if supportsMapTrace("IP.SB") {
+		t.Fatal("supportsMapTrace(IP.SB) = true, want false")
+	}
+}
+
 func TestNegativePacketSizeParsesBeforeTarget(t *testing.T) {
 	parser := argparse.NewParser("ntr", "")
 	packetSize := parser.Int("", "psize", &argparse.Options{})
@@ -864,15 +1282,6 @@ func TestResolveConfiguredSrcAddrPrefersExplicitSource(t *testing.T) {
 	}
 	if resolved != "192.0.2.10" {
 		t.Fatalf("resolved source = %q, want %q", resolved, "192.0.2.10")
-	}
-}
-
-func TestValidateJSONRealtimeOutput(t *testing.T) {
-	if err := validateJSONRealtimeOutput(true, "trace.log"); err == nil || err.Error() != "--json 不能与 --output/--output-default 同时使用" {
-		t.Fatalf("err = %v, want json/output conflict", err)
-	}
-	if err := validateJSONRealtimeOutput(true, ""); err != nil {
-		t.Fatalf("unexpected error without output path: %v", err)
 	}
 }
 

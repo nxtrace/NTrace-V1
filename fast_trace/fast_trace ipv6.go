@@ -11,21 +11,21 @@ import (
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
-	"github.com/nxtrace/NTrace-core/util"
 )
 
 //var pFastTracer ParamsFastTrace
 
 func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
-	fmt.Fprintf(color.Output, "%s\n", color.New(color.FgYellow, color.Bold).Sprintf("『%s %s 』", location, ispCollection.ISPName))
+	if _, err := fmt.Fprintf(color.Output, "%s\n", color.New(color.FgYellow, color.Bold).Sprintf("『%s %s 』", location, ispCollection.ISPName)); err != nil {
+		log.Printf("fast trace title write failed: %v", err)
+	}
 	displayPacketSize := f.ParamsFastTrace.PktSize
 	if !f.ParamsFastTrace.PacketSizeSet {
 		displayPacketSize = trace.DefaultPacketSize(f.TracerouteMethod, net.ParseIP(ispCollection.IPv6))
 	}
 	fmt.Printf("traceroute to %s, %d hops max, %s, %s mode\n", ispCollection.IPv6, f.ParamsFastTrace.MaxHops, trace.FormatPacketSizeLabel(displayPacketSize), strings.ToUpper(string(f.TracerouteMethod)))
 
-	// ip, err := util.DomainLookUp(ispCollection.IPv6, "6", "", true)
-	ip, err := util.DomainLookUpWithContext(f.ParamsFastTrace.Context, ispCollection.IPv6, "6", f.ParamsFastTrace.Dot, true)
+	ip, err := fastTraceDomainLookupFn(f.ParamsFastTrace.Context, ispCollection.IPv6, "6", f.ParamsFastTrace.Dot, true)
 	if shouldStopFastTrace(err) {
 		return
 	}
@@ -52,7 +52,7 @@ func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
 		AlwaysWaitRDNS:   f.ParamsFastTrace.AlwaysWaitRDNS,
 		PacketInterval:   100,
 		TTLInterval:      500,
-		IPGeoSource:      ipgeo.GetSource("LeoMoeAPI"),
+		IPGeoSource:      ipgeo.GetSource(ipgeo.NextTraceAPIProvider),
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
 		SourceDevice:     f.ParamsFastTrace.SrcDev,
@@ -68,20 +68,17 @@ func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
 
 	header := fmt.Sprintf("『%s %s 』\ntraceroute to %s, %d hops max, %s, %s mode\n",
 		location, ispCollection.ISPName, ispCollection.IPv6, f.ParamsFastTrace.MaxHops, trace.FormatPacketSizeLabel(displayPacketSize), strings.ToUpper(string(f.TracerouteMethod)))
-	cleanup, err := configureFastTraceRealtimePrinter(&conf, f.ParamsFastTrace.OutputPath, header)
+	outputPlan, err := configureFastTraceRealtimePrinter(&conf, f.ParamsFastTrace.OutputPath, header)
 	if err != nil {
 		return
 	}
-	if cleanup != nil {
-		defer func() {
-			if closeErr := cleanup(); closeErr != nil {
-				log.Println(closeErr)
-			}
-		}()
-	}
+	defer func() {
+		if closeErr := outputPlan.close(); closeErr != nil {
+			log.Println(closeErr)
+		}
+	}()
 
-	_, err = trace.Traceroute(f.TracerouteMethod, conf)
-	if shouldStopFastTrace(err) {
+	if !runFastTraceOnce(f.TracerouteMethod, conf, outputPlan) {
 		return
 	}
 

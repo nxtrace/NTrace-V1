@@ -30,12 +30,30 @@ type IPGeoData struct {
 
 type Source = func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error)
 
+// NextTraceAPIProvider is the canonical data-provider value for the official API.
+const NextTraceAPIProvider = "NextTrace-API"
+
+// CanonicalizeNextTraceAPIProvider maps current and legacy official API names to the canonical value.
+func CanonicalizeNextTraceAPIProvider(provider string) string {
+	switch strings.ToUpper(strings.TrimSpace(provider)) {
+	case "NEXTTRACE-API", "LEOMOEAPI", "LEOMOE":
+		return NextTraceAPIProvider
+	default:
+		return provider
+	}
+}
+
+// IsNextTraceAPIProvider reports whether provider names the official API or a legacy alias.
+func IsNextTraceAPIProvider(provider string) bool {
+	return CanonicalizeNextTraceAPIProvider(provider) == NextTraceAPIProvider
+}
+
 func GetSource(s string) Source {
-	switch strings.ToUpper(s) {
+	switch strings.ToUpper(CanonicalizeNextTraceAPIProvider(s)) {
 	case "DN42":
 		return DN42
-	case "LEOMOEAPI":
-		return LeoMoeAPISource()
+	case "NEXTTRACE-API":
+		return NextTraceAPISource()
 	case "IP.SB":
 		return IPSB
 	case "IPINSIGHT":
@@ -55,7 +73,7 @@ func GetSource(s string) Source {
 	case "IPDB.ONE":
 		return IPDBOne
 	default:
-		return LeoMoeAPISource()
+		return NextTraceAPISource()
 	}
 }
 

@@ -32,6 +32,26 @@ type Hop struct {
 	Attempts []Attempt `json:"attempts"`
 }
 
+// TraceStopReason is the stable snake_case API representation of a trace edge.
+type TraceStopReason struct {
+	Hop       int      `json:"hop"`
+	Reason    string   `json:"reason"`
+	Responses []string `json:"responses,omitempty"`
+	Markers   []string `json:"markers,omitempty"`
+}
+
+func NewTraceStopReason(reason *trace.StopReason) *TraceStopReason {
+	if reason == nil {
+		return nil
+	}
+	return &TraceStopReason{
+		Hop:       reason.Hop,
+		Reason:    reason.Reason,
+		Responses: append([]string(nil), reason.Responses...),
+		Markers:   append([]string(nil), reason.Markers...),
+	}
+}
+
 type TraceRequest struct {
 	Target           string `json:"target" jsonschema:"Target domain, IP, or URL host to trace"`
 	Protocol         string `json:"protocol,omitempty" jsonschema:"Probe protocol: icmp, tcp, or udp"`
@@ -45,8 +65,8 @@ type TraceRequest struct {
 	BeginHop         int    `json:"begin_hop,omitempty" jsonschema:"First TTL to probe"`
 	IPv4Only         bool   `json:"ipv4_only,omitempty" jsonschema:"Force IPv4 target resolution"`
 	IPv6Only         bool   `json:"ipv6_only,omitempty" jsonschema:"Force IPv6 target resolution"`
-	DataProvider     string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name"`
-	PowProvider      string `json:"pow_provider,omitempty" jsonschema:"PoW provider for LeoMoeAPI"`
+	DataProvider     string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name; use NextTrace-API for the official API"`
+	PowProvider      string `json:"pow_provider,omitempty" jsonschema:"PoW provider for NextTrace API v3"`
 	DotServer        string `json:"dot_server,omitempty" jsonschema:"DoT server for target and GeoIP DNS resolution"`
 	DisableRDNS      bool   `json:"disable_rdns,omitempty" jsonschema:"Disable reverse DNS lookup"`
 	AlwaysRDNS       bool   `json:"always_rdns,omitempty" jsonschema:"Wait for reverse DNS whenever possible"`
@@ -72,6 +92,7 @@ type TraceResponse struct {
 	Hops         []Hop               `json:"hops"`
 	DurationMs   int64               `json:"duration_ms"`
 	Parameters   ParameterBoundaries `json:"parameters"`
+	StopReason   *TraceStopReason    `json:"stop_reason,omitempty"`
 }
 
 type MTRReportRequest struct {
@@ -94,6 +115,7 @@ type MTRReportResponse struct {
 	Stats      []trace.MTRHopStat  `json:"stats"`
 	DurationMs int64               `json:"duration_ms"`
 	Parameters ParameterBoundaries `json:"parameters"`
+	PathEnd    *TraceStopReason    `json:"path_end,omitempty"`
 }
 
 type MTRRawResponse struct {
@@ -104,6 +126,7 @@ type MTRRawResponse struct {
 	DurationMs int64                `json:"duration_ms"`
 	Warnings   []string             `json:"warnings,omitempty"`
 	Parameters ParameterBoundaries  `json:"parameters"`
+	PathEnd    *TraceStopReason     `json:"path_end,omitempty"`
 }
 
 type MTUTraceRequest struct {
@@ -116,7 +139,7 @@ type MTUTraceRequest struct {
 	TTLIntervalMs int    `json:"ttl_interval_ms,omitempty" jsonschema:"TTL interval in milliseconds"`
 	IPv4Only      bool   `json:"ipv4_only,omitempty" jsonschema:"Force IPv4 target resolution"`
 	IPv6Only      bool   `json:"ipv6_only,omitempty" jsonschema:"Force IPv6 target resolution"`
-	DataProvider  string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name"`
+	DataProvider  string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name; use NextTrace-API for the official API"`
 	DotServer     string `json:"dot_server,omitempty" jsonschema:"DoT server"`
 	DisableRDNS   bool   `json:"disable_rdns,omitempty" jsonschema:"Disable reverse DNS"`
 	AlwaysRDNS    bool   `json:"always_rdns,omitempty" jsonschema:"Wait for reverse DNS"`
@@ -160,7 +183,7 @@ type SpeedTestResponse struct {
 
 type AnnotateIPsRequest struct {
 	Text         string `json:"text" jsonschema:"Text containing IPv4/IPv6 literals"`
-	DataProvider string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name"`
+	DataProvider string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name; use NextTrace-API for the official API"`
 	TimeoutMs    int    `json:"timeout_ms,omitempty" jsonschema:"Lookup timeout in milliseconds"`
 	Language     string `json:"language,omitempty" jsonschema:"Output language: cn or en"`
 	IPv4Only     bool   `json:"ipv4_only,omitempty" jsonschema:"Only annotate IPv4 literals"`
@@ -174,7 +197,7 @@ type AnnotateIPsResponse struct {
 
 type GeoLookupRequest struct {
 	Query        string `json:"query" jsonschema:"IP address to look up"`
-	DataProvider string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name"`
+	DataProvider string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name; use NextTrace-API for the official API"`
 	Language     string `json:"language,omitempty" jsonschema:"Output language: cn or en"`
 }
 

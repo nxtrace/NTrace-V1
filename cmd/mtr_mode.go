@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nxtrace/NTrace-core/config"
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/printer"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
@@ -201,6 +202,13 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 // runMTRRaw 执行 MTR 原始流式模式（逐事件输出，'|' 分隔）。
 // 行格式固定为 12 列：
 // ttl|ip|ptr|rtt|asn|country|prov|city|district|owner|lat|lng
+func writeMTRRawPathEnd(w io.Writer, reason *trace.StopReason) error {
+	if reason == nil || reason.Reason != trace.StopReasonUnreachable {
+		return nil
+	}
+	return printer.WriteTraceStopReason(w, reason)
+}
+
 func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, dataOrigin string) {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
@@ -212,6 +220,11 @@ func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 	opts := trace.MTRRawOptions{
 		HopInterval: time.Duration(hopIntervalMs) * time.Millisecond,
 		MaxPerHop:   maxPerHop,
+		OnPathEnd: func(reason *trace.StopReason) {
+			if err := writeMTRRawPathEnd(os.Stderr, reason); err != nil {
+				writeMTRRawRuntimeError(os.Stderr, err)
+			}
+		},
 	}
 
 	roundConf := normalizeMTRTraceConfig(conf)
@@ -267,9 +280,9 @@ func resolveSrcIP(conf trace.Config) string {
 	return "unknown"
 }
 
-// buildAPIInfo 生成首行 preferred API 扩展信息（纯文本，不含 ANSI；仅 LeoMoeAPI）。
+// buildAPIInfo 生成首行 preferred API 扩展信息（纯文本，不含 ANSI；仅 NextTrace API）。
 func buildAPIInfo(dataOrigin string) string {
-	if !strings.EqualFold(dataOrigin, "LeoMoeAPI") {
+	if !ipgeo.IsNextTraceAPIProvider(dataOrigin) {
 		return ""
 	}
 	meta := util.GetFastIPMetaCache()
@@ -284,7 +297,7 @@ func buildAPIInfo(dataOrigin string) string {
 }
 
 func buildRawAPIInfoLine(dataOrigin string) string {
-	if !strings.EqualFold(dataOrigin, "LeoMoeAPI") {
+	if !ipgeo.IsNextTraceAPIProvider(dataOrigin) {
 		return ""
 	}
 	meta := util.GetFastIPMetaCache()

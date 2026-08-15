@@ -4,12 +4,14 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/nxtrace/NTrace-core/ipgeo"
 )
 
 var (
 	supportedProtocols = []string{"icmp", "udp", "tcp"}
 	dataProviders      = []string{
-		"LeoMoeAPI",
+		ipgeo.NextTraceAPIProvider,
 		"IP.SB",
 		"IPInsight",
 		"IPInfo",
@@ -30,7 +32,7 @@ var (
 		"parallel_requests": 18,
 		"begin_hop":         1,
 		"language":          "cn",
-		"data_provider":     "LeoMoeAPI",
+		"data_provider":     ipgeo.NextTraceAPIProvider,
 		"disable_maptrace":  false,
 	}
 )

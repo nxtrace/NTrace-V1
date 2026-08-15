@@ -1,11 +1,17 @@
 package fastTrace
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/fatih/color"
 
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
@@ -79,6 +85,224 @@ func TestReadFastTestv6ChoiceCanceledContext(t *testing.T) {
 	}
 	if choice != "" {
 		t.Fatalf("readFastTestv6Choice choice = %q, want empty", choice)
+	}
+}
+
+func TestFastTraceStopReasonReachesTerminalAndOutputFile(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+	previousTraceroute := fastTraceTracerouteFn
+	previousLookup := fastTraceDomainLookupFn
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	t.Cleanup(func() {
+		fastTraceTracerouteFn = previousTraceroute
+		fastTraceDomainLookupFn = previousLookup
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	})
+
+	fastTraceDomainLookupFn = func(_ context.Context, host, _, _ string, _ bool) (net.IP, error) {
+		return net.ParseIP(host), nil
+	}
+	reason := &trace.StopReason{Hop: 5, Reason: trace.StopReasonDestination, Responses: []string{"ICMP Echo Reply"}}
+
+	tests := []struct {
+		name string
+		run  func(outputPath string)
+	}{
+		{
+			name: "file target",
+			run: func(outputPath string) {
+				runFileTraceTarget(fastTraceTestParams(outputPath), trace.ICMPTrace, IpListElement{Ip: "192.0.2.1", Desc: "file target", Version4: true})
+			},
+		},
+		{
+			name: "IPv4 interactive target",
+			run: func(outputPath string) {
+				f := FastTracer{TracerouteMethod: trace.ICMPTrace, ParamsFastTrace: fastTraceTestParams(outputPath)}
+				f.tracert("test", ISPCollection{ISPName: "ISP", IP: "192.0.2.1"})
+			},
+		},
+		{
+			name: "IPv6 interactive target",
+			run: func(outputPath string) {
+				f := FastTracer{TracerouteMethod: trace.ICMPTrace, ParamsFastTrace: fastTraceTestParams(outputPath)}
+				f.tracert_v6("test", ISPCollection{ISPName: "ISP", IPv6: "2001:db8::1"})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var terminal bytes.Buffer
+			var styledHop bool
+			var calls int
+			fastTraceTracerouteFn = func(_ trace.Method, conf trace.Config) (*trace.Result, error) {
+				calls++
+				if conf.RealtimePrinter == nil {
+					t.Fatal("RealtimePrinter = nil, want configured output printer")
+				}
+				before := terminal.Len()
+				conf.RealtimePrinter(&trace.Result{Hops: [][]trace.Hop{{}}}, 0)
+				styledHop = strings.Contains(terminal.String()[before:], "\x1b[")
+				return &trace.Result{StopReason: reason}, nil
+			}
+			color.Output = &terminal
+			color.NoColor = false
+			outputPath := filepath.Join(t.TempDir(), "trace.log")
+
+			tt.run(outputPath)
+
+			if calls != 1 {
+				t.Fatalf("Traceroute calls = %d, want 1", calls)
+			}
+			if !styledHop {
+				t.Fatalf("terminal hop output is not styled: %q", terminal.String())
+			}
+			if got := strings.Count(terminal.String(), "Trace Stopped:"); got != 1 {
+				t.Fatalf("terminal stop reason count = %d, want 1; output=%q", got, terminal.String())
+			}
+			fileOutput, err := os.ReadFile(outputPath)
+			if err != nil {
+				t.Fatalf("ReadFile output: %v", err)
+			}
+			if got := strings.Count(string(fileOutput), "Trace Stopped:"); got != 1 {
+				t.Fatalf("file stop reason count = %d, want 1; output=%q", got, fileOutput)
+			}
+			if bytes.Contains(fileOutput, []byte("\x1b[")) {
+				t.Fatalf("file contains ANSI escapes: %q", fileOutput)
+			}
+		})
+	}
+}
+
+func TestFastTraceTracerErrorDoesNotWriteStopReason(t *testing.T) {
+	previousTraceroute := fastTraceTracerouteFn
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	t.Cleanup(func() {
+		fastTraceTracerouteFn = previousTraceroute
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	})
+
+	fastTraceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return nil, errors.New("probe failed")
+	}
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = true
+	outputPath := filepath.Join(t.TempDir(), "trace.log")
+
+	runFileTraceTarget(fastTraceTestParams(outputPath), trace.ICMPTrace, IpListElement{Ip: "192.0.2.1", Desc: "file target", Version4: true})
+
+	if strings.Contains(terminal.String(), "Trace Stopped:") {
+		t.Fatalf("terminal contains misleading stop reason: %q", terminal.String())
+	}
+	fileOutput, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("ReadFile output: %v", err)
+	}
+	if strings.Contains(string(fileOutput), "Trace Stopped:") {
+		t.Fatalf("file contains misleading stop reason: %q", fileOutput)
+	}
+}
+
+func TestFastTraceNilResultDoesNotPanicOrWriteStopReason(t *testing.T) {
+	previousTraceroute := fastTraceTracerouteFn
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	t.Cleanup(func() {
+		fastTraceTracerouteFn = previousTraceroute
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	})
+
+	fastTraceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return nil, nil
+	}
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = true
+	outputPath := filepath.Join(t.TempDir(), "trace.log")
+
+	runFileTraceTarget(fastTraceTestParams(outputPath), trace.ICMPTrace, IpListElement{Ip: "192.0.2.1", Desc: "file target", Version4: true})
+
+	if strings.Contains(terminal.String(), "Trace Stopped:") {
+		t.Fatalf("terminal contains misleading stop reason: %q", terminal.String())
+	}
+}
+
+func TestFileTraceWritesStopReasonForEveryTarget(t *testing.T) {
+	previousTraceroute := fastTraceTracerouteFn
+	previousOutput := color.Output
+	previousNoColor := color.NoColor
+	t.Cleanup(func() {
+		fastTraceTracerouteFn = previousTraceroute
+		color.Output = previousOutput
+		color.NoColor = previousNoColor
+	})
+
+	reasons := []*trace.StopReason{
+		{Hop: 2, Reason: trace.StopReasonDestination, Responses: []string{"ICMP Echo Reply"}},
+		{Hop: 4, Reason: trace.StopReasonUnreachable, Responses: []string{"ICMP Host Unreachable"}, Markers: []string{"!H"}},
+	}
+	var calls int
+	fastTraceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		if calls >= len(reasons) {
+			t.Fatalf("unexpected traceroute call %d", calls+1)
+		}
+		reason := reasons[calls]
+		calls++
+		return &trace.Result{StopReason: reason}, nil
+	}
+
+	dir := t.TempDir()
+	targetsPath := filepath.Join(dir, "targets.txt")
+	if err := os.WriteFile(targetsPath, []byte("192.0.2.1 first\n2001:db8::1 second\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile targets: %v", err)
+	}
+	outputPath := filepath.Join(dir, "trace.log")
+	var terminal bytes.Buffer
+	color.Output = &terminal
+	color.NoColor = true
+
+	testFile(ParamsFastTrace{
+		Context:         context.Background(),
+		File:            targetsPath,
+		MaxHops:         30,
+		Timeout:         time.Second,
+		OutputPath:      outputPath,
+		RuntimePrepared: true,
+	}, trace.ICMPTrace)
+
+	if calls != len(reasons) {
+		t.Fatalf("Traceroute calls = %d, want %d", calls, len(reasons))
+	}
+	if got := strings.Count(terminal.String(), "Trace Stopped:"); got != len(reasons) {
+		t.Fatalf("terminal stop reason count = %d, want %d; output=%q", got, len(reasons), terminal.String())
+	}
+	fileOutput, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("ReadFile output: %v", err)
+	}
+	if got := strings.Count(string(fileOutput), "Trace Stopped:"); got != len(reasons) {
+		t.Fatalf("file stop reason count = %d, want %d; output=%q", got, len(reasons), fileOutput)
+	}
+	first := strings.Index(string(fileOutput), "Destination Reached at Hop 2")
+	second := strings.Index(string(fileOutput), "No Continuing Route Observed at Hop 4")
+	if first < 0 || second < 0 || first >= second {
+		t.Fatalf("file stop reasons out of order: %q", fileOutput)
+	}
+}
+
+func fastTraceTestParams(outputPath string) ParamsFastTrace {
+	return ParamsFastTrace{
+		Context:    context.Background(),
+		MaxHops:    30,
+		Timeout:    time.Second,
+		OutputPath: outputPath,
 	}
 }
 

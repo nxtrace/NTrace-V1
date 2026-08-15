@@ -9,7 +9,7 @@ import (
 )
 
 // ──────────────────────────────────────────────────
-// Geo DNS Resolver —— 为 GeoIP API / LeoMoe FastIP
+// Geo DNS Resolver —— 为 GeoIP API / NextTrace API FastIP
 // 提供统一的 DNS 解析策略层。
 //
 // 策略：优先使用 DoT（--dot-server），DoT 失败时

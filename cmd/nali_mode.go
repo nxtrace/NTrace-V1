@@ -221,8 +221,8 @@ func runNaliMode(ctx context.Context, opts naliRunOptions) error {
 	if opts.dn42 {
 		applyDN42DataOrigin(&opts.data)
 	}
-	leoWs := initLeoWebsocket(ctx, &opts.data, &opts.pow, false)
-	defer closeLeoWebsocket(leoWs)
+	nextTraceAPIV3WS := initNextTraceAPIV3WebSocket(ctx, &opts.data, &opts.pow, false)
+	defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
 
 	family := nali.FamilyAll
 	if opts.ipv4Only {

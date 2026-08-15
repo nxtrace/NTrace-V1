@@ -15,7 +15,13 @@ func TestRunMTRRaw_EmitsPerAttemptRecords(t *testing.T) {
 	t.Cleanup(func() { mtrRawTracerouteFn = old })
 
 	mtrRawTracerouteFn = func(_ Method, cfg Config) (*Result, error) {
-		res := &Result{Hops: make([][]Hop, 2)}
+		res := &Result{
+			Hops: make([][]Hop, 2),
+			responses: map[int][]probeResponse{
+				1: {{kind: probeResponseTransit, detail: "ICMP Time Exceeded"}},
+				2: {{kind: probeResponseUnreachable, detail: "ICMP Host Unreachable", marker: "!H"}},
+			},
+		}
 		res.Hops[0] = []Hop{{
 			Success:  true,
 			Address:  &net.IPAddr{IP: net.ParseIP("1.1.1.1")},
@@ -40,8 +46,8 @@ func TestRunMTRRaw_EmitsPerAttemptRecords(t *testing.T) {
 		}}
 
 		if cfg.RealtimePrinter != nil {
-			cfg.RealtimePrinter(res, 0)
-			cfg.RealtimePrinter(res, 1)
+			cfg.RealtimePrinter(res.snapshotThroughTTL(1), 0)
+			cfg.RealtimePrinter(res.snapshotThroughTTL(2), 1)
 		}
 		return res, nil
 	}
@@ -69,6 +75,12 @@ func TestRunMTRRaw_EmitsPerAttemptRecords(t *testing.T) {
 	if records[1].Success || records[1].TTL != 2 {
 		t.Fatalf("unexpected timeout record: %+v", records[1])
 	}
+	if records[0].Response == nil || records[0].Response.Kind != MTRResponseTransit {
+		t.Fatalf("first record response = %#v, want transit", records[0].Response)
+	}
+	if records[1].Response == nil || records[1].Response.Kind != MTRResponseUnreachable || records[1].Response.Marker != "!H" {
+		t.Fatalf("second record response = %#v, want unreachable !H", records[1].Response)
+	}
 }
 
 func TestRunMTRRaw_RespectsMaxRoundsAndInterval(t *testing.T) {
@@ -95,6 +107,25 @@ func TestRunMTRRaw_RespectsMaxRoundsAndInterval(t *testing.T) {
 	// Three rounds wait twice at 20ms each; allow a small scheduler tolerance below 40ms.
 	if time.Since(start) < 38*time.Millisecond {
 		t.Fatalf("interval appears not applied, elapsed=%v", time.Since(start))
+	}
+}
+
+func TestRunMTRRaw_RoundBasedNaturalCompletionReportsDefaultMaxHops(t *testing.T) {
+	var pathEnd *StopReason
+	err := RunMTRRaw(context.Background(), ICMPTrace, Config{}, MTRRawOptions{
+		MaxRounds: 1,
+		RunRound: func(_ Method, _ Config) (*Result, error) {
+			return &Result{Hops: make([][]Hop, 30)}, nil
+		},
+		OnPathEnd: func(reason *StopReason) {
+			pathEnd = cloneStopReason(reason)
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunMTRRaw returned error: %v", err)
+	}
+	if pathEnd == nil || pathEnd.Hop != 30 || pathEnd.Reason != StopReasonMaxHops {
+		t.Fatalf("path end = %#v, want max_hops at default hop 30", pathEnd)
 	}
 }
 

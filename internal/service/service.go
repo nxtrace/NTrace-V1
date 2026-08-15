@@ -25,7 +25,7 @@ import (
 
 const (
 	defaultProtocol         = "icmp"
-	defaultDataProvider     = "LeoMoeAPI"
+	defaultDataProvider     = ipgeo.NextTraceAPIProvider
 	defaultLanguage         = "cn"
 	defaultQueries          = 3
 	defaultMaxHops          = 30
@@ -48,30 +48,31 @@ var RuntimeMu sync.Mutex
 type Service struct{}
 
 type traceSetup struct {
-	Request      TraceRequest
-	Target       string
-	Protocol     string
-	Method       trace.Method
-	DataProvider string
-	NeedsLeoWS   bool
-	PowProvider  string
-	IP           net.IP
-	Config       trace.Config
+	Request             TraceRequest
+	Target              string
+	Protocol            string
+	Method              trace.Method
+	DataProvider        string
+	NeedsNextTraceAPIV3 bool
+	PowProvider         string
+	IP                  net.IP
+	Config              trace.Config
 }
 
 type runtimeOptions struct {
-	DotServer   string
-	NeedsLeoWS  bool
-	PowProvider string
+	DotServer           string
+	NeedsNextTraceAPIV3 bool
+	PowProvider         string
 }
 
 var (
-	ensureLeoMoeConnectionFn      = ensureLeoMoeConnection
-	prepareNextTraceAPIV4FastIPFn = ipgeo.PrepareNextTraceAPIV4FastIP
-	lookupIPGeoFn                 = trace.LookupIPGeo
-	runMTRFn                      = trace.RunMTR
-	runMTRRawFn                   = trace.RunMTRRaw
-	runMTUTraceFn                 = mtutrace.Run
+	ensureNextTraceAPIV3ConnectionFn = ensureNextTraceAPIV3Connection
+	prepareNextTraceAPIV4FastIPFn    = ipgeo.PrepareNextTraceAPIV4FastIP
+	tracerouteWithContextFn          = trace.TracerouteWithContext
+	lookupIPGeoFn                    = trace.LookupIPGeo
+	runMTRFn                         = trace.RunMTR
+	runMTRRawFn                      = trace.RunMTRRaw
+	runMTUTraceFn                    = mtutrace.Run
 )
 
 func New() *Service {
@@ -109,7 +110,7 @@ func (s *Service) Traceroute(ctx context.Context, req TraceRequest) (TraceRespon
 	}
 
 	res, err := withTraceRuntime(ctx, setup, func() (*trace.Result, error) {
-		return trace.TracerouteWithContext(ctx, setup.Method, setup.Config)
+		return tracerouteWithContextFn(ctx, setup.Method, setup.Config)
 	})
 	if err != nil {
 		return TraceResponse{}, err
@@ -124,6 +125,7 @@ func (s *Service) Traceroute(ctx context.Context, req TraceRequest) (TraceRespon
 		Hops:         convertTraceHops(res, setup.Config.Lang),
 		DurationMs:   durationMs(start),
 		Parameters:   traceParameterBoundaries(),
+		StopReason:   NewTraceStopReason(res.StopReason),
 	}, nil
 }
 
@@ -139,12 +141,16 @@ func (s *Service) MTRReport(ctx context.Context, req MTRReportRequest) (MTRRepor
 	hopInterval := positiveOrDefault(req.HopIntervalMs, defaultMTRHopIntervalMs)
 	maxPerHop := positiveOrDefault(req.MaxPerHop, 10)
 	var latest []trace.MTRHopStat
+	var pathEnd *TraceStopReason
 	err = withTraceRuntimeNoResult(ctx, setup, func() error {
 		return runMTRFn(ctx, setup.Method, setup.Config, trace.MTROptions{
 			HopInterval: time.Duration(hopInterval) * time.Millisecond,
 			MaxPerHop:   maxPerHop,
+			OnPathEnd: func(reason *trace.StopReason) {
+				pathEnd = NewTraceStopReason(reason)
+			},
 		}, func(_ int, stats []trace.MTRHopStat) {
-			latest = cloneMTRStats(stats)
+			latest = cloneMTRStats(stats, setup.Config.Lang)
 		})
 	})
 	if err != nil {
@@ -158,6 +164,7 @@ func (s *Service) MTRReport(ctx context.Context, req MTRReportRequest) (MTRRepor
 		Stats:      latest,
 		DurationMs: durationMs(start),
 		Parameters: mtrReportParameterBoundaries(),
+		PathEnd:    pathEnd,
 	}, nil
 }
 
@@ -183,10 +190,14 @@ func (s *Service) MTRRaw(ctx context.Context, req MTRRawRequest) (MTRRawResponse
 	}
 
 	var records []trace.MTRRawRecord
+	var pathEnd *TraceStopReason
 	err = withTraceRuntimeNoResult(runCtx, setup, func() error {
 		return runMTRRawFn(runCtx, setup.Method, setup.Config, trace.MTRRawOptions{
 			HopInterval: time.Duration(hopInterval) * time.Millisecond,
 			MaxPerHop:   maxPerHop,
+			OnPathEnd: func(reason *trace.StopReason) {
+				pathEnd = NewTraceStopReason(reason)
+			},
 		}, func(rec trace.MTRRawRecord) {
 			records = append(records, rec)
 		})
@@ -213,15 +224,16 @@ func (s *Service) MTRRaw(ctx context.Context, req MTRRawRequest) (MTRRawResponse
 		DurationMs: durationMs(start),
 		Warnings:   warnings,
 		Parameters: mtrRawParameterBoundaries(),
+		PathEnd:    pathEnd,
 	}, nil
 }
 
 func (s *Service) MTUTrace(ctx context.Context, req MTUTraceRequest) (MTUTraceResponse, error) {
 	start := time.Now()
-	_, needsLeo := resolveMTUDataProvider(req.DataProvider)
+	_, needsNextTraceAPIV3 := resolveMTUDataProvider(req.DataProvider)
 	return withServiceRuntime(ctx, runtimeOptions{
-		DotServer:  req.DotServer,
-		NeedsLeoWS: needsLeo,
+		DotServer:           req.DotServer,
+		NeedsNextTraceAPIV3: needsNextTraceAPIV3,
 	}, func() (MTUTraceResponse, error) {
 		cfg, err := s.buildMTUConfig(ctx, req)
 		if err != nil {
@@ -277,8 +289,8 @@ func (s *Service) AnnotateIPs(ctx context.Context, req AnnotateIPsRequest) (Anno
 		family = nali.Family6
 	}
 	timeout := positiveOrDefault(req.TimeoutMs, defaultTimeoutMs)
-	provider, needsLeo := resolveStandaloneDataProvider(req.DataProvider)
-	return withServiceRuntime(ctx, runtimeOptions{NeedsLeoWS: needsLeo}, func() (AnnotateIPsResponse, error) {
+	provider, needsNextTraceAPIV3 := resolveStandaloneDataProvider(req.DataProvider)
+	return withServiceRuntime(ctx, runtimeOptions{NeedsNextTraceAPIV3: needsNextTraceAPIV3}, func() (AnnotateIPsResponse, error) {
 		annotator := nali.New(nali.Config{
 			Source:  ipgeo.GetSource(provider),
 			Timeout: time.Duration(timeout) * time.Millisecond,
@@ -299,8 +311,8 @@ func (s *Service) GeoLookup(ctx context.Context, req GeoLookupRequest) (GeoLooku
 	if query == "" {
 		return GeoLookupResponse{}, errors.New("query is required")
 	}
-	provider, needsLeo := resolveStandaloneDataProvider(req.DataProvider)
-	return withServiceRuntime(ctx, runtimeOptions{NeedsLeoWS: needsLeo}, func() (GeoLookupResponse, error) {
+	provider, needsNextTraceAPIV3 := resolveStandaloneDataProvider(req.DataProvider)
+	return withServiceRuntime(ctx, runtimeOptions{NeedsNextTraceAPIV3: needsNextTraceAPIV3}, func() (GeoLookupResponse, error) {
 		geo, err := lookupIPGeoFn(ctx, ipgeo.GetSource(provider), normalizeLanguage(req.Language), false, defaultQueries, query)
 		if err != nil {
 			return GeoLookupResponse{}, err
@@ -331,7 +343,7 @@ func (s *Service) prepareTrace(ctx context.Context, req TraceRequest) (*traceSet
 	if err != nil {
 		return nil, err
 	}
-	dataProvider, needsLeo := resolveDataProvider(&req)
+	dataProvider, needsNextTraceAPIV3 := resolveDataProvider(&req)
 	ip, err := util.DomainLookUpWithContext(ctx, target, resolveIPVersion(req), strings.ToLower(req.DotServer), true)
 	if err != nil {
 		return nil, err
@@ -347,15 +359,15 @@ func (s *Service) prepareTrace(ctx context.Context, req TraceRequest) (*traceSet
 	cfg.Context = ctx
 
 	return &traceSetup{
-		Request:      req,
-		Target:       target,
-		Protocol:     protocol,
-		Method:       method,
-		DataProvider: dataProvider,
-		NeedsLeoWS:   needsLeo,
-		PowProvider:  strings.TrimSpace(req.PowProvider),
-		IP:           ip,
-		Config:       cfg,
+		Request:             req,
+		Target:              target,
+		Protocol:            protocol,
+		Method:              method,
+		DataProvider:        dataProvider,
+		NeedsNextTraceAPIV3: needsNextTraceAPIV3,
+		PowProvider:         strings.TrimSpace(req.PowProvider),
+		IP:                  ip,
+		Config:              cfg,
 	}, nil
 }
 
@@ -419,9 +431,9 @@ func withTraceRuntime[T any](ctx context.Context, setup *traceSetup, fn func() (
 		return zero, nil
 	}
 	return withServiceRuntime(ctx, runtimeOptions{
-		DotServer:   setup.Request.DotServer,
-		NeedsLeoWS:  setup.NeedsLeoWS,
-		PowProvider: setup.PowProvider,
+		DotServer:           setup.Request.DotServer,
+		NeedsNextTraceAPIV3: setup.NeedsNextTraceAPIV3,
+		PowProvider:         setup.PowProvider,
 	}, fn)
 }
 
@@ -440,13 +452,13 @@ func withServiceRuntime[T any](ctx context.Context, opts runtimeOptions, fn func
 	}()
 
 	return util.WithGeoDNSResolver(strings.ToLower(strings.TrimSpace(opts.DotServer)), func() (T, error) {
-		if opts.NeedsLeoWS {
+		if opts.NeedsNextTraceAPIV3 {
 			if ipgeo.NextTraceAPIV4TokenConfigured() {
 				if err := prepareNextTraceAPIV4FastIPFn(ctx, false); err != nil {
-					ensureLeoMoeConnectionFn(ctx)
+					ensureNextTraceAPIV3ConnectionFn(ctx)
 				}
 			} else {
-				ensureLeoMoeConnectionFn(ctx)
+				ensureNextTraceAPIV3ConnectionFn(ctx)
 			}
 		}
 		return fn()
@@ -463,7 +475,7 @@ func withTraceRuntimeNoResult(ctx context.Context, setup *traceSetup, fn func() 
 	return err
 }
 
-func ensureLeoMoeConnection(ctx context.Context) {
+func ensureNextTraceAPIV3Connection(ctx context.Context) {
 	conn := wshandle.GetWsConn()
 	if conn == nil || conn.MsgSendCh == nil || conn.MsgReceiveCh == nil {
 		wshandle.NewWithContext(ctx)
@@ -510,12 +522,12 @@ func resolveDataProvider(req *TraceRequest) (string, bool) {
 		req.DisableMaptrace = true
 		provider = "DN42"
 	}
-	needsLeo := strings.EqualFold(provider, "LEOMOEAPI")
-	if needsLeo && util.EnvDataProvider != "" {
-		provider = util.EnvDataProvider
-		needsLeo = strings.EqualFold(provider, "LEOMOEAPI")
+	needsNextTraceAPIV3 := ipgeo.IsNextTraceAPIProvider(provider)
+	if needsNextTraceAPIV3 && util.EnvDataProvider != "" {
+		provider = normalizeDataProvider(util.EnvDataProvider, "")
+		needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(provider)
 	}
-	return provider, needsLeo
+	return provider, needsNextTraceAPIV3
 }
 
 func resolveMTUDataProvider(raw string) (string, bool) {
@@ -527,12 +539,12 @@ func resolveStandaloneDataProvider(raw string) (string, bool) {
 	if provider == "" {
 		provider = defaultDataProvider
 	}
-	needsLeo := strings.EqualFold(provider, "LEOMOEAPI")
-	if needsLeo && util.EnvDataProvider != "" {
-		provider = util.EnvDataProvider
-		needsLeo = strings.EqualFold(provider, "LEOMOEAPI")
+	needsNextTraceAPIV3 := ipgeo.IsNextTraceAPIProvider(provider)
+	if needsNextTraceAPIV3 && util.EnvDataProvider != "" {
+		provider = normalizeDataProvider(util.EnvDataProvider, "")
+		needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(provider)
 	}
-	return provider, needsLeo
+	return provider, needsNextTraceAPIV3
 }
 
 func buildTraceConfig(req TraceRequest, method trace.Method, ip net.IP, provider string, port int) (trace.Config, error) {
@@ -642,12 +654,19 @@ func convertTraceHops(res *trace.Result, lang string) []Hop {
 	return hops
 }
 
-func cloneMTRStats(stats []trace.MTRHopStat) []trace.MTRHopStat {
+func cloneMTRStats(stats []trace.MTRHopStat, lang string) []trace.MTRHopStat {
 	if len(stats) == 0 {
 		return nil
 	}
 	out := make([]trace.MTRHopStat, len(stats))
 	copy(out, stats)
+	for i := range out {
+		out[i].Geo = localizeGeo(stats[i].Geo, lang)
+		if stats[i].Response != nil {
+			response := *stats[i].Response
+			out[i].Response = &response
+		}
+	}
 	return out
 }
 
@@ -769,6 +788,9 @@ func normalizeDataProvider(provider, alias string) string {
 	if candidate == "" {
 		return ""
 	}
+	if canonical := ipgeo.CanonicalizeNextTraceAPIProvider(candidate); canonical != candidate {
+		return canonical
+	}
 	switch strings.ToUpper(candidate) {
 	case "IP.SB":
 		return "IP.SB"
@@ -780,8 +802,6 @@ func normalizeDataProvider(provider, alias string) string {
 		return "IPInsight"
 	case "IPINFOLOCAL", "IP INFO LOCAL":
 		return "IPInfoLocal"
-	case "LEOMOEAPI", "LEOMOE":
-		return "LeoMoeAPI"
 	case "CHUNZHEN":
 		return "chunzhen"
 	case "DN42":

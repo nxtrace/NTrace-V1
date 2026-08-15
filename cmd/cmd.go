@@ -49,11 +49,11 @@ const (
 )
 
 var (
-	domainLookupFn                = util.DomainLookUpWithContext
-	prepareNextTraceAPIV4FastIPFn = ipgeo.PrepareNextTraceAPIV4FastIP
-	newLeoWebsocketFn             = wshandle.NewWithContext
-	newLeoWebsocketAsyncFn        = wshandle.NewWithContextAsync
-	runFastTraceFn                = fastTrace.FastTest
+	domainLookupFn                    = util.DomainLookUpWithContext
+	prepareNextTraceAPIV4FastIPFn     = ipgeo.PrepareNextTraceAPIV4FastIP
+	newNextTraceAPIV3WebSocketFn      = wshandle.NewWithContext
+	newNextTraceAPIV3WebSocketAsyncFn = wshandle.NewWithContextAsync
+	runFastTraceFn                    = fastTrace.FastTest
 )
 
 func normalizeListenAddr(addr string) string {
@@ -153,6 +153,28 @@ func normalizeNegativePacketSizeArgs(args []string) []string {
 			continue
 		}
 		normalized = append(normalized, cur)
+	}
+	return normalized
+}
+
+func normalizeDataProviderArgs(args []string) []string {
+	normalized := append([]string(nil), args...)
+	for i := 0; i < len(normalized); i++ {
+		switch {
+		case normalized[i] == "--":
+			return normalized
+		case normalized[i] == "-d" || normalized[i] == "--data-provider":
+			if i+1 < len(normalized) {
+				normalized[i+1] = ipgeo.CanonicalizeNextTraceAPIProvider(normalized[i+1])
+				i++
+			}
+		case strings.HasPrefix(normalized[i], "-d="):
+			value := strings.TrimPrefix(normalized[i], "-d=")
+			normalized[i] = "-d=" + ipgeo.CanonicalizeNextTraceAPIProvider(value)
+		case strings.HasPrefix(normalized[i], "--data-provider="):
+			value := strings.TrimPrefix(normalized[i], "--data-provider=")
+			normalized[i] = "--data-provider=" + ipgeo.CanonicalizeNextTraceAPIProvider(value)
+		}
 	}
 	return normalized
 }
@@ -366,6 +388,13 @@ func registerICMPModeFlag(parser *argparse.Parser) *int {
 	return ptrInt(0)
 }
 
+func registerDataProviderFlag(parser *argparse.Parser) *string {
+	return parser.Selector("d", "data-provider", []string{"IP.SB", "ip.sb", "IPInfo", "ipinfo", "IPInsight", "ipinsight", "IPAPI.com", "ip-api.com", "IPInfoLocal", "ipinfolocal", "chunzhen", ipgeo.NextTraceAPIProvider, "ipdb.one", "disable-geoip"}, &argparse.Options{
+		Default: ipgeo.NextTraceAPIProvider,
+		Help:    "Choose IP Geographic Data Provider [NextTrace-API, IP.SB, IPInfo, IPInsight, IP-API.com, IPInfoLocal, ipdb.one, chunzhen, disable-geoip]",
+	})
+}
+
 func buildQueriesHelp() string {
 	if defaultMTR {
 		return "MTR only: max probes per hop. 0 = unlimited in TUI/raw; --report defaults to 10 when omitted. Start with 10-20 on unstable paths"
@@ -405,8 +434,8 @@ func registerTracerouteOutputFlags(parser *argparse.Parser) tracerouteOutputFlag
 	if !defaultMTR {
 		return tracerouteOutputFlags{
 			routePath:     parser.Flag("P", "route-path", &argparse.Options{Help: "Print traceroute hop path by ASN and location"}),
-			outputPath:    parser.String("o", "output", &argparse.Options{Help: "Write trace result to FILE (RealtimePrinter only)"}),
-			outputDefault: parser.Flag("O", "output-default", &argparse.Options{Help: "Write trace result to the default log file (/tmp/trace.log)"}),
+			outputPath:    parser.String("o", "output", &argparse.Options{Help: "Write realtime trace output and final stop reason to FILE"}),
+			outputDefault: parser.Flag("O", "output-default", &argparse.Options{Help: "Write realtime trace output and final stop reason to the default log file (/tmp/trace.log)"}),
 			tablePrint:    parser.Flag("", "table", &argparse.Options{Help: "Output trace results as a final summary table (traceroute report mode)"}),
 			jsonPrint:     parser.Flag("j", "json", &argparse.Options{Help: "Output trace results as JSON"}),
 			classicPrint:  parser.Flag("c", "classic", &argparse.Options{Help: "Classic Output trace results like BestTrace"}),
@@ -813,8 +842,8 @@ func runFastTraceModeWithRuntime(ctx context.Context, dn42 bool, dataOrigin *str
 	if from != "" || (!fastTraceFlag && file == "") {
 		return false
 	}
-	leoWs, runtimePrepared := prepareFastTraceRuntimeEnvironment(ctx, dn42, dataOrigin, disableMaptrace, powProvider)
-	defer closeLeoWebsocket(leoWs)
+	nextTraceAPIV3WS, runtimePrepared := prepareFastTraceRuntimeEnvironment(ctx, dn42, dataOrigin, disableMaptrace, powProvider)
+	defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
 	params.RuntimePrepared = runtimePrepared
 	return maybeRunFastTraceMode(from, fastTraceFlag, file, params, method)
 }
@@ -878,34 +907,35 @@ func applyDN42DataOrigin(dataOrigin *string) {
 	*dataOrigin = "DN42"
 }
 
-func prepareRuntimeEnvironment(ctx context.Context, dn42 bool, dataOrigin *string, disableMaptrace *bool, powProvider *string, asyncLeo bool) *wshandle.WsConn {
+func prepareRuntimeEnvironment(ctx context.Context, dn42 bool, dataOrigin *string, disableMaptrace *bool, powProvider *string, asyncNextTraceAPIV3 bool) *wshandle.WsConn {
 	capabilitiesCheck()
 	applyDN42Mode(dn42, dataOrigin, disableMaptrace)
-	return initLeoWebsocket(ctx, dataOrigin, powProvider, asyncLeo)
+	return initNextTraceAPIV3WebSocket(ctx, dataOrigin, powProvider, asyncNextTraceAPIV3)
 }
 
 func prepareFastTraceRuntimeEnvironment(ctx context.Context, dn42 bool, dataOrigin *string, disableMaptrace *bool, powProvider *string) (*wshandle.WsConn, bool) {
 	capabilitiesCheck()
 	applyDN42Mode(dn42, dataOrigin, disableMaptrace)
-	return initLeoRuntime(ctx, dataOrigin, powProvider, false)
+	return initNextTraceAPIRuntime(ctx, dataOrigin, powProvider, false)
 }
 
-func initLeoWebsocket(ctx context.Context, dataOrigin, powProvider *string, async bool) *wshandle.WsConn {
-	leoWs, _ := initLeoRuntime(ctx, dataOrigin, powProvider, async)
-	return leoWs
+func initNextTraceAPIV3WebSocket(ctx context.Context, dataOrigin, powProvider *string, async bool) *wshandle.WsConn {
+	nextTraceAPIV3WS, _ := initNextTraceAPIRuntime(ctx, dataOrigin, powProvider, async)
+	return nextTraceAPIV3WS
 }
 
-func initLeoRuntime(ctx context.Context, dataOrigin, powProvider *string, async bool) (*wshandle.WsConn, bool) {
-	if !strings.EqualFold(*dataOrigin, "LEOMOEAPI") {
+func initNextTraceAPIRuntime(ctx context.Context, dataOrigin, powProvider *string, async bool) (*wshandle.WsConn, bool) {
+	*dataOrigin = ipgeo.CanonicalizeNextTraceAPIProvider(*dataOrigin)
+	if !ipgeo.IsNextTraceAPIProvider(*dataOrigin) {
 		return nil, false
 	}
 	if !strings.EqualFold(*powProvider, "api.nxtrace.org") {
 		util.PowProviderParam = *powProvider
 	}
 	if util.EnvDataProvider != "" {
-		*dataOrigin = util.EnvDataProvider
+		*dataOrigin = ipgeo.CanonicalizeNextTraceAPIProvider(util.EnvDataProvider)
 	}
-	if !strings.EqualFold(*dataOrigin, "LEOMOEAPI") {
+	if !ipgeo.IsNextTraceAPIProvider(*dataOrigin) {
 		return nil, false
 	}
 	if ipgeo.NextTraceAPIV4TokenConfigured() {
@@ -914,18 +944,18 @@ func initLeoRuntime(ctx context.Context, dataOrigin, powProvider *string, async 
 		}
 	}
 
-	var leoWs *wshandle.WsConn
+	var nextTraceAPIV3WS *wshandle.WsConn
 	if async {
-		leoWs = newLeoWebsocketAsyncFn(ctx)
+		nextTraceAPIV3WS = newNextTraceAPIV3WebSocketAsyncFn(ctx)
 	} else {
-		leoWs = newLeoWebsocketFn(ctx)
+		nextTraceAPIV3WS = newNextTraceAPIV3WebSocketFn(ctx)
 	}
-	return leoWs, leoWs != nil
+	return nextTraceAPIV3WS, nextTraceAPIV3WS != nil
 }
 
-func closeLeoWebsocket(leoWs *wshandle.WsConn) {
-	if leoWs != nil {
-		leoWs.Close()
+func closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS *wshandle.WsConn) {
+	if nextTraceAPIV3WS != nil {
+		nextTraceAPIV3WS.Close()
 	}
 }
 
@@ -1082,13 +1112,6 @@ func resolveOutputPath(outputPath string, outputDefault bool) (string, error) {
 	return "", nil
 }
 
-func validateJSONRealtimeOutput(jsonPrint bool, outputPath string) error {
-	if jsonPrint && strings.TrimSpace(outputPath) != "" {
-		return errors.New("--json 不能与 --output/--output-default 同时使用")
-	}
-	return nil
-}
-
 func setFastIPOutputSuppression(suppress bool) func() {
 	prev := util.SuppressFastIPOutput
 	util.SuppressFastIPOutput = suppress
@@ -1097,37 +1120,117 @@ func setFastIPOutputSuppression(suppress bool) func() {
 	}
 }
 
-func configureTracePrinters(conf *trace.Config, tablePrint, classicPrint, rawPrint bool, outputPath string) (func() error, error) {
-	if tablePrint {
-		return nil, nil
-	}
-	router := false
+type traceOutputMode uint8
+
+const (
+	traceOutputRealtime traceOutputMode = iota
+	traceOutputFile
+	traceOutputRaw
+	traceOutputClassic
+	traceOutputTable
+	traceOutputJSON
+)
+
+func selectTraceOutputMode(tablePrint, classicPrint, jsonPrint, rawPrint bool, outputPath string) traceOutputMode {
 	switch {
+	case jsonPrint:
+		return traceOutputJSON
+	case tablePrint:
+		return traceOutputTable
 	case classicPrint:
-		conf.RealtimePrinter = printer.ClassicPrinter
+		return traceOutputClassic
 	case rawPrint:
+		return traceOutputRaw
+	case strings.TrimSpace(outputPath) != "":
+		return traceOutputFile
+	default:
+		return traceOutputRealtime
+	}
+}
+
+func (mode traceOutputMode) printsStopReason() bool {
+	return mode == traceOutputRealtime || mode == traceOutputFile || mode == traceOutputTable
+}
+
+func (mode traceOutputMode) label() string {
+	switch mode {
+	case traceOutputRaw:
+		return "raw"
+	case traceOutputClassic:
+		return "classic"
+	case traceOutputTable:
+		return "table"
+	case traceOutputJSON:
+		return "JSON"
+	default:
+		return ""
+	}
+}
+
+func writeIgnoredTraceOutputWarning(w io.Writer, mode traceOutputMode, outputPath string) error {
+	if strings.TrimSpace(outputPath) == "" || mode == traceOutputFile {
+		return nil
+	}
+	label := mode.label()
+	if label == "" {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "warning: trace output file is ignored because %s output has higher priority\n", label)
+	return err
+}
+
+type traceOutputPlan struct {
+	mode traceOutputMode
+	file io.WriteCloser
+}
+
+func (plan *traceOutputPlan) printStopReason(reason *trace.StopReason) error {
+	if plan == nil || !plan.mode.printsStopReason() {
+		return nil
+	}
+	terminalErr := printer.PrintTraceStopReason(reason)
+	var fileErr error
+	if plan.mode == traceOutputFile && plan.file != nil {
+		fileErr = printer.WriteTraceStopReason(plan.file, reason)
+	}
+	return errors.Join(terminalErr, fileErr)
+}
+
+func (plan *traceOutputPlan) close() error {
+	if plan == nil || plan.file == nil {
+		return nil
+	}
+	return plan.file.Close()
+}
+
+func configureTracePrinters(conf *trace.Config, mode traceOutputMode, outputPath string) (*traceOutputPlan, error) {
+	plan := &traceOutputPlan{mode: mode}
+	switch mode {
+	case traceOutputJSON:
+		conf.RealtimePrinter = nil
+		conf.AsyncPrinter = nil
+	case traceOutputTable:
+		conf.RealtimePrinter = nil
+	case traceOutputClassic:
+		conf.RealtimePrinter = printer.ClassicPrinter
+	case traceOutputRaw:
 		conf.RealtimePrinter = printer.EasyPrinter
-	case outputPath != "":
+	case traceOutputFile:
 		f, err := tracelog.OpenFile(outputPath)
 		if err != nil {
 			return nil, err
 		}
-		conf.RealtimePrinter = tracelog.NewRealtimePrinter(io.MultiWriter(os.Stdout, f))
-		return f.Close, nil
-	case router:
-		conf.RealtimePrinter = printer.RealtimePrinterWithRouter
-		fmt.Println("路由表数据源由 BGP.Tools 提供，在此特表感谢")
-	default:
+		conf.RealtimePrinter = func(res *trace.Result, ttl int) {
+			printer.RealtimePrinter(res, ttl)
+			if err := tracelog.WriteRealtime(f, res, ttl); err != nil {
+				log.Printf("write trace output: %v", err)
+			}
+		}
+		plan.file = f
+	case traceOutputRealtime:
 		conf.RealtimePrinter = printer.RealtimePrinter
 	}
-	return nil, nil
-}
-
-func applyJSONOutputMode(conf *trace.Config, jsonPrint bool) {
-	if jsonPrint {
-		conf.RealtimePrinter = nil
-		conf.AsyncPrinter = nil
-	}
+	return plan, nil
 }
 
 func maybeRunUninterruptedRaw(rawPrint bool, method trace.Method, conf trace.Config) bool {
@@ -1160,28 +1263,46 @@ func runTraceOnce(method trace.Method, conf trace.Config) (*trace.Result, bool) 
 	return res, true
 }
 
-func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tableClearScreen, routePath bool, dstIP net.IP, disableMaptrace, jsonPrint bool, dataOrigin string) {
-	if tablePrint {
+// traceMapPayload preserves the historical external tracemap request shape.
+type traceMapPayload struct {
+	Hops        [][]trace.Hop `json:"Hops"`
+	TraceMapURL string        `json:"TraceMapUrl"`
+}
+
+func marshalTraceMapPayload(res *trace.Result) ([]byte, error) {
+	return json.Marshal(traceMapPayload{
+		Hops:        res.Hops,
+		TraceMapURL: res.TraceMapUrl,
+	})
+}
+
+func finalizeTraceResult(ctx context.Context, res *trace.Result, outputPlan *traceOutputPlan, tableClearScreen, routePath bool, dstIP net.IP, disableMaptrace bool, dataOrigin string) {
+	if outputPlan == nil {
+		outputPlan = &traceOutputPlan{mode: traceOutputRealtime}
+	}
+	if outputPlan.mode == traceOutputTable {
 		printer.TracerouteTablePrinter(res, tableClearScreen)
 	}
 	if routePath {
 		reporter.New(res, dstIP.String()).Print()
 	}
+	if err := outputPlan.printStopReason(res.StopReason); err != nil {
+		log.Printf("print trace stop reason: %v", err)
+	}
 
-	r, err := json.Marshal(res)
+	r, err := marshalTraceMapPayload(res)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	if !disableMaptrace &&
-		(util.StringInSlice(strings.ToUpper(dataOrigin), []string{"LEOMOEAPI", "IPINFO", "IP-API.COM", "IPAPI.COM"})) {
+	if !disableMaptrace && supportsMapTrace(dataOrigin) {
 		url, err := tracemap.GetMapUrlWithContext(ctx, string(r))
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
 		res.TraceMapUrl = url
-		if !jsonPrint {
+		if outputPlan.mode != traceOutputJSON {
 			tracemap.PrintMapUrl(url)
 		}
 	}
@@ -1190,9 +1311,16 @@ func finalizeTraceResult(ctx context.Context, res *trace.Result, tablePrint, tab
 		fmt.Println(err)
 		return
 	}
-	if jsonPrint {
+	if outputPlan.mode == traceOutputJSON {
 		fmt.Println(string(r))
 	}
+}
+
+func supportsMapTrace(dataOrigin string) bool {
+	if ipgeo.IsNextTraceAPIProvider(dataOrigin) {
+		return true
+	}
+	return util.StringInSlice(strings.ToUpper(dataOrigin), []string{"IPINFO", "IP-API.COM", "IPAPI.COM"})
 }
 
 func Execute() {
@@ -1221,10 +1349,9 @@ func Execute() {
 	maxAttempts := parser.Int("", "max-attempts", &argparse.Options{Help: buildMaxAttemptsHelp()})
 	parallelRequests := parser.Int("", "parallel-requests", &argparse.Options{Default: 18, Help: buildParallelRequestsHelp()})
 	maxHops := parser.Int("m", "max-hops", &argparse.Options{Default: 30, Help: "Set the max number of hops (max TTL to be reached)"})
-	dataOrigin := parser.Selector("d", "data-provider", []string{"IP.SB", "ip.sb", "IPInfo", "ipinfo", "IPInsight", "ipinsight", "IPAPI.com", "ip-api.com", "IPInfoLocal", "ipinfolocal", "chunzhen", "LeoMoeAPI", "leomoeapi", "ipdb.one", "disable-geoip"}, &argparse.Options{Default: "LeoMoeAPI",
-		Help: "Choose IP Geograph Data Provider [IP.SB, IPInfo, IPInsight, IP-API.com, IPInfoLocal, CHUNZHEN, disable-geoip]"})
+	dataOrigin := registerDataProviderFlag(parser)
 	powProvider := parser.Selector("", "pow-provider", []string{"api.nxtrace.org", "sakura"}, &argparse.Options{Default: "api.nxtrace.org",
-		Help: "Choose PoW Provider [api.nxtrace.org, sakura] For China mainland users, please use sakura"})
+		Help: "Choose PoW Provider for NextTrace API v3 [api.nxtrace.org, sakura] For China mainland users, please use sakura"})
 	norDNS := parser.Flag("n", "no-rdns", &argparse.Options{Help: "Do not resolve IP addresses to their domain names"})
 	alwaysrDNS := parser.Flag("a", "always-rdns", &argparse.Options{Help: "Always resolve IP addresses to their domain names"})
 	outputFlags := registerTracerouteOutputFlags(parser)
@@ -1282,7 +1409,7 @@ func Execute() {
 	file := registerFileFlag(parser)
 	str := parser.StringPositional(&argparse.Options{Help: "Trace target: IPv4 address (e.g. 8.8.8.8), IPv6 address (e.g. 2001:db8::1), domain name (e.g. example.com), or URL (e.g. https://example.com)"})
 
-	err := parser.Parse(normalizeNegativePacketSizeArgs(os.Args))
+	err := parser.Parse(normalizeNegativePacketSizeArgs(normalizeDataProviderArgs(os.Args)))
 	if err != nil {
 		// In case of error print error and print usage
 		// This can also be done by passing -h or --help flags
@@ -1369,10 +1496,7 @@ func Execute() {
 		fmt.Println(outputErr)
 		os.Exit(1)
 	}
-	if err := validateJSONRealtimeOutput(*jsonPrint, resolvedOutputPath); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	outputMode := selectTraceOutputMode(*tablePrint, *classicPrint, *jsonPrint, *rawPrint, resolvedOutputPath)
 	if *mtuMode {
 		conflictFlags := buildMTUConflictFlags(
 			*tcp,
@@ -1495,8 +1619,8 @@ func Execute() {
 			fmt.Println(srcErr)
 			os.Exit(1)
 		}
-		leoWs := prepareRuntimeEnvironment(rootCtx, *dn42, dataOrigin, disableMaptrace, powProvider, false)
-		defer closeLeoWebsocket(leoWs)
+		nextTraceAPIV3WS := prepareRuntimeEnvironment(rootCtx, *dn42, dataOrigin, disableMaptrace, powProvider, false)
+		defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
 		conf := buildMTUTraceConfig(
 			domain,
 			ip,
@@ -1553,9 +1677,9 @@ func Execute() {
 		return
 	}
 
-	asyncLeo := shouldUseAsyncLeoForMTR(mtrModes, CheckTTY(int(os.Stdin.Fd())), stdoutIsTTY)
-	leoWs := prepareRuntimeEnvironment(rootCtx, *dn42, dataOrigin, disableMaptrace, powProvider, asyncLeo)
-	defer closeLeoWebsocket(leoWs)
+	asyncNextTraceAPIV3 := shouldUseAsyncNextTraceAPIV3ForMTR(mtrModes, CheckTTY(int(os.Stdin.Fd())), stdoutIsTTY)
+	nextTraceAPIV3WS := prepareRuntimeEnvironment(rootCtx, *dn42, dataOrigin, disableMaptrace, powProvider, asyncNextTraceAPIV3)
+	defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
 
 	if *from != "" {
 		if packetSizeExplicit {
@@ -1673,21 +1797,21 @@ func Execute() {
 	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode) {
 		return
 	}
+	if err := writeIgnoredTraceOutputWarning(os.Stderr, outputMode, resolvedOutputPath); err != nil {
+		log.Printf("write trace output warning: %v", err)
+	}
 
-	outputCleanup, err := configureTracePrinters(&conf, *tablePrint, *classicPrint, *rawPrint, resolvedOutputPath)
+	outputPlan, err := configureTracePrinters(&conf, outputMode, resolvedOutputPath)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	if outputCleanup != nil {
-		defer func() {
-			if closeErr := outputCleanup(); closeErr != nil {
-				fmt.Println(closeErr)
-			}
-		}()
-	}
-	applyJSONOutputMode(&conf, *jsonPrint)
-	if maybeRunUninterruptedRaw(*rawPrint, method, conf) {
+	defer func() {
+		if closeErr := outputPlan.close(); closeErr != nil {
+			log.Printf("close trace output: %v", closeErr)
+		}
+	}()
+	if maybeRunUninterruptedRaw(outputMode == traceOutputRaw, method, conf) {
 		return
 	}
 
@@ -1696,7 +1820,7 @@ func Execute() {
 		return
 	}
 
-	finalizeTraceResult(rootCtx, res, *tablePrint, stdoutIsTTY, *routePath, ip, *disableMaptrace, *jsonPrint, *dataOrigin)
+	finalizeTraceResult(rootCtx, res, outputPlan, stdoutIsTTY, *routePath, ip, *disableMaptrace, *dataOrigin)
 }
 
 type mtrRunMode int
@@ -1717,7 +1841,7 @@ func chooseMTRRunMode(effectiveMTRRaw, effectiveReport bool) mtrRunMode {
 	return mtrRunTUI
 }
 
-func shouldUseAsyncLeoForMTR(modes effectiveMTRModes, stdinTTY bool, stdoutTTY bool) bool {
+func shouldUseAsyncNextTraceAPIV3ForMTR(modes effectiveMTRModes, stdinTTY bool, stdoutTTY bool) bool {
 	return modes.mtr && chooseMTRRunMode(modes.raw, modes.report) == mtrRunTUI && stdinTTY && stdoutTTY
 }
 

@@ -84,14 +84,16 @@ func NextTraceAPIV4TokenConfigured() bool {
 	return strings.TrimSpace(util.GetNextTraceAPIV4Token()) != ""
 }
 
-func LeoMoeAPISource() Source {
+// NextTraceAPISource selects v4 when a token is configured and otherwise uses v3.
+func NextTraceAPISource() Source {
 	if NextTraceAPIV4TokenConfigured() {
-		return LeoIPNextTraceAPIV4HTTP
+		return NextTraceAPIV4GeoIP
 	}
-	return LeoIP
+	return NextTraceAPIV3GeoIP
 }
 
-func LeoIPNextTraceAPIV4HTTP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
+// NextTraceAPIV4GeoIP queries the NextTrace API v4 HTTP service.
+func NextTraceAPIV4GeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
 	_ = lang
 	_ = maptrace
 	timeout = normalizeNextTraceAPIV4Timeout(timeout)
@@ -101,6 +103,18 @@ func LeoIPNextTraceAPIV4HTTP(ip string, timeout time.Duration, lang string, mapt
 	client := cachedNextTraceAPIV4Client(nextTraceAPIV4GeoEndpoint, util.GetNextTraceAPIV4Token(), timeout)
 	geo, _, err := client.Lookup(ctx, ip)
 	return geo, err
+}
+
+// LeoMoeAPISource is kept for source compatibility.
+// Deprecated: use NextTraceAPISource.
+func LeoMoeAPISource() Source {
+	return NextTraceAPISource()
+}
+
+// LeoIPNextTraceAPIV4HTTP is kept for source compatibility.
+// Deprecated: use NextTraceAPIV4GeoIP.
+func LeoIPNextTraceAPIV4HTTP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
+	return NextTraceAPIV4GeoIP(ip, timeout, lang, maptrace)
 }
 
 func cachedNextTraceAPIV4Client(endpoint string, token string, timeout time.Duration) *NextTraceAPIV4Client {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -12,9 +13,143 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/nxtrace/NTrace-core/internal/service"
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
 )
+
+func TestNormalizeDataProviderCanonicalizesNextTraceAPIAliases(t *testing.T) {
+	for _, input := range []string{
+		ipgeo.NextTraceAPIProvider,
+		"nexttrace-api",
+		"NEXTTRACE-API",
+		"LeoMoeAPI",
+		"leomoeapi",
+		"LeoMoe",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if got := normalizeDataProvider(input, ""); got != ipgeo.NextTraceAPIProvider {
+				t.Fatalf("normalizeDataProvider(%q) = %q, want %q", input, got, ipgeo.NextTraceAPIProvider)
+			}
+		})
+	}
+}
+
+func TestOptionsExposeOnlyCanonicalNextTraceAPIProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	optionsHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	var body struct {
+		DataProviders []string       `json:"dataProviders"`
+		Defaults      map[string]any `json:"defaultOptions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode options: %v", err)
+	}
+	if len(body.DataProviders) == 0 || body.DataProviders[0] != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("dataProviders = %v, want canonical provider first", body.DataProviders)
+	}
+	if got := body.Defaults["data_provider"]; got != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("default data_provider = %v, want %q", got, ipgeo.NextTraceAPIProvider)
+	}
+	for _, provider := range body.DataProviders {
+		if strings.Contains(strings.ToUpper(provider), "LEOMOE") {
+			t.Fatalf("dataProviders leaked legacy name: %v", body.DataProviders)
+		}
+	}
+}
+
+func TestResolveTraceDataProviderCanonicalizesEnvironmentOverride(t *testing.T) {
+	isolateServerNextTraceAPIV4Token(t, "")
+	oldEnvDataProvider := util.EnvDataProvider
+	defer func() { util.EnvDataProvider = oldEnvDataProvider }()
+	util.EnvDataProvider = "leomoe"
+
+	req := traceRequest{DataProvider: "nexttrace-api"}
+	got, needsV3 := resolveTraceDataProvider(&req)
+	if got != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("resolveTraceDataProvider() = %q, want %q", got, ipgeo.NextTraceAPIProvider)
+	}
+	if !needsV3 {
+		t.Fatal("resolveTraceDataProvider() needsV3 = false, want true")
+	}
+}
+
+func TestResolveTraceDataProviderSkipsV3ForV4Token(t *testing.T) {
+	isolateServerNextTraceAPIV4Token(t, "v4-token")
+	oldEnvDataProvider := util.EnvDataProvider
+	t.Cleanup(func() { util.EnvDataProvider = oldEnvDataProvider })
+	util.EnvDataProvider = ""
+
+	req := traceRequest{DataProvider: "nexttrace-api"}
+	got, needsV3 := resolveTraceDataProvider(&req)
+	if got != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("resolveTraceDataProvider() = %q, want %q", got, ipgeo.NextTraceAPIProvider)
+	}
+	if needsV3 {
+		t.Fatal("resolveTraceDataProvider() needsV3 = true with v4 token")
+	}
+
+	util.EnvDataProvider = "disable-geoip"
+	got, needsV3 = resolveTraceDataProvider(&req)
+	if got != "disable-geoip" || needsV3 {
+		t.Fatalf("resolveTraceDataProvider() = (%q, %v), want (disable-geoip, false)", got, needsV3)
+	}
+}
+
+func isolateServerNextTraceAPIV4Token(t *testing.T, token string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(key, dir)
+	}
+	t.Setenv(util.EnvNextTraceAPIV4TokenKey, token)
+}
+
+func TestTraceHandlerCanonicalizesLegacyProviderInJSONResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLookup := traceDomainLookupFn
+	oldTraceroute := traceTracerouteFn
+	oldEnsure := ensureNextTraceAPIV3ConnectionFn
+	t.Cleanup(func() {
+		traceDomainLookupFn = oldLookup
+		traceTracerouteFn = oldTraceroute
+		ensureNextTraceAPIV3ConnectionFn = oldEnsure
+	})
+	traceDomainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
+		return net.ParseIP("192.0.2.1"), nil
+	}
+	traceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return &trace.Result{}, nil
+	}
+	ensureNextTraceAPIV3ConnectionFn = func() {}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/trace", strings.NewReader(`{"target":"example.test","data_provider":"lEoMoEaPi","disable_maptrace":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	traceHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var response traceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.DataProvider != ipgeo.NextTraceAPIProvider {
+		t.Fatalf("data_provider = %q, want %q", response.DataProvider, ipgeo.NextTraceAPIProvider)
+	}
+}
 
 func TestPrepareTrace_DoesNotForceLegacyInterval(t *testing.T) {
 	setup, statusCode, err := prepareTrace(context.Background(), traceRequest{
@@ -183,6 +318,55 @@ func TestTraceHandler_RejectsOversizedJSONBody(t *testing.T) {
 	}
 }
 
+func TestTraceHandlerReturnsSnakeCaseStopReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLookup := traceDomainLookupFn
+	oldTraceroute := traceTracerouteFn
+	defer func() {
+		traceDomainLookupFn = oldLookup
+		traceTracerouteFn = oldTraceroute
+	}()
+	traceDomainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
+		return net.ParseIP("192.0.2.1"), nil
+	}
+	traceTracerouteFn = func(trace.Method, trace.Config) (*trace.Result, error) {
+		return &trace.Result{
+			Hops: [][]trace.Hop{{{TTL: 1, Success: true, Address: &net.IPAddr{IP: net.ParseIP("198.51.100.8")}}}},
+			StopReason: &trace.StopReason{
+				Hop:       1,
+				Reason:    trace.StopReasonUnreachable,
+				Responses: []string{"ICMP Host Unreachable from 198.51.100.8"},
+				Markers:   []string{"!H"},
+			},
+		}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/trace", strings.NewReader(`{"target":"example.test","data_provider":"disable-geoip","disable_maptrace":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	traceHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var reason service.TraceStopReason
+	if err := json.Unmarshal(body["stop_reason"], &reason); err != nil {
+		t.Fatalf("stop_reason decode: %v body=%s", err, w.Body.String())
+	}
+	if reason.Reason != trace.StopReasonUnreachable || reason.Hop != 1 || len(reason.Markers) != 1 || reason.Markers[0] != "!H" {
+		t.Fatalf("stop_reason = %#v", reason)
+	}
+	if _, ok := body["StopReason"]; ok {
+		t.Fatalf("REST leaked core PascalCase StopReason: %s", w.Body.String())
+	}
+}
+
 func TestExecuteMTRRaw_PerHopDoesNotMutateSessionGlobals(t *testing.T) {
 	oldRunMTRRaw := traceRunMTRRawFn
 	defer func() { traceRunMTRRawFn = oldRunMTRRaw }()
@@ -279,6 +463,16 @@ func TestTraceMapURLForResult_UsesRequestScopedMapHelper(t *testing.T) {
 		if payload == "" {
 			t.Fatal("payload should not be empty")
 		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(payload), &body); err != nil {
+			t.Fatalf("invalid tracemap payload: %v", err)
+		}
+		if _, ok := body["StopReason"]; ok {
+			t.Fatalf("tracemap payload leaked StopReason: %s", payload)
+		}
+		if _, ok := body["Hops"]; !ok {
+			t.Fatalf("tracemap payload lost historical Hops field: %s", payload)
+		}
 		return "https://map.example.test", nil
 	}
 
@@ -287,7 +481,8 @@ func TestTraceMapURLForResult_UsesRequestScopedMapHelper(t *testing.T) {
 		DataProvider: "IPInfo",
 		Config:       trace.Config{Maptrace: true},
 	}, &trace.Result{
-		Hops: [][]trace.Hop{{{TTL: 1}}},
+		Hops:       [][]trace.Hop{{{TTL: 1}}},
+		StopReason: &trace.StopReason{Hop: 1, Reason: trace.StopReasonDestination},
 	})
 
 	if got != "https://map.example.test" {

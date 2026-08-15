@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,12 +91,80 @@ type sentInfo struct {
 }
 
 type matchTask struct {
-	srcPort int
-	seq     int
-	ack     int
-	peer    net.Addr
-	finish  time.Time
-	mpls    []string
+	srcPort  int
+	seq      int
+	ack      int
+	peer     net.Addr
+	finish   time.Time
+	mpls     []string
+	response probeResponse
+}
+
+type probeResponseKind uint8
+
+const (
+	probeResponseUnknown probeResponseKind = iota
+	probeResponseTransit
+	probeResponseDestination
+	probeResponseUnreachable
+)
+
+type probeResponse struct {
+	kind        probeResponseKind
+	detail      string
+	marker      string
+	responderIP string
+}
+
+func probeResponseFromICMP(response internal.ICMPResponse) probeResponse {
+	return probeResponseFromICMPForMethod(response, ICMPTrace)
+}
+
+func probeResponseFromICMPForMethod(response internal.ICMPResponse, method Method) probeResponse {
+	switch response.Kind {
+	case internal.ICMPResponseTransit:
+		return probeResponse{kind: probeResponseTransit, detail: response.Description}
+	case internal.ICMPResponseEchoReply:
+		return probeResponse{kind: probeResponseDestination, detail: response.Description}
+	case internal.ICMPResponsePortUnreachable:
+		if method == UDPTrace {
+			return probeResponse{kind: probeResponseDestination, detail: response.Description, marker: response.Marker}
+		}
+		return probeResponse{kind: probeResponseUnreachable, detail: response.Description, marker: response.Marker}
+	case internal.ICMPResponseUnreachable:
+		return probeResponse{kind: probeResponseUnreachable, detail: response.Description, marker: response.Marker}
+	default:
+		return probeResponse{}
+	}
+}
+
+func probeResponseFromTCPAck(ack int) probeResponse {
+	detail := "TCP SYN/ACK"
+	if ack != 0 {
+		detail = "TCP RST"
+	}
+	return probeResponse{kind: probeResponseDestination, detail: detail}
+}
+
+func lowerTraceFinal(final *atomic.Int32, ttl int) {
+	if final == nil || ttl <= 0 {
+		return
+	}
+	for {
+		old := final.Load()
+		if old != -1 && ttl >= int(old) {
+			return
+		}
+		if final.CompareAndSwap(old, int32(ttl)) {
+			return
+		}
+	}
+}
+
+func markDestinationFinal(final *atomic.Int32, ttl int, response probeResponse) {
+	if response.kind == probeResponseDestination {
+		lowerTraceFinal(final, ttl)
+	}
 }
 
 type Tracer interface {
@@ -286,13 +355,41 @@ func normalizeRuntimeConfig(config *Config) {
 
 type Result struct {
 	Hops        [][]Hop
+	StopReason  *StopReason `json:",omitempty"`
 	lock        sync.RWMutex
 	tailDone    []bool
+	responses   map[int][]probeResponse
+	attempts    map[int]*traceTTLAttempts
+	provisional map[int]int
 	TraceMapUrl string
 	geoWait     time.Duration
 	geoWG       sync.WaitGroup
 	geoCanceled atomic.Bool
 }
+
+// StopReason describes why a finite traceroute stopped.
+type StopReason struct {
+	Hop int `json:"hop"`
+	// Reason is one of the StopReason constants.
+	Reason string `json:"reason"`
+	// Responses contains sorted, deduplicated human-readable response
+	// descriptions and responder addresses when available.
+	Responses []string `json:"responses,omitempty"`
+	// Markers contains sorted, deduplicated machine-readable ICMP marker values.
+	Markers []string `json:"markers,omitempty"`
+}
+
+type traceTTLAttempts struct {
+	launched   map[int]struct{}
+	settled    map[int]struct{}
+	launchDone bool
+}
+
+const (
+	StopReasonDestination = "destination_reached"
+	StopReasonUnreachable = "unreachable"
+	StopReasonMaxHops     = "max_hops"
+)
 
 const PendingGeoSource = "pending"
 const timeoutGeoSource = "timeout"
@@ -338,17 +435,16 @@ func isValidHop(h Hop) bool {
 	return h.Success && h.Address != nil
 }
 
-// add 带审计/限容
-// - N = numMeasurements（每个 TTL 组的最小输出条数）
-// - M = maxAttempts（每个 TTL 组的最大尝试条数）
-// 规则：对同一 TTL，attemptIdx < N-1 无条件放行（索引 i 从 0 开始）；第 N 条进行审计（已有有效 / 当次有效 / 达到最后一次尝试 任一成立即放行）；超过 N 条一律忽略
-func (s *Result) add(hop Hop, attemptIdx, numMeasurements, maxAttempts int) (bool, int) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
+func (s *Result) addLocked(hop Hop, attemptIdx, numMeasurements, maxAttempts int) (bool, int) {
 	k := hop.TTL - 1
+	if k < 0 || k >= len(s.Hops) {
+		return false, -1
+	}
 	bucket := s.Hops[k]
 	n := numMeasurements
+	if n <= 0 {
+		n = 1
+	}
 
 	switch {
 	case attemptIdx < n-1:
@@ -387,6 +483,90 @@ func (s *Result) add(hop Hop, attemptIdx, numMeasurements, maxAttempts int) (boo
 	return false, -1
 }
 
+func (s *Result) add(hop Hop, attemptIdx, numMeasurements, maxAttempts int) (bool, int) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return s.addLocked(hop, attemptIdx, numMeasurements, maxAttempts)
+}
+
+func (s *Result) ttlAttemptsLocked(ttl int) *traceTTLAttempts {
+	if s.attempts == nil {
+		s.attempts = make(map[int]*traceTTLAttempts)
+	}
+	state := s.attempts[ttl]
+	if state == nil {
+		state = &traceTTLAttempts{
+			launched: make(map[int]struct{}),
+			settled:  make(map[int]struct{}),
+		}
+		s.attempts[ttl] = state
+	}
+	return state
+}
+
+func (s *Result) markAttemptLaunched(ttl, attemptIdx int, final *atomic.Int32) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if traceTTLAboveFinal(final, ttl) {
+		return false
+	}
+	s.ttlAttemptsLocked(ttl).launched[attemptIdx] = struct{}{}
+	return true
+}
+
+func (s *Result) markTTLLaunchDone(ttl int) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.ttlAttemptsLocked(ttl).launchDone = true
+}
+
+func (s *Result) ttlDisplayComplete(ttl, numMeasurements int) bool {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	if ttl <= 0 || ttl > len(s.Hops) {
+		return false
+	}
+	if numMeasurements <= 0 {
+		numMeasurements = 1
+	}
+	return len(s.Hops[ttl-1]) >= numMeasurements
+}
+
+func (s *Result) ttlStableLocked(ttl, numMeasurements int) bool {
+	if ttl <= 0 || ttl > len(s.Hops) {
+		return false
+	}
+	state := s.attempts[ttl]
+	if state == nil || !state.launchDone || len(state.launched) != len(state.settled) {
+		return false
+	}
+	if numMeasurements <= 0 {
+		numMeasurements = 1
+	}
+	return len(s.Hops[ttl-1]) >= numMeasurements
+}
+
+func (s *Result) ttlStable(ttl, numMeasurements int) bool {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.ttlStableLocked(ttl, numMeasurements)
+}
+
+func traceTTLAboveFinal(final *atomic.Int32, ttl int) bool {
+	if final == nil {
+		return false
+	}
+	known := final.Load()
+	return known > 0 && ttl > int(known)
+}
+
+func (s *Result) markAttemptSettledLocked(ttl, attemptIdx int) {
+	state := s.ttlAttemptsLocked(ttl)
+	if _, launched := state.launched[attemptIdx]; launched {
+		state.settled[attemptIdx] = struct{}{}
+	}
+}
+
 func (s *Result) setGeoWait(numMeasurements int) {
 	s.geoWait = geoWaitForMeasurements(numMeasurements)
 }
@@ -398,6 +578,200 @@ func (s *Result) reduce(final int) {
 	if final > 0 && final < len(s.Hops) {
 		s.Hops = s.Hops[:final]
 	}
+}
+
+func (s *Result) recordResponse(ttl int, response probeResponse) {
+	if ttl <= 0 || response.kind == probeResponseUnknown {
+		return
+	}
+
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.responses == nil {
+		s.responses = make(map[int][]probeResponse)
+	}
+	s.responses[ttl] = append(s.responses[ttl], response)
+}
+
+func (s *Result) stopAfterTTL(ttl, maxHops int) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return s.stopAfterTTLLocked(ttl, maxHops)
+}
+
+func (s *Result) stopAfterTTLLocked(ttl, maxHops int) bool {
+	if ttl <= 0 || ttl > len(s.Hops) {
+		return false
+	}
+
+	hasTransit := false
+	hasDestination := false
+	hasUnreachable := false
+	destinationMarkers := make(map[string]struct{})
+	unreachableMarkers := make(map[string]struct{})
+	destinationDetails := make(map[string]struct{})
+	unreachableDetails := make(map[string]struct{})
+	for _, response := range s.responses[ttl] {
+		switch response.kind {
+		case probeResponseTransit:
+			hasTransit = true
+		case probeResponseDestination:
+			hasDestination = true
+			addResponseDetail(destinationDetails, response)
+			if response.marker != "" {
+				destinationMarkers[response.marker] = struct{}{}
+			}
+		case probeResponseUnreachable:
+			hasUnreachable = true
+			addResponseDetail(unreachableDetails, response)
+			if response.marker != "" {
+				unreachableMarkers[response.marker] = struct{}{}
+			}
+		}
+	}
+
+	switch {
+	case hasDestination:
+		s.StopReason = &StopReason{
+			Hop:       ttl,
+			Reason:    StopReasonDestination,
+			Responses: sortedResponseDetails(destinationDetails),
+			Markers:   sortedResponseDetails(destinationMarkers),
+		}
+		return true
+	case hasTransit && ttl < maxHops:
+		return false
+	case !hasTransit && hasUnreachable:
+		s.StopReason = &StopReason{
+			Hop:       ttl,
+			Reason:    StopReasonUnreachable,
+			Responses: sortedResponseDetails(unreachableDetails),
+			Markers:   sortedResponseDetails(unreachableMarkers),
+		}
+		return true
+	case ttl >= maxHops:
+		s.StopReason = &StopReason{Hop: ttl, Reason: StopReasonMaxHops}
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Result) stopAfterStableTTL(ttl, maxHops, numMeasurements int, final *atomic.Int32) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if final != nil {
+		known := int(final.Load())
+		if known > 0 && known < ttl {
+			ttl = known
+		}
+	}
+	if !s.ttlStableLocked(ttl, numMeasurements) || !s.stopAfterTTLLocked(ttl, maxHops) {
+		return false
+	}
+	lowerTraceFinal(final, ttl)
+	return true
+}
+
+func (s *Result) stableFinalAtOrBefore(cursor, maxHops, numMeasurements int, final *atomic.Int32) bool {
+	if final == nil {
+		return false
+	}
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	known := int(final.Load())
+	if known <= 0 || known > cursor || !s.ttlStableLocked(known, numMeasurements) || !s.stopAfterTTLLocked(known, maxHops) {
+		return false
+	}
+	lowerTraceFinal(final, known)
+	return true
+}
+
+func (s *Result) snapshotThroughTTL(ttl int) *Result {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	snapshot := &Result{
+		Hops:        make([][]Hop, len(s.Hops)),
+		TraceMapUrl: s.TraceMapUrl,
+		responses:   make(map[int][]probeResponse),
+	}
+	if ttl > len(s.Hops) {
+		ttl = len(s.Hops)
+	}
+	for ttlIdx := 0; ttlIdx < ttl; ttlIdx++ {
+		snapshot.Hops[ttlIdx] = make([]Hop, len(s.Hops[ttlIdx]))
+		for i, hop := range s.Hops[ttlIdx] {
+			if hop.Geo != nil {
+				geo := *hop.Geo
+				hop.Geo = &geo
+			}
+			hop.MPLS = append([]string(nil), hop.MPLS...)
+			snapshot.Hops[ttlIdx][i] = hop
+		}
+	}
+	for responseTTL, responses := range s.responses {
+		if responseTTL <= ttl {
+			snapshot.responses[responseTTL] = append([]probeResponse(nil), responses...)
+		}
+	}
+	if s.StopReason != nil {
+		reason := *s.StopReason
+		reason.Responses = append([]string(nil), reason.Responses...)
+		reason.Markers = append([]string(nil), reason.Markers...)
+		snapshot.StopReason = &reason
+	}
+	return snapshot
+}
+
+func advanceStableTracePrint(
+	ctx context.Context,
+	res *Result,
+	cursor, maxHops, numMeasurements int,
+	final *atomic.Int32,
+	asyncPrinter func(*Result),
+	realtimePrinter func(*Result, int),
+) (nextCursor int, stop bool) {
+	if res == nil || (ctx != nil && ctx.Err() != nil) {
+		return cursor, false
+	}
+	if res.stableFinalAtOrBefore(cursor, maxHops, numMeasurements, final) {
+		return cursor, true
+	}
+
+	nextTTL := cursor + 1
+	if !res.ttlStable(nextTTL, numMeasurements) {
+		return cursor, false
+	}
+
+	stop = res.stopAfterStableTTL(nextTTL, maxHops, numMeasurements, final)
+	if asyncPrinter != nil {
+		asyncPrinter(res.snapshotThroughTTL(nextTTL))
+	}
+	if realtimePrinter != nil {
+		res.waitGeo(ctx, nextTTL-1)
+		if ctx != nil && ctx.Err() != nil {
+			return cursor, false
+		}
+		realtimePrinter(res.snapshotThroughTTL(nextTTL), nextTTL-1)
+	}
+	return nextTTL, stop
+}
+
+func addResponseDetail(details map[string]struct{}, response probeResponse) {
+	if response.detail == "" {
+		return
+	}
+	details[response.detail] = struct{}{}
+}
+
+func sortedResponseDetails(details map[string]struct{}) []string {
+	result := make([]string, 0, len(details))
+	for detail := range details {
+		result = append(result, detail)
+	}
+	sort.Strings(result)
+	return result
 }
 
 type Hop struct {
@@ -464,6 +838,9 @@ func (s *Result) updateHop(ttl, idx int, updated Hop) {
 	}
 
 	h := &s.Hops[k][idx]
+	if h.Address == nil || updated.Address == nil || h.Address.String() != updated.Address.String() {
+		return
+	}
 	if updated.Hostname != "" {
 		h.Hostname = updated.Hostname
 	}
@@ -556,16 +933,45 @@ func (s *Result) markAllPendingGeoTimeout() {
 	}
 }
 
+func (s *Result) addMatchedHop(hop Hop, response probeResponse, final *atomic.Int32, attemptIdx, numMeasurements, maxAttempts int, cfg Config) bool {
+	needsMetadata := cfg.IPGeoSource != nil || cfg.RDNS
+	prepareHopMetadata(&hop, cfg)
+
+	s.lock.Lock()
+	if s.attemptSettledLocked(hop.TTL, attemptIdx) {
+		s.lock.Unlock()
+		return false
+	}
+	if traceTTLAboveFinal(final, hop.TTL) {
+		s.markAttemptSettledLocked(hop.TTL, attemptIdx)
+		s.lock.Unlock()
+		return false
+	}
+	if response.kind != probeResponseUnknown {
+		if s.responses == nil {
+			s.responses = make(map[int][]probeResponse)
+		}
+		response = responseWithPeer(response, hop.Address)
+		s.responses[hop.TTL] = append(s.responses[hop.TTL], response)
+	}
+	markDestinationFinal(final, hop.TTL, response)
+	added, idx := s.addLocked(hop, attemptIdx, numMeasurements, maxAttempts)
+	if !added {
+		idx = s.promoteWinningResponseLocked(hop, response, numMeasurements)
+		added = idx >= 0
+	}
+	s.markAttemptSettledLocked(hop.TTL, attemptIdx)
+	s.lock.Unlock()
+
+	if added && needsMetadata {
+		s.launchHopMetadata(hop, idx, cfg)
+	}
+	return added
+}
+
 func (s *Result) addWithGeoAsync(hop Hop, attemptIdx, numMeasurements, maxAttempts int, cfg Config) {
 	needsMetadata := cfg.IPGeoSource != nil || cfg.RDNS
-	if cfg.IPGeoSource != nil && hop.Geo == nil {
-		hop.Geo = pendingGeo()
-	} else if cfg.IPGeoSource != nil && hop.Geo.Source == "" {
-		hop.Geo.Source = PendingGeoSource
-	}
-	if hop.Lang == "" {
-		hop.Lang = cfg.Lang
-	}
+	prepareHopMetadata(&hop, cfg)
 
 	added, idx := s.add(hop, attemptIdx, numMeasurements, maxAttempts)
 	if !added {
@@ -575,6 +981,21 @@ func (s *Result) addWithGeoAsync(hop Hop, attemptIdx, numMeasurements, maxAttemp
 		return
 	}
 
+	s.launchHopMetadata(hop, idx, cfg)
+}
+
+func prepareHopMetadata(hop *Hop, cfg Config) {
+	if cfg.IPGeoSource != nil && hop.Geo == nil {
+		hop.Geo = pendingGeo()
+	} else if cfg.IPGeoSource != nil && hop.Geo.Source == "" {
+		hop.Geo.Source = PendingGeoSource
+	}
+	if hop.Lang == "" {
+		hop.Lang = cfg.Lang
+	}
+}
+
+func (s *Result) launchHopMetadata(hop Hop, idx int, cfg Config) {
 	s.geoWG.Add(1)
 	go func(ttl, idx int, h Hop) {
 		defer s.geoWG.Done()
@@ -583,6 +1004,125 @@ func (s *Result) addWithGeoAsync(hop Hop, attemptIdx, numMeasurements, maxAttemp
 			s.updateHop(ttl, idx, h)
 		}
 	}(hop.TTL, idx, hop)
+}
+
+func isTerminalResponse(response probeResponse) bool {
+	return response.kind == probeResponseDestination || response.kind == probeResponseUnreachable
+}
+
+func responseWithPeer(response probeResponse, peer net.Addr) probeResponse {
+	if peer == nil {
+		return response
+	}
+	peerIP := util.AddrIP(peer)
+	if peerIP == nil {
+		return response
+	}
+	response.responderIP = peerIP.String()
+	if !isTerminalResponse(response) {
+		return response
+	}
+	if response.detail == "" {
+		response.detail = response.responderIP
+	} else {
+		response.detail += " from " + response.responderIP
+	}
+	return response
+}
+
+func (s *Result) promoteWinningResponseLocked(hop Hop, response probeResponse, numMeasurements int) int {
+	k := hop.TTL - 1
+	if k < 0 || k >= len(s.Hops) || len(s.Hops[k]) == 0 {
+		return -1
+	}
+	if idx, ok := s.provisional[hop.TTL]; ok {
+		switch response.kind {
+		case probeResponseDestination, probeResponseTransit:
+			if idx >= 0 && idx < len(s.Hops[k]) {
+				s.Hops[k][idx] = hop
+				delete(s.provisional, hop.TTL)
+				return idx
+			}
+		case probeResponseUnreachable:
+			return -1
+		}
+	}
+	if response.kind != probeResponseDestination &&
+		(response.kind != probeResponseUnreachable || !s.unreachableWinsLocked(hop.TTL)) {
+		return -1
+	}
+	limit := numMeasurements
+	if limit <= 0 || limit > len(s.Hops[k]) {
+		limit = len(s.Hops[k])
+	}
+	for i := limit - 1; i >= 0; i-- {
+		if !isValidHop(s.Hops[k][i]) {
+			s.Hops[k][i] = hop
+			if response.kind == probeResponseUnreachable {
+				s.rememberProvisionalLocked(hop.TTL, i)
+			}
+			return i
+		}
+	}
+	s.Hops[k][limit-1] = hop
+	if response.kind == probeResponseUnreachable {
+		s.rememberProvisionalLocked(hop.TTL, limit-1)
+	}
+	return limit - 1
+}
+
+func (s *Result) rememberProvisionalLocked(ttl, idx int) {
+	if s.provisional == nil {
+		s.provisional = make(map[int]int)
+	}
+	s.provisional[ttl] = idx
+}
+
+func (s *Result) unreachableWinsLocked(ttl int) bool {
+	hasUnreachable := false
+	for _, response := range s.responses[ttl] {
+		switch response.kind {
+		case probeResponseDestination, probeResponseTransit:
+			return false
+		case probeResponseUnreachable:
+			hasUnreachable = true
+		}
+	}
+	return hasUnreachable
+}
+
+func (s *Result) addTimeout(hop Hop, final *atomic.Int32, attemptIdx, numMeasurements, maxAttempts int) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.attemptSettledLocked(hop.TTL, attemptIdx) {
+		return false
+	}
+	if traceTTLAboveFinal(final, hop.TTL) {
+		s.markAttemptSettledLocked(hop.TTL, attemptIdx)
+		return false
+	}
+	added, _ := s.addLocked(hop, attemptIdx, numMeasurements, maxAttempts)
+	s.markAttemptSettledLocked(hop.TTL, attemptIdx)
+	return added
+}
+
+func (s *Result) addFailedAttempt(hop Hop, final *atomic.Int32, attemptIdx, numMeasurements, maxAttempts int) bool {
+	return s.addTimeout(hop, final, attemptIdx, numMeasurements, maxAttempts)
+}
+
+func (s *Result) attemptSettledLocked(ttl, attemptIdx int) bool {
+	state := s.attempts[ttl]
+	if state == nil {
+		return false
+	}
+	_, settled := state.settled[attemptIdx]
+	return settled
+}
+
+func (s *Result) settleAttempt(ttl, attemptIdx int) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.markAttemptSettledLocked(ttl, attemptIdx)
 }
 
 func geoLookupMaxRetries(numMeasurements int) int {
