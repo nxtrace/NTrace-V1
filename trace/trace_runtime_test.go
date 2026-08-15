@@ -30,6 +30,47 @@ func TestWaitForTraceDelayZeroDelaySucceeds(t *testing.T) {
 	}
 }
 
+func TestRetryTraceProbeLookupDoesNotDelayRegisteredProbe(t *testing.T) {
+	calls := 0
+	if !retryTraceProbeLookup(context.Background(), func() bool {
+		calls++
+		return true
+	}) {
+		t.Fatal("retryTraceProbeLookup() = false, want true")
+	}
+	if calls != 1 {
+		t.Fatalf("lookup calls = %d, want 1", calls)
+	}
+}
+
+func TestRetryTraceProbeLookupRetriesRegistrationRace(t *testing.T) {
+	calls := 0
+	if !retryTraceProbeLookup(context.Background(), func() bool {
+		calls++
+		return calls == 2
+	}) {
+		t.Fatal("retryTraceProbeLookup() = false, want true")
+	}
+	if calls != 2 {
+		t.Fatalf("lookup calls = %d, want 2", calls)
+	}
+}
+
+func TestRetryTraceProbeLookupStopsOnCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	if retryTraceProbeLookup(ctx, func() bool {
+		calls++
+		return false
+	}) {
+		t.Fatal("retryTraceProbeLookup() = true, want false")
+	}
+	if calls != 0 {
+		t.Fatalf("lookup calls = %d, want 0", calls)
+	}
+}
+
 func TestAcquireTraceSemaphoreChecksCanceledContextFirst(t *testing.T) {
 	sem := semaphore.NewWeighted(1)
 	if err := sem.Acquire(context.Background(), 1); err != nil {
