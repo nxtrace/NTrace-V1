@@ -11,6 +11,16 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+type traceLookupOrderContext struct {
+	context.Context
+	doneCalls int
+}
+
+func (c *traceLookupOrderContext) Done() <-chan struct{} {
+	c.doneCalls++
+	return c.Context.Done()
+}
+
 func TestWaitForTraceDelayCanceledContextReturnsImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -27,6 +37,53 @@ func TestWaitForTraceDelayCanceledContextReturnsImmediately(t *testing.T) {
 func TestWaitForTraceDelayZeroDelaySucceeds(t *testing.T) {
 	if !waitForTraceDelay(context.Background(), 0) {
 		t.Fatal("waitForTraceDelay should succeed for zero delay")
+	}
+}
+
+func TestRetryTraceProbeLookupDoesNotDelayRegisteredProbe(t *testing.T) {
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &traceLookupOrderContext{Context: baseCtx}
+	lookupDoneCalls := make([]int, 0, 1)
+	if !retryTraceProbeLookup(ctx, func() bool {
+		lookupDoneCalls = append(lookupDoneCalls, ctx.doneCalls)
+		return true
+	}) {
+		t.Fatal("retryTraceProbeLookup() = false, want true")
+	}
+	if len(lookupDoneCalls) != 1 || lookupDoneCalls[0] != 0 {
+		t.Fatalf("Done calls observed by lookup = %v, want [0]", lookupDoneCalls)
+	}
+}
+
+func TestRetryTraceProbeLookupRetriesRegistrationRace(t *testing.T) {
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &traceLookupOrderContext{Context: baseCtx}
+	lookupDoneCalls := make([]int, 0, 2)
+	if !retryTraceProbeLookup(ctx, func() bool {
+		lookupDoneCalls = append(lookupDoneCalls, ctx.doneCalls)
+		return len(lookupDoneCalls) == 2
+	}) {
+		t.Fatal("retryTraceProbeLookup() = false, want true")
+	}
+	if len(lookupDoneCalls) != 2 || lookupDoneCalls[0] != 0 || lookupDoneCalls[1] == 0 {
+		t.Fatalf("Done calls observed by lookup = %v, want first 0 and retry >0", lookupDoneCalls)
+	}
+}
+
+func TestRetryTraceProbeLookupStopsOnCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	if retryTraceProbeLookup(ctx, func() bool {
+		calls++
+		return false
+	}) {
+		t.Fatal("retryTraceProbeLookup() = true, want false")
+	}
+	if calls != 0 {
+		t.Fatalf("lookup calls = %d, want 0", calls)
 	}
 }
 

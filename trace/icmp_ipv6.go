@@ -86,7 +86,7 @@ func (t *ICMPTracerv6) launchTTL(ctx context.Context, s *internal.ICMPSpec, ttl 
 	t.wg.Add(1)
 	go func(ttl int) {
 		defer t.wg.Done()
-		defer t.res.markTTLLaunchDone(ttl)
+		defer t.res.markTTLLaunchDoneAndCommit(ctx, ttl, t.NumMeasurements, &t.final)
 		for i := 0; i < t.MaxAttempts; i++ {
 			// 若此 TTL 已完成或 ctx 已取消，则不再发起新的尝试
 			if t.ttlComp(ttl) || ctx.Err() != nil {
@@ -202,19 +202,12 @@ func (t *ICMPTracerv6) matchWorker(ctx context.Context) {
 				return
 			}
 
-			// 固定等待 10ms，缓解登记竞态
-			timer := time.NewTimer(10 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-			timer.Stop()
-
-			// 尝试一次匹配
-			start, ok := t.lookupSent(task.seq)
-			if !ok {
+			var start time.Time
+			if !retryTraceProbeLookup(ctx, func() bool {
+				var found bool
+				start, found = t.lookupSent(task.seq)
+				return found
+			}) {
 				continue
 			}
 
@@ -361,7 +354,7 @@ func (t *ICMPTracerv6) handleICMPMessage(msg internal.ReceivedMessage, finish ti
 func (t *ICMPTracerv6) send(ctx context.Context, s *internal.ICMPSpec, ttl, i int) error {
 	if t.ttlComp(ttl) {
 		// 快路径短路：若该 TTL 已完成，直接返回避免竞争信号量与无谓发包
-		t.res.settleAttempt(ttl, i)
+		t.res.settleAttemptAndCommit(ctx, ttl, i, t.NumMeasurements, &t.final)
 		return nil
 	}
 
@@ -377,7 +370,7 @@ func (t *ICMPTracerv6) send(ctx context.Context, s *internal.ICMPSpec, ttl, i in
 
 	if t.ttlComp(ttl) {
 		// 竞态兜底：获取信号量期间可能已完成，再次检查以避免冗余发包
-		t.res.settleAttempt(ttl, i)
+		t.res.settleAttemptAndCommit(ctx, ttl, i, t.NumMeasurements, &t.final)
 		return nil
 	}
 

@@ -206,6 +206,19 @@ func waitForTraceDelay(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+func retryTraceProbeLookup(ctx context.Context, lookup func() bool) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	if lookup() {
+		return true
+	}
+	if !waitForTraceDelay(ctx, 10*time.Millisecond) {
+		return false
+	}
+	return lookup()
+}
+
 func stopAndDrainTimer(timer *time.Timer) {
 	if timer == nil {
 		return
@@ -520,6 +533,17 @@ func (s *Result) markTTLLaunchDone(ttl int) {
 	s.ttlAttemptsLocked(ttl).launchDone = true
 }
 
+func (s *Result) markTTLLaunchDoneAndCommit(ctx context.Context, ttl, numMeasurements int, final *atomic.Int32) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	state := s.ttlAttemptsLocked(ttl)
+	state.launchDone = true
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
+	s.lowerStableResponseFinalLocked(ttl, numMeasurements, final)
+}
+
 func (s *Result) ttlDisplayComplete(ttl, numMeasurements int) bool {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
@@ -564,6 +588,29 @@ func (s *Result) markAttemptSettledLocked(ttl, attemptIdx int) {
 	state := s.ttlAttemptsLocked(ttl)
 	if _, launched := state.launched[attemptIdx]; launched {
 		state.settled[attemptIdx] = struct{}{}
+	}
+}
+
+func (s *Result) lowerStableResponseFinalLocked(ttl, numMeasurements int, final *atomic.Int32) {
+	if !s.ttlStableLocked(ttl, numMeasurements) {
+		return
+	}
+
+	hasTransit := false
+	hasDestination := false
+	hasUnreachable := false
+	for _, response := range s.responses[ttl] {
+		switch response.kind {
+		case probeResponseTransit:
+			hasTransit = true
+		case probeResponseDestination:
+			hasDestination = true
+		case probeResponseUnreachable:
+			hasUnreachable = true
+		}
+	}
+	if hasDestination || (!hasTransit && hasUnreachable) {
+		lowerTraceFinal(final, ttl)
 	}
 }
 
@@ -961,6 +1008,7 @@ func (s *Result) addMatchedHop(hop Hop, response probeResponse, final *atomic.In
 		added = idx >= 0
 	}
 	s.markAttemptSettledLocked(hop.TTL, attemptIdx)
+	s.lowerStableResponseFinalLocked(hop.TTL, numMeasurements, final)
 	s.lock.Unlock()
 
 	if added && needsMetadata {
@@ -1103,6 +1151,7 @@ func (s *Result) addTimeout(hop Hop, final *atomic.Int32, attemptIdx, numMeasure
 	}
 	added, _ := s.addLocked(hop, attemptIdx, numMeasurements, maxAttempts)
 	s.markAttemptSettledLocked(hop.TTL, attemptIdx)
+	s.lowerStableResponseFinalLocked(hop.TTL, numMeasurements, final)
 	return added
 }
 
@@ -1123,6 +1172,16 @@ func (s *Result) settleAttempt(ttl, attemptIdx int) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	s.markAttemptSettledLocked(ttl, attemptIdx)
+}
+
+func (s *Result) settleAttemptAndCommit(ctx context.Context, ttl, attemptIdx, numMeasurements int, final *atomic.Int32) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.markAttemptSettledLocked(ttl, attemptIdx)
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
+	s.lowerStableResponseFinalLocked(ttl, numMeasurements, final)
 }
 
 func geoLookupMaxRetries(numMeasurements int) int {

@@ -290,6 +290,146 @@ func TestTraceFinalOnlyDecreases(t *testing.T) {
 	}
 }
 
+func TestStableUnreachableLowersFinalBeforePrinting(t *testing.T) {
+	res := &Result{Hops: make([][]Hop, 3), tailDone: make([]bool, 3)}
+	var final atomic.Int32
+	final.Store(-1)
+	if !res.markAttemptLaunched(2, 0, &final) {
+		t.Fatal("TTL 2 attempt was not launched")
+	}
+	res.markTTLLaunchDoneAndCommit(context.Background(), 2, 1, &final)
+	res.addMatchedHop(
+		Hop{Success: true, Address: &net.IPAddr{IP: net.ParseIP("2001:db8::2")}, TTL: 2},
+		probeResponse{kind: probeResponseUnreachable, detail: "ICMPv6 No Route", marker: "!N"},
+		&final, 0, 1, 1, Config{},
+	)
+
+	if got := final.Load(); got != 2 {
+		t.Fatalf("final = %d, want 2 before printer advances", got)
+	}
+	if res.markAttemptLaunched(3, 0, &final) {
+		t.Fatal("TTL 3 attempt was admitted after the stable unreachable response")
+	}
+	if res.StopReason != nil {
+		t.Fatalf("StopReason = %#v, want printer to set it later", res.StopReason)
+	}
+}
+
+func TestStableUnreachableWaitsForTransitEvidence(t *testing.T) {
+	res := &Result{Hops: make([][]Hop, 2), tailDone: make([]bool, 2)}
+	var final atomic.Int32
+	final.Store(-1)
+	for attempt := range 2 {
+		res.markAttemptLaunched(2, attempt, &final)
+	}
+	res.markTTLLaunchDoneAndCommit(context.Background(), 2, 2, &final)
+	res.addMatchedHop(
+		Hop{Success: true, Address: &net.IPAddr{IP: net.ParseIP("2001:db8::2")}, TTL: 2},
+		probeResponse{kind: probeResponseUnreachable}, &final, 0, 2, 2, Config{},
+	)
+	if got := final.Load(); got != -1 {
+		t.Fatalf("final after pending unreachable = %d, want -1", got)
+	}
+	res.addMatchedHop(
+		Hop{Success: true, Address: &net.IPAddr{IP: net.ParseIP("2001:db8::3")}, TTL: 2},
+		probeResponse{kind: probeResponseTransit}, &final, 1, 2, 2, Config{},
+	)
+	if got := final.Load(); got != -1 {
+		t.Fatalf("final after transit evidence = %d, want -1", got)
+	}
+}
+
+func TestLaunchDoneCommitsSettledUnreachable(t *testing.T) {
+	res := &Result{Hops: make([][]Hop, 2), tailDone: make([]bool, 2)}
+	var final atomic.Int32
+	final.Store(-1)
+	res.markAttemptLaunched(2, 0, &final)
+	res.addMatchedHop(
+		Hop{Success: true, Address: &net.IPAddr{IP: net.ParseIP("2001:db8::2")}, TTL: 2},
+		probeResponse{kind: probeResponseUnreachable}, &final, 0, 1, 1, Config{},
+	)
+	if got := final.Load(); got != -1 {
+		t.Fatalf("final before launch completion = %d, want -1", got)
+	}
+	res.markTTLLaunchDoneAndCommit(context.Background(), 2, 1, &final)
+	if got := final.Load(); got != 2 {
+		t.Fatalf("final after launch completion = %d, want 2", got)
+	}
+}
+
+func TestLastTimeoutCommitsStableUnreachable(t *testing.T) {
+	res := &Result{Hops: make([][]Hop, 2), tailDone: make([]bool, 2)}
+	var final atomic.Int32
+	final.Store(-1)
+	for attempt := range 2 {
+		res.markAttemptLaunched(2, attempt, &final)
+	}
+	res.markTTLLaunchDoneAndCommit(context.Background(), 2, 1, &final)
+	res.addMatchedHop(
+		Hop{Success: true, Address: &net.IPAddr{IP: net.ParseIP("2001:db8::2")}, TTL: 2},
+		probeResponse{kind: probeResponseUnreachable}, &final, 0, 1, 2, Config{},
+	)
+	if got := final.Load(); got != -1 {
+		t.Fatalf("final before the last attempt settles = %d, want -1", got)
+	}
+	res.addTimeout(Hop{TTL: 2, Error: errHopLimitTimeout}, &final, 1, 1, 2)
+	if got := final.Load(); got != 2 {
+		t.Fatalf("final after the last timeout = %d, want 2", got)
+	}
+}
+
+func TestOnlyIntentionalSkippedAttemptCommitsUnreachable(t *testing.T) {
+	newResult := func() (*Result, *atomic.Int32) {
+		res := &Result{Hops: make([][]Hop, 2), tailDone: make([]bool, 2)}
+		final := &atomic.Int32{}
+		final.Store(-1)
+		for attempt := range 2 {
+			res.markAttemptLaunched(2, attempt, final)
+		}
+		res.markTTLLaunchDoneAndCommit(context.Background(), 2, 1, final)
+		res.addMatchedHop(
+			Hop{Success: true, Address: &net.IPAddr{IP: net.ParseIP("2001:db8::2")}, TTL: 2},
+			probeResponse{kind: probeResponseUnreachable}, final, 0, 1, 2, Config{},
+		)
+		return res, final
+	}
+
+	canceled, canceledFinal := newResult()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceled.settleAttemptAndCommit(ctx, 2, 1, 1, canceledFinal)
+	if got := canceledFinal.Load(); got != -1 {
+		t.Fatalf("final after cancellation settlement = %d, want -1", got)
+	}
+
+	skipped, skippedFinal := newResult()
+	skipped.settleAttemptAndCommit(context.Background(), 2, 1, 1, skippedFinal)
+	if got := skippedFinal.Load(); got != 2 {
+		t.Fatalf("final after intentional skipped attempt = %d, want 2", got)
+	}
+}
+
+func TestCanceledLaunchDoneDoesNotCommitUnreachable(t *testing.T) {
+	res := &Result{Hops: make([][]Hop, 2), tailDone: make([]bool, 2)}
+	var final atomic.Int32
+	final.Store(-1)
+	for attempt := range 2 {
+		res.markAttemptLaunched(2, attempt, &final)
+	}
+	res.addMatchedHop(
+		Hop{Success: true, Address: &net.IPAddr{IP: net.ParseIP("2001:db8::2")}, TTL: 2},
+		probeResponse{kind: probeResponseUnreachable}, &final, 0, 1, 2, Config{},
+	)
+	res.settleAttempt(2, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res.markTTLLaunchDoneAndCommit(ctx, 2, 1, &final)
+
+	if got := final.Load(); got != -1 {
+		t.Fatalf("final after canceled launch completion = %d, want -1", got)
+	}
+}
+
 func TestMatchedAndTimeoutAboveFinalAreDiscarded(t *testing.T) {
 	res := &Result{Hops: make([][]Hop, 3), tailDone: make([]bool, 3)}
 	var final atomic.Int32
