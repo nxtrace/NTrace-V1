@@ -4,12 +4,34 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
 	"golang.org/x/sync/semaphore"
 )
+
+type traceLookupOrderContext struct {
+	events *[]string
+}
+
+func (c *traceLookupOrderContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (c *traceLookupOrderContext) Done() <-chan struct{} {
+	*c.events = append(*c.events, "wait")
+	return nil
+}
+
+func (c *traceLookupOrderContext) Err() error {
+	return nil
+}
+
+func (c *traceLookupOrderContext) Value(any) any {
+	return nil
+}
 
 func TestWaitForTraceDelayCanceledContextReturnsImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -31,28 +53,30 @@ func TestWaitForTraceDelayZeroDelaySucceeds(t *testing.T) {
 }
 
 func TestRetryTraceProbeLookupDoesNotDelayRegisteredProbe(t *testing.T) {
-	calls := 0
-	if !retryTraceProbeLookup(context.Background(), func() bool {
-		calls++
+	events := make([]string, 0, 1)
+	ctx := &traceLookupOrderContext{events: &events}
+	if !retryTraceProbeLookup(ctx, func() bool {
+		events = append(events, "lookup")
 		return true
 	}) {
 		t.Fatal("retryTraceProbeLookup() = false, want true")
 	}
-	if calls != 1 {
-		t.Fatalf("lookup calls = %d, want 1", calls)
+	if want := []string{"lookup"}; !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }
 
 func TestRetryTraceProbeLookupRetriesRegistrationRace(t *testing.T) {
-	calls := 0
-	if !retryTraceProbeLookup(context.Background(), func() bool {
-		calls++
-		return calls == 2
+	events := make([]string, 0, 3)
+	ctx := &traceLookupOrderContext{events: &events}
+	if !retryTraceProbeLookup(ctx, func() bool {
+		events = append(events, "lookup")
+		return len(events) == 3
 	}) {
 		t.Fatal("retryTraceProbeLookup() = false, want true")
 	}
-	if calls != 2 {
-		t.Fatalf("lookup calls = %d, want 2", calls)
+	if want := []string{"lookup", "wait", "lookup"}; !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }
 
