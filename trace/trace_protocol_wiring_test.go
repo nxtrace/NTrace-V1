@@ -12,6 +12,14 @@ import (
 
 const traceWiringTestTTL = 1
 
+type protocolSettlementScenario uint8
+
+const (
+	protocolLaunchDoneSettlement protocolSettlementScenario = iota
+	protocolSkippedSendSettlement
+	protocolSecondTTLCheckSettlement
+)
+
 type protocolSettlementWiringTest struct {
 	name   string
 	res    *Result
@@ -28,6 +36,8 @@ type semaphoreArrivalContext struct {
 	once    sync.Once
 }
 
+// Err reports when send has passed its first TTL check and reached the
+// acquireTraceSemaphore preflight, before the pre-acquired token is released.
 func (c *semaphoreArrivalContext) Err() error {
 	c.once.Do(func() { close(c.arrived) })
 	return c.Context.Err()
@@ -40,6 +50,8 @@ type retryRegistrationContext struct {
 	register   func()
 }
 
+// Done registers the probe only after retryTraceProbeLookup arms the context
+// through Err; the match worker's earlier select observes the unarmed state.
 func (c *retryRegistrationContext) Done() <-chan struct{} {
 	if c.armed.Load() && c.registered.CompareAndSwap(false, true) {
 		c.register()
@@ -52,38 +64,32 @@ func (c *retryRegistrationContext) Err() error {
 	return c.Context.Err()
 }
 
-func prepareProtocolSettlementWiringTest(t *testing.T, test protocolSettlementWiringTest, settleBeforeLaunchDone bool) {
+func prepareProtocolSettlementWiringTest(t *testing.T, test protocolSettlementWiringTest, scenario protocolSettlementScenario) {
 	t.Helper()
-	test.res.Hops = [][]Hop{{{Success: true, TTL: traceWiringTestTTL}}}
-	test.res.tailDone = []bool{true}
-	test.res.responses = map[int][]probeResponse{
-		traceWiringTestTTL: {{kind: probeResponseUnreachable}},
-	}
-	test.res.attempts = nil
-	test.final.Store(-1)
-	if !test.res.markAttemptLaunched(traceWiringTestTTL, 0, test.final) {
-		t.Fatal("test attempt was not launched")
-	}
-	if settleBeforeLaunchDone {
-		test.res.settleAttempt(traceWiringTestTTL, 0)
-		return
-	}
-	test.res.markTTLLaunchDone(traceWiringTestTTL)
-}
-
-func prepareProtocolSecondTTLCheckWiringTest(t *testing.T, test protocolSettlementWiringTest) {
-	t.Helper()
+	test.res.lock.Lock()
 	test.res.Hops = [][]Hop{nil}
 	test.res.tailDone = []bool{false}
+	if scenario != protocolSecondTTLCheckSettlement {
+		test.res.Hops[0] = []Hop{{Success: true, TTL: traceWiringTestTTL}}
+		test.res.tailDone[0] = true
+	}
 	test.res.responses = map[int][]probeResponse{
 		traceWiringTestTTL: {{kind: probeResponseUnreachable}},
 	}
 	test.res.attempts = nil
+	test.res.lock.Unlock()
 	test.final.Store(-1)
 	if !test.res.markAttemptLaunched(traceWiringTestTTL, 0, test.final) {
 		t.Fatal("test attempt was not launched")
 	}
-	test.res.markTTLLaunchDone(traceWiringTestTTL)
+	switch scenario {
+	case protocolLaunchDoneSettlement:
+		test.res.settleAttempt(traceWiringTestTTL, 0)
+	case protocolSkippedSendSettlement, protocolSecondTTLCheckSettlement:
+		test.res.markTTLLaunchDone(traceWiringTestTTL)
+	default:
+		t.Fatalf("unknown settlement scenario: %d", scenario)
+	}
 }
 
 func waitForProtocolWiringSignal(t *testing.T, signal <-chan struct{}, name string) {
@@ -103,7 +109,7 @@ func makeProtocolWiringHopVisible(res *Result) {
 
 func testProtocolSecondTTLCheckWiring(t *testing.T, test protocolSettlementWiringTest) {
 	t.Helper()
-	prepareProtocolSecondTTLCheckWiringTest(t, test)
+	prepareProtocolSettlementWiringTest(t, test, protocolSecondTTLCheckSettlement)
 
 	sem := semaphore.NewWeighted(1)
 	if err := sem.Acquire(context.Background(), 1); err != nil {
@@ -160,7 +166,7 @@ func TestProtocolStableUnreachableSettlementWiring(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name+"/launch_done", func(t *testing.T) {
-			prepareProtocolSettlementWiringTest(t, test, true)
+			prepareProtocolSettlementWiringTest(t, test, protocolLaunchDoneSettlement)
 			test.launch()
 			test.wait()
 			if got := test.final.Load(); got != traceWiringTestTTL {
@@ -169,7 +175,7 @@ func TestProtocolStableUnreachableSettlementWiring(t *testing.T) {
 		})
 
 		t.Run(test.name+"/skipped_send", func(t *testing.T) {
-			prepareProtocolSettlementWiringTest(t, test, false)
+			prepareProtocolSettlementWiringTest(t, test, protocolSkippedSendSettlement)
 			if err := test.send(context.Background()); err != nil {
 				t.Fatalf("send() error = %v", err)
 			}

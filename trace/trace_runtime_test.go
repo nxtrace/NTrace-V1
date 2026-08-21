@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"slices"
 	"testing"
 	"time"
 
@@ -13,24 +12,13 @@ import (
 )
 
 type traceLookupOrderContext struct {
-	events *[]string
-}
-
-func (c *traceLookupOrderContext) Deadline() (time.Time, bool) {
-	return time.Time{}, false
+	context.Context
+	doneCalls int
 }
 
 func (c *traceLookupOrderContext) Done() <-chan struct{} {
-	*c.events = append(*c.events, "wait")
-	return nil
-}
-
-func (c *traceLookupOrderContext) Err() error {
-	return nil
-}
-
-func (c *traceLookupOrderContext) Value(any) any {
-	return nil
+	c.doneCalls++
+	return c.Context.Done()
 }
 
 func TestWaitForTraceDelayCanceledContextReturnsImmediately(t *testing.T) {
@@ -53,30 +41,34 @@ func TestWaitForTraceDelayZeroDelaySucceeds(t *testing.T) {
 }
 
 func TestRetryTraceProbeLookupDoesNotDelayRegisteredProbe(t *testing.T) {
-	events := make([]string, 0, 1)
-	ctx := &traceLookupOrderContext{events: &events}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &traceLookupOrderContext{Context: baseCtx}
+	lookupDoneCalls := make([]int, 0, 1)
 	if !retryTraceProbeLookup(ctx, func() bool {
-		events = append(events, "lookup")
+		lookupDoneCalls = append(lookupDoneCalls, ctx.doneCalls)
 		return true
 	}) {
 		t.Fatal("retryTraceProbeLookup() = false, want true")
 	}
-	if want := []string{"lookup"}; !slices.Equal(events, want) {
-		t.Fatalf("events = %v, want %v", events, want)
+	if len(lookupDoneCalls) != 1 || lookupDoneCalls[0] != 0 {
+		t.Fatalf("Done calls observed by lookup = %v, want [0]", lookupDoneCalls)
 	}
 }
 
 func TestRetryTraceProbeLookupRetriesRegistrationRace(t *testing.T) {
-	events := make([]string, 0, 3)
-	ctx := &traceLookupOrderContext{events: &events}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &traceLookupOrderContext{Context: baseCtx}
+	lookupDoneCalls := make([]int, 0, 2)
 	if !retryTraceProbeLookup(ctx, func() bool {
-		events = append(events, "lookup")
-		return len(events) == 3
+		lookupDoneCalls = append(lookupDoneCalls, ctx.doneCalls)
+		return len(lookupDoneCalls) == 2
 	}) {
 		t.Fatal("retryTraceProbeLookup() = false, want true")
 	}
-	if want := []string{"lookup", "wait", "lookup"}; !slices.Equal(events, want) {
-		t.Fatalf("events = %v, want %v", events, want)
+	if len(lookupDoneCalls) != 2 || lookupDoneCalls[0] != 0 || lookupDoneCalls[1] == 0 {
+		t.Fatalf("Done calls observed by lookup = %v, want first 0 and retry >0", lookupDoneCalls)
 	}
 }
 
