@@ -183,7 +183,7 @@ func TestGetSourceWithGeoDNSEmptyResolverUsesIsolatedScope(t *testing.T) {
 	go observeEmptyGeoSourceScope(GetSourceWithGeoDNS("disable-geoip", ""), sourceStarted, sourceDone)
 	<-sourceStarted
 
-	blocked, completed, earlyErr := waitForGeoSourceScopeBlock(sourceDone)
+	blocked, completed, earlyErr := waitForGeoSourceScopeBlock(t, sourceDone)
 	if completed {
 		close(releaseDot)
 		<-dotDone
@@ -212,7 +212,9 @@ func observeEmptyGeoSourceScope(source Source, started chan<- struct{}, result c
 	result <- err
 }
 
-func waitForGeoSourceScopeBlock(result <-chan error) (blocked bool, completed bool, err error) {
+func waitForGeoSourceScopeBlock(t *testing.T, result <-chan error) (blocked bool, completed bool, err error) {
+	t.Helper()
+	const maxStackDumpSize = 16 << 20
 	deadline := time.Now().Add(2 * time.Second)
 	stack := make([]byte, 1<<20)
 	for time.Now().Before(deadline) {
@@ -222,6 +224,14 @@ func waitForGeoSourceScopeBlock(result <-chan error) (blocked bool, completed bo
 		default:
 		}
 		n := runtime.Stack(stack, true)
+		for n == len(stack) {
+			if len(stack) >= maxStackDumpSize {
+				t.Errorf("goroutine stack dump exceeded %d bytes", maxStackDumpSize)
+				return false, false, err
+			}
+			stack = make([]byte, min(len(stack)*2, maxStackDumpSize))
+			n = runtime.Stack(stack, true)
+		}
 		for _, goroutine := range bytes.Split(stack[:n], []byte("\n\n")) {
 			if bytes.Contains(goroutine, []byte("observeEmptyGeoSourceScope")) &&
 				bytes.Contains(goroutine, []byte("[sync.Mutex.Lock")) {

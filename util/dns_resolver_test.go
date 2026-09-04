@@ -318,7 +318,7 @@ func TestWithGeoDNSResolver_EmptyScopeIsolatedFromConcurrentDoT(t *testing.T) {
 	go observeEmptyGeoResolverScope(emptyStarted, emptyDone, emptyPolicy)
 	<-emptyStarted
 
-	blocked, completed, got := waitForGeoResolverScopeBlock(emptyPolicy)
+	blocked, completed, got := waitForGeoResolverScopeBlock(t, emptyPolicy)
 	if completed {
 		close(releaseDot)
 		<-dotDone
@@ -361,7 +361,9 @@ func observeEmptyGeoResolverScope(started chan<- struct{}, done chan<- struct{},
 	})
 }
 
-func waitForGeoResolverScopeBlock(result <-chan geoResolverScopeObservation) (blocked bool, completed bool, got geoResolverScopeObservation) {
+func waitForGeoResolverScopeBlock(t *testing.T, result <-chan geoResolverScopeObservation) (blocked bool, completed bool, got geoResolverScopeObservation) {
+	t.Helper()
+	const maxStackDumpSize = 16 << 20
 	deadline := time.Now().Add(2 * time.Second)
 	stack := make([]byte, 1<<20)
 	for time.Now().Before(deadline) {
@@ -371,6 +373,14 @@ func waitForGeoResolverScopeBlock(result <-chan geoResolverScopeObservation) (bl
 		default:
 		}
 		n := runtime.Stack(stack, true)
+		for n == len(stack) {
+			if len(stack) >= maxStackDumpSize {
+				t.Errorf("goroutine stack dump exceeded %d bytes", maxStackDumpSize)
+				return false, false, got
+			}
+			stack = make([]byte, min(len(stack)*2, maxStackDumpSize))
+			n = runtime.Stack(stack, true)
+		}
 		for _, goroutine := range bytes.Split(stack[:n], []byte("\n\n")) {
 			if bytes.Contains(goroutine, []byte("observeEmptyGeoResolverScope")) &&
 				bytes.Contains(goroutine, []byte("[sync.Mutex.Lock")) {
