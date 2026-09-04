@@ -13,13 +13,10 @@ import (
 	"github.com/nxtrace/NTrace-core/wshandle"
 )
 
-/***
- * 原理介绍 By Leo
- * WebSocket 一共开启了一个发送和一个接收协程，在 New 了一个连接的实例对象后，不给予关闭，持续化连接
- * 当有新的IP请求时，一直在等待IP数据的发送协程接收到从 nexttrace_api_v3.go 的 sendNextTraceAPIV3IPRequest 函数发来的IP数据，向服务端发送数据
- * 由于实际使用时有大量并发，但是 ws 在同一时刻每次有且只能处理一次发送一条数据，所以必须给 ws 连接上互斥锁，保证每次只有一个协程访问
- * 运作模型可以理解为一个 Node 一直在等待数据，当获得一个新的任务后，转交给下一个协程，不再关注这个 Node 的下一步处理过程，并且回到空闲状态继续等待新的任务
-***/
+// NextTrace API v3 uses the process-wide WsConn supervisor for serialized
+// writes and generation-bound request delivery. A receiver is owned by each
+// MsgReceiveCh identity so replacing the global connection cannot create two
+// consumers for the same stream or move an old response onto a new stream.
 
 // IPPool IP 查询池 map - ip - ip channel
 type IPPool struct {
