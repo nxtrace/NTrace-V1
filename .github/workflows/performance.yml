@@ -30,6 +30,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
 
       - name: Select comparison commit
         id: refs
@@ -76,6 +77,14 @@ jobs:
             echo "FAIL: no comparison commit contains the performance harness" >&2
             exit 1
           fi
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ || ! "${reference_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL: head and comparison refs must be full commit SHAs" >&2
+            exit 1
+          fi
+          if [[ "${reference_sha}" == "${HEAD_SHA}" ]]; then
+            echo "FAIL: comparison commit must differ from head" >&2
+            exit 1
+          fi
 
           reference_go_directive="$(git show "${reference_sha}:go.mod" | awk '$1 == "go" { print $2; exit }')"
           case "${reference_go_directive}" in
@@ -111,13 +120,11 @@ jobs:
           echo "reference_go_version=${reference_go_version}" >> "${GITHUB_OUTPUT}"
           echo "reference_toolchain=${reference_toolchain}" >> "${GITHUB_OUTPUT}"
 
-      - name: Checkout comparison commit
-        if: ${{ steps.refs.outputs.reference_sha != '' }}
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ steps.refs.outputs.reference_sha }}
-          fetch-depth: 0
-          fetch-tags: true
+          git switch --detach "${reference_sha}"
+          if [[ "$(git rev-parse HEAD)" != "${reference_sha}" ]]; then
+            echo "FAIL: comparison checkout did not resolve to ${reference_sha}" >&2
+            exit 1
+          fi
 
       - name: Set up comparison Go
         if: ${{ steps.refs.outputs.reference_sha != '' }}
@@ -125,7 +132,7 @@ jobs:
         with:
           go-version: ${{ steps.refs.outputs.reference_go_version }}
           check-latest: true
-          cache: true
+          cache: false
 
       - name: Record comparison environment
         if: ${{ steps.refs.outputs.reference_sha != '' }}
@@ -208,19 +215,28 @@ jobs:
           file "${binary_dir}"/* > "${result_dir}/binaries.txt"
           sha256sum "${binary_dir}"/* > "${result_dir}/binaries.sha256"
 
-      - name: Checkout head commit
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ steps.refs.outputs.head_sha }}
-          fetch-depth: 0
-          fetch-tags: true
+      - name: Switch to head commit
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL: head ref must be a full commit SHA" >&2
+            exit 1
+          fi
+          git switch --detach "${HEAD_SHA}"
+          if [[ "$(git rev-parse HEAD)" != "${HEAD_SHA}" ]]; then
+            echo "FAIL: head checkout did not resolve to ${HEAD_SHA}" >&2
+            exit 1
+          fi
 
       - name: Set up head Go 1.27.1
         uses: actions/setup-go@v7
         with:
           go-version: "1.27.1"
           check-latest: true
-          cache: true
+          cache: false
 
       - name: Record head environment
         shell: bash
