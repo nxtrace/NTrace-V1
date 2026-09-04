@@ -79,11 +79,18 @@ func fastTraceGeoSource(params ParamsFastTrace) ipgeo.Source {
 	if params.IPGeoSource != nil {
 		return params.IPGeoSource
 	}
+	return ipgeo.GetSource(fastTraceDataProvider(params))
+}
+
+func fastTraceDataProvider(params ParamsFastTrace) string {
 	provider := strings.TrimSpace(params.DataProvider)
-	if provider == "" {
-		provider = ipgeo.NextTraceAPIProvider
+	if provider == "" && params.DN42 {
+		return "DN42"
 	}
-	return ipgeo.GetSource(provider)
+	if provider == "" {
+		return ipgeo.NextTraceAPIProvider
+	}
+	return provider
 }
 
 func fastTraceDN42(params ParamsFastTrace) bool {
@@ -150,9 +157,9 @@ var (
 )
 
 func openFastTraceWSIfNeeded(params ParamsFastTrace) func() {
-	provider := strings.TrimSpace(params.DataProvider)
+	provider := fastTraceDataProvider(params)
 	if params.RuntimePrepared ||
-		(provider != "" && !ipgeo.IsNextTraceAPIProvider(provider)) ||
+		!ipgeo.IsNextTraceAPIProvider(provider) ||
 		ipgeo.NextTraceAPIV4TokenConfigured() {
 		return func() {}
 	}

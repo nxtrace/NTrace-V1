@@ -335,7 +335,7 @@ func TestBuildFileTraceConfigUsesPinnedDN42Source(t *testing.T) {
 	}
 }
 
-func TestPinFastTraceGeoSourceNormalizesDN42Provider(t *testing.T) {
+func TestPinFastTraceGeoSourceUsesEffectiveDN42Provider(t *testing.T) {
 	dir := t.TempDir()
 	geoFeedPath := filepath.Join(dir, "geofeed.csv")
 	ptrPath := filepath.Join(dir, "ptr.csv")
@@ -354,13 +354,23 @@ func TestPinFastTraceGeoSourceNormalizesDN42Provider(t *testing.T) {
 		viper.Set("ptrPath", previousPtrPath)
 	})
 
-	params := pinFastTraceGeoSource(ParamsFastTrace{DataProvider: " dn42 "})
-	if params.IPGeoSource == nil || !fastTraceDN42(params) {
-		t.Fatalf("pinned params = %+v", params)
-	}
-	geo, err := params.IPGeoSource("10.0.0.1", time.Second, "en", false)
-	if err != nil || geo.City != "DN42 City" {
-		t.Fatalf("pinned source = (%+v, %v), want DN42 City", geo, err)
+	for _, tt := range []struct {
+		name   string
+		params ParamsFastTrace
+	}{
+		{name: "provider", params: ParamsFastTrace{DataProvider: " dn42 "}},
+		{name: "flag", params: ParamsFastTrace{DN42: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			params := pinFastTraceGeoSource(tt.params)
+			if params.IPGeoSource == nil || !fastTraceDN42(params) {
+				t.Fatalf("pinned params = %+v", params)
+			}
+			geo, err := params.IPGeoSource("10.0.0.1", time.Second, "en", false)
+			if err != nil || geo.City != "DN42 City" {
+				t.Fatalf("pinned source = (%+v, %v), want DN42 City", geo, err)
+			}
+		})
 	}
 }
 
@@ -396,24 +406,33 @@ func TestTestFileSkipsFastTraceWSWhenRuntimePrepared(t *testing.T) {
 	}
 }
 
-func TestTestFileSkipsFastTraceWSForDN42Provider(t *testing.T) {
+func TestTestFileSkipsFastTraceWSForDN42(t *testing.T) {
 	file := emptyFastTraceFile(t)
 	oldInit := initFastTraceWSFn
-	var initCalls int
-	initFastTraceWSFn = func(context.Context) *wshandle.WsConn {
-		initCalls++
-		return nil
-	}
 	t.Cleanup(func() { initFastTraceWSFn = oldInit })
 
-	testFile(ParamsFastTrace{
-		Context:      context.Background(),
-		File:         file,
-		DataProvider: "DN42",
-	}, trace.ICMPTrace)
+	for _, tt := range []struct {
+		name   string
+		params ParamsFastTrace
+	}{
+		{name: "provider", params: ParamsFastTrace{DataProvider: "DN42"}},
+		{name: "flag", params: ParamsFastTrace{DN42: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var initCalls int
+			initFastTraceWSFn = func(context.Context) *wshandle.WsConn {
+				initCalls++
+				return nil
+			}
+			params := tt.params
+			params.Context = context.Background()
+			params.File = file
+			testFile(params, trace.ICMPTrace)
 
-	if initCalls != 0 {
-		t.Fatalf("initFastTraceWS calls = %d, want 0 for DN42", initCalls)
+			if initCalls != 0 {
+				t.Fatalf("initFastTraceWS calls = %d, want 0 for DN42", initCalls)
+			}
+		})
 	}
 }
 
