@@ -438,13 +438,14 @@ func TestNormalizeMTRReportConfig_NonWideDisablesGeoAndKeepsRDNS(t *testing.T) {
 		return &ipgeo.IPGeoData{}, nil
 	}
 	original := trace.Config{
-		TTLInterval:    1200,
-		IPGeoSource:    geoSource,
-		RDNS:           true,
-		AlwaysWaitRDNS: false,
-		PacketInterval: 25,
-		Timeout:        3,
-		MaxHops:        18,
+		TTLInterval:        1200,
+		IPGeoSource:        geoSource,
+		RefreshIPGeoSource: func() {},
+		RDNS:               true,
+		AlwaysWaitRDNS:     false,
+		PacketInterval:     25,
+		Timeout:            3,
+		MaxHops:            18,
 	}
 
 	normalized := normalizeMTRReportConfig(original, false)
@@ -455,6 +456,9 @@ func TestNormalizeMTRReportConfig_NonWideDisablesGeoAndKeepsRDNS(t *testing.T) {
 	if normalized.IPGeoSource != nil {
 		t.Fatal("non-wide report should disable IPGeoSource")
 	}
+	if normalized.RefreshIPGeoSource != nil {
+		t.Fatal("non-wide report should disable RefreshIPGeoSource")
+	}
 	if !normalized.RDNS {
 		t.Fatal("non-wide report should preserve RDNS=true")
 	}
@@ -464,7 +468,7 @@ func TestNormalizeMTRReportConfig_NonWideDisablesGeoAndKeepsRDNS(t *testing.T) {
 	if normalized.PacketInterval != original.PacketInterval || normalized.Timeout != original.Timeout || normalized.MaxHops != original.MaxHops {
 		t.Fatalf("unexpected mutation of other fields: %+v", normalized)
 	}
-	if original.IPGeoSource == nil || original.TTLInterval != 1200 || original.AlwaysWaitRDNS {
+	if original.IPGeoSource == nil || original.RefreshIPGeoSource == nil || original.TTLInterval != 1200 || original.AlwaysWaitRDNS {
 		t.Fatalf("original config was modified in place: %+v", original)
 	}
 }
@@ -497,12 +501,14 @@ func TestNormalizeMTRReportConfig_WidePreservesGeoSettings(t *testing.T) {
 	geoSource := func(_ string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
 		return &ipgeo.IPGeoData{}, nil
 	}
+	refreshCalls := 0
 	original := trace.Config{
-		TTLInterval:    1200,
-		IPGeoSource:    geoSource,
-		RDNS:           true,
-		AlwaysWaitRDNS: false,
-		PacketInterval: 25,
+		TTLInterval:        1200,
+		IPGeoSource:        geoSource,
+		RefreshIPGeoSource: func() { refreshCalls++ },
+		RDNS:               true,
+		AlwaysWaitRDNS:     false,
+		PacketInterval:     25,
 	}
 
 	normalized := normalizeMTRReportConfig(original, true)
@@ -513,13 +519,20 @@ func TestNormalizeMTRReportConfig_WidePreservesGeoSettings(t *testing.T) {
 	if normalized.IPGeoSource == nil {
 		t.Fatal("wide report should preserve IPGeoSource")
 	}
+	if normalized.RefreshIPGeoSource == nil {
+		t.Fatal("wide report should preserve RefreshIPGeoSource")
+	}
+	normalized.RefreshIPGeoSource()
+	if refreshCalls != 1 {
+		t.Fatalf("wide report refresh calls = %d, want 1", refreshCalls)
+	}
 	if !normalized.RDNS {
 		t.Fatal("wide report should preserve RDNS=true")
 	}
 	if normalized.AlwaysWaitRDNS != original.AlwaysWaitRDNS {
 		t.Fatalf("wide report should preserve AlwaysWaitRDNS, got %v want %v", normalized.AlwaysWaitRDNS, original.AlwaysWaitRDNS)
 	}
-	if original.IPGeoSource == nil || original.TTLInterval != 1200 {
+	if original.IPGeoSource == nil || original.RefreshIPGeoSource == nil || original.TTLInterval != 1200 {
 		t.Fatalf("original config was modified in place: %+v", original)
 	}
 }

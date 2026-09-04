@@ -1,15 +1,12 @@
 package dn42
 
 import (
-	"encoding/csv"
-	"fmt"
 	"net"
-	"os"
+	"net/netip"
 	"sort"
-
-	"github.com/spf13/viper"
 )
 
+// GeoFeedRow is the legacy GeoFeed representation kept for API compatibility.
 type GeoFeedRow struct {
 	IPNet   *net.IPNet
 	CIDR    string
@@ -20,86 +17,93 @@ type GeoFeedRow struct {
 	IPWhois string
 }
 
+// GetGeoFeed returns the longest-prefix GeoFeed match for ip.
 func GetGeoFeed(ip string) (GeoFeedRow, bool) {
-	rows, err := ReadGeoFeed()
+	addr, err := netip.ParseAddr(ip)
 	if err != nil {
-		// 无法加载 geofeed 数据，返回未找到
 		return GeoFeedRow{}, false
 	}
 
-	row, find := FindGeoFeedRow(ip, rows)
-	return row, find
-
+	index, _ := LoadGeoFeedIndex()
+	if index == nil {
+		return GeoFeedRow{}, false
+	}
+	record, found := index.Lookup(addr)
+	if !found {
+		return GeoFeedRow{}, false
+	}
+	return geoFeedRecordToRow(record), true
 }
 
+// ReadGeoFeed returns a detached legacy view of the current GeoFeed snapshot.
+// When a reload fails, it returns the last valid snapshot together with the
+// reload error.
 func ReadGeoFeed() ([]GeoFeedRow, error) {
-	path := viper.GetString("geoFeedPath")
-	if path == "" {
-		return nil, fmt.Errorf("geoFeedPath not configured")
-	}
-	f, err := os.Open(path)
-	if err != nil {
+	index, err := LoadGeoFeedIndex()
+	if index == nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	rows, err := r.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	// 将 CSV 中的每一行转换为 GeoFeedRow 类型，并保存到 rowsSlice 中
-	var rowsSlice []GeoFeedRow
-	for _, row := range rows {
-		cidr := row[0] // 假设第一列是 CIDR 字段
-		_, ipnet, err := net.ParseCIDR(cidr)
-		if err != nil {
-			// 如果解析 CIDR 失败，跳过这一行
-			continue
-		}
-		if len(row) == 4 {
-			rowsSlice = append(rowsSlice, GeoFeedRow{
-				IPNet:   ipnet,
-				CIDR:    cidr,
-				LtdCode: row[1],
-				ISO3166: row[2],
-				City:    row[3],
-			})
-		} else if len(row) >= 6 {
-			rowsSlice = append(rowsSlice, GeoFeedRow{
-				IPNet:   ipnet,
-				CIDR:    cidr,
-				LtdCode: row[1],
-				ISO3166: row[2],
-				City:    row[3],
-				ASN:     row[4],
-				IPWhois: row[5],
-			})
-		}
-
-	}
-	// 根据 CIDR 范围从小到大排序，方便后面查找
-	sort.Slice(rowsSlice, func(i, j int) bool {
-		return rowsSlice[i].IPNet.Mask.String() > rowsSlice[j].IPNet.Mask.String()
-	})
-
-	return rowsSlice, nil
+	return index.legacyRows(), err
 }
 
+// FindGeoFeedRow preserves the legacy first-match lookup contract.
 func FindGeoFeedRow(ipStr string, rows []GeoFeedRow) (GeoFeedRow, bool) {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
-		// 如果传入的 IP 无效，直接返回
 		return GeoFeedRow{}, false
 	}
 
-	// 遍历每个 CIDR 范围，找到第一个包含传入的 IP 的 CIDR
 	for _, row := range rows {
 		if row.IPNet.Contains(ip) {
 			return row, true
 		}
 	}
-
 	return GeoFeedRow{}, false
+}
+
+func (index *GeoFeedIndex) legacyRows() []GeoFeedRow {
+	if index == nil || len(index.records) == 0 {
+		return nil
+	}
+	rows := make([]GeoFeedRow, len(index.records))
+	for i, record := range index.records {
+		rows[i] = geoFeedRecordToRow(record)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].IPNet.Mask.String() > rows[j].IPNet.Mask.String()
+	})
+	return rows
+}
+
+func geoFeedRecordToRow(record GeoFeedRecord) GeoFeedRow {
+	ipNet := prefixToIPNet(record.Prefix)
+	if _, legacyIPNet, err := net.ParseCIDR(record.CIDR); err == nil {
+		ipNet = legacyIPNet
+	}
+	return GeoFeedRow{
+		IPNet:   ipNet,
+		CIDR:    record.CIDR,
+		LtdCode: record.LtdCode,
+		ISO3166: record.ISO3166,
+		City:    record.City,
+		ASN:     record.ASN,
+		IPWhois: record.IPWhois,
+	}
+}
+
+func prefixToIPNet(prefix netip.Prefix) *net.IPNet {
+	addr := prefix.Addr()
+	bits := prefix.Bits()
+	if addr.Is4() {
+		ip := addr.As4()
+		return &net.IPNet{
+			IP:   net.IPv4(ip[0], ip[1], ip[2], ip[3]).To4(),
+			Mask: net.CIDRMask(bits, 32),
+		}
+	}
+	ip := addr.As16()
+	return &net.IPNet{
+		IP:   append(net.IP(nil), ip[:]...),
+		Mask: net.CIDRMask(bits, 128),
+	}
 }

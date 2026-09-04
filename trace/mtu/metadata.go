@@ -49,8 +49,9 @@ func shouldFetchHopMetadata(cfg Config, hop Hop) bool {
 
 func startMTUPTRLookup(ctx context.Context, ipStr string) <-chan []string {
 	ch := make(chan []string, 1)
+	lookupAddr := mtuLookupAddr
 	go func() {
-		ptrs, err := mtuLookupAddr(ctx, ipStr)
+		ptrs, err := lookupAddr(ctx, ipStr)
 		if err != nil {
 			ch <- nil
 			return
@@ -78,9 +79,11 @@ func startMTUGeoLookup(cfg Config, ipStr string) <-chan mtuGeoLookupResult {
 	}
 	ch := make(chan mtuGeoLookupResult, 1)
 	go func() {
-		if geo, ok := ipgeo.Filter(ipStr); ok {
-			ch <- mtuGeoLookupResult{geo: normalizeMTUGeoData(geo)}
-			return
+		if !cfg.DN42 {
+			if geo, ok := ipgeo.Filter(ipStr); ok {
+				ch <- mtuGeoLookupResult{geo: normalizeMTUGeoData(geo)}
+				return
+			}
 		}
 
 		geo, err := cfg.IPGeoSource(ipStr, cfg.Timeout, cfg.Lang, false)

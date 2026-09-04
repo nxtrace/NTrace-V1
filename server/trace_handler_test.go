@@ -7,11 +7,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 
 	"github.com/nxtrace/NTrace-core/internal/service"
 	"github.com/nxtrace/NTrace-core/ipgeo"
@@ -79,6 +84,38 @@ func TestResolveTraceDataProviderCanonicalizesEnvironmentOverride(t *testing.T) 
 	}
 	if !needsV3 {
 		t.Fatal("resolveTraceDataProvider() needsV3 = false, want true")
+	}
+}
+
+func TestResolveTraceDataProviderAppliesDN42EnvironmentOverride(t *testing.T) {
+	isolateServerNextTraceAPIV4Token(t, "")
+	oldEnvDataProvider := util.EnvDataProvider
+	oldInitDN42Config := initDN42Config
+	t.Cleanup(func() {
+		util.EnvDataProvider = oldEnvDataProvider
+		initDN42Config = oldInitDN42Config
+	})
+	var initCalls atomic.Int32
+	initDN42Config = sync.OnceFunc(func() { initCalls.Add(1) })
+	util.EnvDataProvider = "dn42"
+
+	var invalidResults atomic.Int32
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			req := traceRequest{DataProvider: ipgeo.NextTraceAPIProvider}
+			got, needsV3 := resolveTraceDataProvider(&req)
+			if got != "DN42" || needsV3 || !req.DN42 || !req.DisableMaptrace {
+				invalidResults.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if got := initCalls.Load(); got != 1 {
+		t.Fatalf("DN42 config initialization calls = %d, want 1", got)
+	}
+	if got := invalidResults.Load(); got != 0 {
+		t.Fatalf("invalid concurrent DN42 resolutions = %d, want 0", got)
 	}
 }
 
@@ -204,6 +241,57 @@ func TestBuildTraceConfig_PropagatesSessionScopedFields(t *testing.T) {
 	}
 	if cfg.TOS != 0 {
 		t.Fatalf("buildTraceConfig TOS = %d, want 0", cfg.TOS)
+	}
+}
+
+func TestBuildTraceConfig_DN42CarriesRefreshableSession(t *testing.T) {
+	cfg, err := buildTraceConfig(traceRequest{}, trace.ICMPTrace, net.ParseIP("10.0.0.1"), "DN42", 0)
+	if err != nil {
+		t.Fatalf("buildTraceConfig returned error: %v", err)
+	}
+	if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.RefreshIPGeoSource == nil {
+		t.Fatalf("DN42 config = %+v", cfg)
+	}
+}
+
+func TestBuildTraceConfig_DN42PinsRequestAndWebSocketSession(t *testing.T) {
+	dir := t.TempDir()
+	geoFeedPath := filepath.Join(dir, "geofeed.csv")
+	ptrPath := filepath.Join(dir, "ptr.csv")
+	if err := os.WriteFile(geoFeedPath, []byte("10.0.0.0/8,us,US,First\n"), 0o600); err != nil {
+		t.Fatalf("write first geofeed: %v", err)
+	}
+	if err := os.WriteFile(ptrPath, nil, 0o600); err != nil {
+		t.Fatalf("write ptr: %v", err)
+	}
+	previousGeoFeedPath := viper.Get("geoFeedPath")
+	previousPtrPath := viper.Get("ptrPath")
+	viper.Set("geoFeedPath", geoFeedPath)
+	viper.Set("ptrPath", ptrPath)
+	t.Cleanup(func() {
+		viper.Set("geoFeedPath", previousGeoFeedPath)
+		viper.Set("ptrPath", previousPtrPath)
+	})
+
+	first, err := buildTraceConfig(traceRequest{DN42: true}, trace.ICMPTrace, net.ParseIP("10.0.0.1"), "DN42", 0)
+	if err != nil {
+		t.Fatalf("first buildTraceConfig returned error: %v", err)
+	}
+	if err := os.WriteFile(geoFeedPath, []byte("10.0.0.0/8,us,US,Second City\n"), 0o600); err != nil {
+		t.Fatalf("write second geofeed: %v", err)
+	}
+	second, err := buildTraceConfig(traceRequest{DN42: true}, trace.ICMPTrace, net.ParseIP("10.0.0.1"), "DN42", 0)
+	if err != nil {
+		t.Fatalf("second buildTraceConfig returned error: %v", err)
+	}
+
+	firstGeo, err := first.IPGeoSource("10.0.0.1", time.Second, "en", false)
+	if err != nil || firstGeo.City != "First" {
+		t.Fatalf("first pinned source = (%+v, %v), want First", firstGeo, err)
+	}
+	secondGeo, err := second.IPGeoSource("10.0.0.1", time.Second, "en", false)
+	if err != nil || secondGeo.City != "Second City" {
+		t.Fatalf("second source = (%+v, %v), want Second City", secondGeo, err)
 	}
 }
 

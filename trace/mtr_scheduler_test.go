@@ -20,6 +20,7 @@ import (
 type mockTTLProber struct {
 	mu       sync.Mutex
 	probeFn  func(ctx context.Context, ttl int) (mtrProbeResult, error)
+	resetFn  func() error
 	resetCnt int32
 	closeCnt int32
 	probeCnt int32
@@ -39,6 +40,9 @@ func (m *mockTTLProber) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, 
 
 func (m *mockTTLProber) Reset() error {
 	atomic.AddInt32(&m.resetCnt, 1)
+	if m.resetFn != nil {
+		return m.resetFn()
+	}
 	return nil
 }
 
@@ -1586,6 +1590,121 @@ func TestScheduler_ResetCancelsMetadataGeneration(t *testing.T) {
 	if len(rt.metadataGeoInFlight) != 0 || len(rt.metadataHostInFlight) != 0 {
 		t.Fatalf("metadata in-flight after reset: geo=%d host=%d, want 0",
 			len(rt.metadataGeoInFlight), len(rt.metadataHostInFlight))
+	}
+}
+
+func TestScheduler_ResetRefreshesSourceAfterInvalidatingOldWork(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	var proberReset atomic.Bool
+	prober := &mockTTLProber{
+		resetFn: func() error {
+			proberReset.Store(true)
+			return nil
+		},
+	}
+	var sourceGeneration atomic.Int32
+	sourceGeneration.Store(1)
+	var sourceCalls atomic.Int32
+	var refreshCalls atomic.Int32
+	resetRequested := true
+	var rt *mtrSchedulerRuntime
+	var oldMetadataCtx context.Context
+
+	rt, err := newMTRSchedulerRuntime(context.Background(), prober, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:         1,
+		MaxHops:          1,
+		HopInterval:      time.Millisecond,
+		ParallelRequests: 1,
+		ProgressThrottle: time.Millisecond,
+		FillGeo:          true,
+		IsResetRequested: func() bool {
+			requested := resetRequested
+			resetRequested = false
+			return requested
+		},
+		BaseConfig: Config{
+			DN42: true,
+			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+				sourceCalls.Add(1)
+				if sourceGeneration.Load() == 1 {
+					return &ipgeo.IPGeoData{Asnumber: "OLD"}, nil
+				}
+				return &ipgeo.IPGeoData{Asnumber: "NEW"}, nil
+			},
+			RefreshIPGeoSource: func() {
+				refreshCalls.Add(1)
+				if oldMetadataCtx.Err() == nil {
+					t.Error("source refreshed before canceling the old metadata context")
+				}
+				if rt.metadataCtx != oldMetadataCtx {
+					t.Error("new metadata context published before source refresh completed")
+				}
+				if proberReset.Load() {
+					t.Error("prober reset before source refresh")
+				}
+				sourceGeneration.Store(2)
+			},
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("newMTRSchedulerRuntime error: %v", err)
+	}
+	oldMetadataCtx = rt.metadataCtx
+	rt.inFlight = 1
+	rt.states[1].inFlightCount = 1
+	rt.handleReset()
+
+	if oldMetadataCtx.Err() == nil {
+		t.Fatal("reset did not cancel the previous metadata generation")
+	}
+	if rt.metadataCtx == oldMetadataCtx || rt.metadataCtx.Err() != nil {
+		t.Fatal("reset did not publish a fresh metadata context after cleanup")
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("source refresh calls = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&prober.resetCnt); got != 1 {
+		t.Fatalf("prober reset calls = %d, want 1", got)
+	}
+
+	rt.processResult(mtrCompletedProbe{
+		ttl: 1,
+		gen: 0,
+		result: mtrProbeResult{
+			TTL:     1,
+			Success: true,
+			Addr:    &net.IPAddr{IP: net.ParseIP("172.20.0.4")},
+			RTT:     time.Millisecond,
+			Geo:     &ipgeo.IPGeoData{Asnumber: "STALE"},
+		},
+	})
+	if stats := rt.agg.Snapshot(); len(stats) != 0 {
+		t.Fatalf("old-generation probe survived reset: %+v", stats)
+	}
+	if got := sourceCalls.Load(); got != 0 {
+		t.Fatalf("old-generation probe triggered %d source calls, want 0", got)
+	}
+
+	rt.inFlight = 1
+	rt.states[1].inFlightCount = 1
+	rt.processResult(mtrCompletedProbe{
+		ttl: 1,
+		gen: rt.generation,
+		result: mtrProbeResult{
+			TTL:     1,
+			Success: true,
+			Addr:    &net.IPAddr{IP: net.ParseIP("172.20.0.4")},
+			RTT:     time.Millisecond,
+		},
+	})
+	stats := rt.agg.Snapshot()
+	if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "NEW" {
+		t.Fatalf("post-reset stats = %+v, want refreshed NEW metadata", stats)
+	}
+	if got := sourceCalls.Load(); got != 1 {
+		t.Fatalf("post-reset source calls = %d, want 1", got)
 	}
 }
 

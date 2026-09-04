@@ -25,7 +25,6 @@ func TestGetSourceMappings(t *testing.T) {
 		input string
 		want  Source
 	}{
-		{name: "dn42", input: "DN42", want: DN42},
 		{name: "nexttrace api", input: NextTraceAPIProvider, want: NextTraceAPIV3GeoIP},
 		{name: "nexttrace api mixed case", input: "nExTtRaCe-ApI", want: NextTraceAPIV3GeoIP},
 		{name: "nexttrace api surrounding whitespace", input: "  nexttrace-api\n", want: NextTraceAPIV3GeoIP},
@@ -51,6 +50,13 @@ func TestGetSourceMappings(t *testing.T) {
 			assert.Equal(t, reflect.ValueOf(tc.want).Pointer(), reflect.ValueOf(got).Pointer())
 		})
 	}
+}
+
+func TestGetSourceSessionNonRefreshableProvider(t *testing.T) {
+	session := GetSourceSession("disable-geoip")
+	require.NotNil(t, session.Source)
+	assert.Nil(t, session.Refresh)
+	assert.Equal(t, reflect.ValueOf(disableGeoIP).Pointer(), reflect.ValueOf(session.Source).Pointer())
 }
 
 func TestCanonicalizeNextTraceAPIProvider(t *testing.T) {

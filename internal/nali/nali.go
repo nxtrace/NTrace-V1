@@ -29,6 +29,7 @@ type Config struct {
 	Timeout time.Duration
 	Lang    string
 	Family  Family
+	DN42    bool
 }
 
 type Span struct {
@@ -207,10 +208,13 @@ func (a *Annotator) lookupLabel(ctx context.Context, ip string) string {
 
 	label := ""
 	shouldCache := false
-	if geo, ok := ipgeo.Filter(ip); ok {
-		label = FormatGeo(geo, a.cfg.Lang)
-		shouldCache = true
-	} else if a.cfg.Source != nil && ctx.Err() == nil {
+	if !a.cfg.DN42 {
+		if geo, ok := ipgeo.Filter(ip); ok {
+			label = FormatGeo(geo, a.cfg.Lang)
+			shouldCache = true
+		}
+	}
+	if !shouldCache && a.cfg.Source != nil && ctx.Err() == nil {
 		if geo, err := a.cfg.Source(ip, a.cfg.Timeout, a.cfg.Lang, false); err == nil {
 			label = FormatGeo(geo, a.cfg.Lang)
 			shouldCache = true

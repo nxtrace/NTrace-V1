@@ -85,11 +85,36 @@ func TestBuildMTUTraceConfigCarriesResolvedSourceDevice(t *testing.T) {
 		300,
 		true,
 		false,
+		false,
 		ipgeo.IPInfo,
 		"en",
 	)
 	if conf.SourceDevice != "Ethernet0" {
 		t.Fatalf("buildMTUTraceConfig().SourceDevice = %q, want Ethernet0", conf.SourceDevice)
+	}
+}
+
+func TestBuildMTUTraceConfigCarriesDN42Mode(t *testing.T) {
+	conf := buildMTUTraceConfig(
+		"10.0.0.1",
+		net.ParseIP("10.0.0.1"),
+		nil,
+		"",
+		0,
+		33494,
+		1,
+		30,
+		3,
+		1000,
+		300,
+		false,
+		false,
+		true,
+		ipgeo.DN42,
+		"en",
+	)
+	if !conf.DN42 || conf.IPGeoSource == nil {
+		t.Fatalf("DN42 MTU config = %+v", conf)
 	}
 }
 

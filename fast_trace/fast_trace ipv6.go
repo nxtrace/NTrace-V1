@@ -9,7 +9,6 @@ import (
 
 	"github.com/fatih/color"
 
-	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
 )
 
@@ -52,7 +51,7 @@ func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
 		AlwaysWaitRDNS:   f.ParamsFastTrace.AlwaysWaitRDNS,
 		PacketInterval:   100,
 		TTLInterval:      500,
-		IPGeoSource:      ipgeo.GetSource(ipgeo.NextTraceAPIProvider),
+		IPGeoSource:      fastTraceGeoSource(f.ParamsFastTrace),
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
 		SourceDevice:     f.ParamsFastTrace.SrcDev,
@@ -60,6 +59,7 @@ func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
 		RandomPacketSize: packetSizeSpec.Random,
 		TOS:              f.ParamsFastTrace.TOS,
 		Lang:             f.ParamsFastTrace.Lang,
+		DN42:             fastTraceDN42(f.ParamsFastTrace),
 	}
 	conf, err = normalizeFastTraceConfig(f.TracerouteMethod, conf)
 	if shouldStopFastTrace(err) {
@@ -148,6 +148,7 @@ func (f *FastTracer) testFastGZ_v6() {
 }
 
 func FastTestv6(traceMode trace.Method, paramsFastTrace ParamsFastTrace) {
+	paramsFastTrace = pinFastTraceGeoSource(paramsFastTrace)
 	choice, ok := readFastTestv6Choice(paramsFastTrace.Context)
 	if !ok {
 		return
