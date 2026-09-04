@@ -52,7 +52,7 @@ func BenchmarkNewGeoHTTPClient(b *testing.B) {
 		benchmarkGeoHTTPBytesSink = total
 	})
 
-	b.Run("Concurrent2", func(b *testing.B) {
+	b.Run(fmt.Sprintf("Concurrent%d", benchmarkGeoHTTPConcurrency), func(b *testing.B) {
 		client := NewGeoHTTPClient(5 * time.Second)
 		b.Cleanup(client.CloseIdleConnections)
 		results := make([]int64, benchmarkGeoHTTPConcurrency)
