@@ -58,6 +58,11 @@ type supervisorTestWrite struct {
 	data        string
 }
 
+type supervisorTestRequestResult struct {
+	response string
+	err      error
+}
+
 type supervisorTestWire struct {
 	reads      chan supervisorTestRead
 	writes     chan supervisorTestWrite
@@ -697,14 +702,10 @@ func TestManagedRequestMessageIgnoresQueuedPreviousGenerationResponse(t *testing
 			t.Fatalf("reconnect dial calls = %d, want 1", got)
 		}
 
-		type requestResult struct {
-			response string
-			err      error
-		}
-		done := make(chan requestResult, 1)
+		done := make(chan supervisorTestRequestResult, 1)
 		go func() {
 			response, err := conn.RequestMessage(context.Background(), request)
-			done <- requestResult{response: response, err: err}
+			done <- supervisorTestRequestResult{response: response, err: err}
 		}()
 		synctest.Wait()
 		requireSupervisorWrite(t, secondWire, websocket.TextMessage, request)
@@ -754,14 +755,10 @@ func TestManagedRequestMessageDoesNotConsumeLegacySameIPResponse(t *testing.T) {
 		synctest.Wait()
 		requireSupervisorWrite(t, wire, websocket.TextMessage, request)
 
-		type requestResult struct {
-			response string
-			err      error
-		}
-		done := make(chan requestResult, 1)
+		done := make(chan supervisorTestRequestResult, 1)
 		go func() {
 			response, err := conn.RequestMessage(context.Background(), request)
-			done <- requestResult{response: response, err: err}
+			done <- supervisorTestRequestResult{response: response, err: err}
 		}()
 		synctest.Wait()
 		requireSupervisorWrite(t, wire, websocket.TextMessage, request)
@@ -800,16 +797,10 @@ func TestManagedRequestMessageGenerationFailureReturnsBoundAPIError(t *testing.T
 		_ = supervisorDialCallCount(dialer)
 
 		const request = "203.0.113.41"
-		done := make(chan struct {
-			response string
-			err      error
-		}, 1)
+		done := make(chan supervisorTestRequestResult, 1)
 		go func() {
 			response, err := conn.RequestMessage(context.Background(), request)
-			done <- struct {
-				response string
-				err      error
-			}{response: response, err: err}
+			done <- supervisorTestRequestResult{response: response, err: err}
 		}()
 		synctest.Wait()
 		requireSupervisorWrite(t, wire, websocket.TextMessage, request)
@@ -850,16 +841,10 @@ func TestManagedRequestMessageCancellationRotatesGeneration(t *testing.T) {
 		requireSupervisorWrite(t, firstWire, websocket.TextMessage, request)
 
 		const peerRequest = "203.0.113.43"
-		peerDone := make(chan struct {
-			response string
-			err      error
-		}, 1)
+		peerDone := make(chan supervisorTestRequestResult, 1)
 		go func() {
 			response, err := conn.RequestMessage(context.Background(), peerRequest)
-			peerDone <- struct {
-				response string
-				err      error
-			}{response: response, err: err}
+			peerDone <- supervisorTestRequestResult{response: response, err: err}
 		}()
 		synctest.Wait()
 		requireSupervisorWrite(t, firstWire, websocket.TextMessage, peerRequest)
@@ -890,14 +875,10 @@ func TestManagedRequestMessageCancellationRotatesGeneration(t *testing.T) {
 			t.Fatalf("reconnect dial calls = %d, want 1", got)
 		}
 
-		type requestResult struct {
-			response string
-			err      error
-		}
-		secondDone := make(chan requestResult, 1)
+		secondDone := make(chan supervisorTestRequestResult, 1)
 		go func() {
 			response, err := conn.RequestMessage(context.Background(), request)
-			secondDone <- requestResult{response: response, err: err}
+			secondDone <- supervisorTestRequestResult{response: response, err: err}
 		}()
 		synctest.Wait()
 		requireSupervisorWrite(t, secondWire, websocket.TextMessage, request)
