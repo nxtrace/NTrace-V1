@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -413,7 +412,7 @@ func TestAttachMTRHistoryIfTTY(t *testing.T) {
 		t.Fatalf("history did not collect TTY probe event: %+v", snap)
 	}
 
-	atomic.StoreInt32(&ttyUI.restartReq, 1)
+	ttyUI.restartReq.Store(true)
 	if ttyOpts.IsResetRequested == nil || !ttyOpts.IsResetRequested() {
 		t.Fatal("wrapped reset callback should consume reset request")
 	}
@@ -628,7 +627,7 @@ func TestMTRUI_ConsumeRestartRequest(t *testing.T) {
 	}
 
 	// 模拟按下 r 键
-	atomic.StoreInt32(&ui.restartReq, 1)
+	ui.restartReq.Store(true)
 
 	// 第一次消费应返回 true
 	if !ui.ConsumeRestartRequest() {
@@ -694,7 +693,7 @@ func TestMTRUI_DisplayModeNotResetByRestart(t *testing.T) {
 	ui.CycleDisplayMode() // 1 → 2
 
 	// 模拟重置请求
-	atomic.StoreInt32(&ui.restartReq, 1)
+	ui.restartReq.Store(true)
 	ui.ConsumeRestartRequest()
 
 	// 显示模式不应被重置
@@ -841,7 +840,7 @@ func TestMTRUI_NameModeNotResetByRestart(t *testing.T) {
 	}
 
 	// 模拟重置请求
-	atomic.StoreInt32(&ui.restartReq, 1)
+	ui.restartReq.Store(true)
 	ui.ConsumeRestartRequest()
 
 	// nameMode 不应被重置

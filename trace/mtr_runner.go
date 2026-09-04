@@ -272,7 +272,7 @@ type mtrICMPEngine struct {
 	ipVer  int
 
 	// 单调递增序列号，避免跨轮 seq 冲突
-	seqCounter uint32
+	seqCounter atomic.Uint32
 
 	// per-round 探针/响应匹配
 	mu       sync.Mutex
@@ -281,12 +281,12 @@ type mtrICMPEngine struct {
 	notifyCh chan struct{}
 
 	// 当前轮次 ID，用于丢弃过期响应
-	roundID uint32
+	roundID atomic.Uint32
 
 	// 已知目的地 TTL（-1 = 未知），跨轮保留以减少无效探测
-	knownFinalTTL int32
+	knownFinalTTL atomic.Int32
 	// 当前轮次内发现的目的地 TTL（-1 = 本轮未发现）
-	roundFinalTTL int32
+	roundFinalTTL atomic.Int32
 
 	// 流式预览状态（peekPartialResult 使用，受 mu 保护）
 	curTtlSeq       map[int]int
@@ -341,13 +341,15 @@ func newMTRICMPEngine(config Config) (*mtrICMPEngine, error) {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	echoID := (r.Intn(256) << 8) | (os.Getpid() & 0xFF)
 
-	return &mtrICMPEngine{
-		config:        config,
-		ipVer:         ipVer,
-		echoID:        echoID,
-		srcIP:         srcIP,
-		knownFinalTTL: -1,
-	}, nil
+	engine := &mtrICMPEngine{
+		config: config,
+		ipVer:  ipVer,
+		echoID: echoID,
+		srcIP:  srcIP,
+	}
+	engine.knownFinalTTL.Store(-1)
+	engine.roundFinalTTL.Store(-1)
+	return engine, nil
 }
 
 // start 创建持久 ICMP 套接字及监听协程。ctx 生命周期控制整个引擎。
@@ -386,7 +388,7 @@ func (e *mtrICMPEngine) close() {
 
 // resetFinalTTL 清除已知目的地 TTL 缓存（r 键重置统计时调用）。
 func (e *mtrICMPEngine) resetFinalTTL() {
-	atomic.StoreInt32(&e.knownFinalTTL, -1)
+	e.knownFinalTTL.Store(-1)
 }
 
 // peekPartialResult 返回当前轮次已收到的部分探测结果（用于流式预览）。
@@ -402,7 +404,7 @@ func (e *mtrICMPEngine) peekPartialResult() *Result {
 	}
 
 	// 若已检测到目的地，缩小预览范围
-	if rf := atomic.LoadInt32(&e.roundFinalTTL); rf > 0 && int(rf) < effectiveMax {
+	if rf := e.roundFinalTTL.Load(); rf > 0 && int(rf) < effectiveMax {
 		effectiveMax = int(rf)
 	}
 
@@ -452,7 +454,7 @@ func (e *mtrICMPEngine) rotateEngine(ctx context.Context) error {
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	e.echoID = (r.Intn(256) << 8) | (os.Getpid() & 0xFF)
-	atomic.StoreUint32(&e.seqCounter, 0)
+	e.seqCounter.Store(0)
 
 	e.spec = internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, e.echoID, e.srcIP, e.config.DstIP)
 	applyICMPSourceDevice(e.spec, e.config.OSType, e.config.SourceDevice)
@@ -508,7 +510,7 @@ func (e *mtrICMPEngine) onICMP(msg internal.ReceivedMessage, finish time.Time, s
 }
 
 func (e *mtrICMPEngine) shouldDiscardProbeReplyLocked(seq int, start mtrProbeMeta, finish time.Time) bool {
-	if start.roundID != atomic.LoadUint32(&e.roundID) {
+	if start.roundID != e.roundID.Load() {
 		e.discardProbeLocked(seq)
 		return true
 	}
@@ -577,9 +579,9 @@ func (e *mtrICMPEngine) updateRoundFinalTTL(ttl int32) {
 	if ttl < 0 {
 		return
 	}
-	curFinal := atomic.LoadInt32(&e.roundFinalTTL)
+	curFinal := e.roundFinalTTL.Load()
 	if curFinal < 0 || ttl < curFinal {
-		atomic.StoreInt32(&e.roundFinalTTL, ttl)
+		e.roundFinalTTL.Store(ttl)
 	}
 }
 
@@ -666,8 +668,8 @@ func (e *mtrICMPEngine) prepareProbeRound(ctx context.Context) mtrProbeRoundStat
 	if beginHop <= 0 {
 		beginHop = 1
 	}
-	curRound := atomic.AddUint32(&e.roundID, 1)
-	atomic.StoreInt32(&e.roundFinalTTL, -1)
+	curRound := e.roundID.Add(1)
+	e.roundFinalTTL.Store(-1)
 	e.resetProbeRoundMaps()
 	e.drainNotifySignal()
 
@@ -705,14 +707,14 @@ func (e *mtrICMPEngine) drainNotifySignal() {
 }
 
 func (e *mtrICMPEngine) rotateProbeEngineIfNeeded(ctx context.Context, probeCount int) error {
-	if !seqWillWrap(atomic.LoadUint32(&e.seqCounter), probeCount) {
+	if !seqWillWrap(e.seqCounter.Load(), probeCount) {
 		return nil
 	}
 	return e.rotateEngine(ctx)
 }
 
 func (e *mtrICMPEngine) effectiveProbeRoundMax(maxHops int) int {
-	if kf := atomic.LoadInt32(&e.knownFinalTTL); kf > 0 && int(kf) < maxHops {
+	if kf := e.knownFinalTTL.Load(); kf > 0 && int(kf) < maxHops {
 		return int(kf)
 	}
 	return maxHops
@@ -754,7 +756,7 @@ func (e *mtrICMPEngine) sendProbeSweep(ctx context.Context, round mtrProbeRoundS
 }
 
 func (e *mtrICMPEngine) sendProbeForTTL(ctx context.Context, ttl int, roundID uint32) (bool, error) {
-	seq := int(atomic.AddUint32(&e.seqCounter, 1) & 0xFFFF)
+	seq := int(e.seqCounter.Add(1) & 0xFFFF)
 
 	// Pre-register the seq so onICMP can match it even for very short RTT replies.
 	preStart := time.Now()
@@ -830,16 +832,16 @@ func (e *mtrICMPEngine) finalizeProbeRound(effectiveMax int) int {
 }
 
 func (e *mtrICMPEngine) updateKnownFinalTTLFromRound() {
-	if rf := atomic.LoadInt32(&e.roundFinalTTL); rf > 0 {
-		kf := atomic.LoadInt32(&e.knownFinalTTL)
+	if rf := e.roundFinalTTL.Load(); rf > 0 {
+		kf := e.knownFinalTTL.Load()
 		if kf < 0 || rf < kf {
-			atomic.StoreInt32(&e.knownFinalTTL, rf)
+			e.knownFinalTTL.Store(rf)
 		}
 	}
 }
 
 func (e *mtrICMPEngine) roundFinalMax(effectiveMax int) int {
-	if rf := atomic.LoadInt32(&e.roundFinalTTL); rf > 0 && int(rf) < effectiveMax {
+	if rf := e.roundFinalTTL.Load(); rf > 0 && int(rf) < effectiveMax {
 		return int(rf)
 	}
 	return effectiveMax
@@ -916,16 +918,16 @@ func (p *mtrFallbackProber) close() {}
 func (e *mtrICMPEngine) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, error) {
 	// Serialize seq allocation + rotation check across concurrent ProbeTTL calls.
 	e.sendMu.Lock()
-	if seqWillWrap(atomic.LoadUint32(&e.seqCounter), 1) {
+	if seqWillWrap(e.seqCounter.Load(), 1) {
 		if err := e.rotateEngine(ctx); err != nil {
 			e.sendMu.Unlock()
 			return mtrProbeResult{TTL: ttl}, fmt.Errorf("echoID rotation: %w", err)
 		}
 	}
-	seq := int(atomic.AddUint32(&e.seqCounter, 1) & 0xFFFF)
+	seq := int(e.seqCounter.Add(1) & 0xFFFF)
 	e.sendMu.Unlock()
 
-	curRound := atomic.LoadUint32(&e.roundID)
+	curRound := e.roundID.Load()
 	done := make(chan struct{})
 
 	// Pre-register before sending so onICMP can match even very short RTT replies.
@@ -1006,7 +1008,7 @@ func (e *mtrICMPEngine) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, 
 // knownFinalTTL. In-flight ProbeTTL calls get notified and return immediately.
 func (e *mtrICMPEngine) Reset() error {
 	e.resetFinalTTL()
-	atomic.AddUint32(&e.roundID, 1)
+	e.roundID.Add(1)
 
 	e.mu.Lock()
 	for seq, ch := range e.probeNotify {
