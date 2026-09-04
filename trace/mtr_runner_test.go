@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -647,6 +648,19 @@ func TestSeqWillWrap_NegativeProbes(t *testing.T) {
 	// beginHop > maxHops → probeCount 为负，不应回卷
 	if seqWillWrap(0xFFFF, -5) {
 		t.Fatal("negative probeCount should never trigger wraparound")
+	}
+}
+
+func TestNewMTREchoIDPreservesProcessByte(t *testing.T) {
+	wantLow := os.Getpid() & 0xFF
+	for range 1000 {
+		got := newMTREchoID()
+		if got < 0 || got > 0xFFFF {
+			t.Fatalf("newMTREchoID() = %d, want uint16 range", got)
+		}
+		if got&0xFF != wantLow {
+			t.Fatalf("newMTREchoID() low byte = %d, want process byte %d", got&0xFF, wantLow)
+		}
 	}
 }
 

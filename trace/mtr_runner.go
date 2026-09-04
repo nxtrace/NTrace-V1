@@ -3,7 +3,7 @@ package trace
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 	"sync"
@@ -338,18 +338,19 @@ func newMTRICMPEngine(config Config) (*mtrICMPEngine, error) {
 		return nil, fmt.Errorf("cannot determine local IP for MTR ICMP")
 	}
 
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	echoID := (r.Intn(256) << 8) | (os.Getpid() & 0xFF)
-
 	engine := &mtrICMPEngine{
 		config: config,
 		ipVer:  ipVer,
-		echoID: echoID,
+		echoID: newMTREchoID(),
 		srcIP:  srcIP,
 	}
 	engine.knownFinalTTL.Store(-1)
 	engine.roundFinalTTL.Store(-1)
 	return engine, nil
+}
+
+func newMTREchoID() int {
+	return (rand.IntN(256) << 8) | (os.Getpid() & 0xFF)
 }
 
 // start 创建持久 ICMP 套接字及监听协程。ctx 生命周期控制整个引擎。
@@ -452,8 +453,7 @@ func seqWillWrap(seqCounter uint32, probeCount int) bool {
 func (e *mtrICMPEngine) rotateEngine(ctx context.Context) error {
 	e.spec.Close()
 
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	e.echoID = (r.Intn(256) << 8) | (os.Getpid() & 0xFF)
+	e.echoID = newMTREchoID()
 	e.seqCounter.Store(0)
 
 	e.spec = internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, e.echoID, e.srcIP, e.config.DstIP)
