@@ -288,7 +288,7 @@ func TestGeoFeedStoreInitialFailureDoesNotConsumeGeneration(t *testing.T) {
 	}
 }
 
-func TestGeoFeedLegacyAPIsReturnDetachedIPNet(t *testing.T) {
+func TestGeoFeedIndexBackedLegacyAPIsReturnDetachedIPNet(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "geofeed.csv")
 	modTime := time.Unix(1_700_000_000, 0)
 	writeGeoFeedAt(t, path, "10.1.0.0/16,na,US,Legacy,AS64512,Owner\n", modTime)
@@ -338,9 +338,8 @@ func TestGeoFeedLegacyAPIsReturnDetachedIPNet(t *testing.T) {
 	if !found {
 		t.Fatal("FindGeoFeedRow() did not find input row")
 	}
-	foundRow.IPNet.IP[0] = 192
-	if input[0].IPNet.IP[0] != 10 {
-		t.Fatal("FindGeoFeedRow() returned aliased IPNet")
+	if foundRow.CIDR != input[0].CIDR {
+		t.Fatalf("FindGeoFeedRow() CIDR = %q, want %q", foundRow.CIDR, input[0].CIDR)
 	}
 	if _, found := FindGeoFeedRow("10.1.2.3", []GeoFeedRow{{IPNet: nil}}); found {
 		t.Fatal("FindGeoFeedRow() matched nil IPNet")

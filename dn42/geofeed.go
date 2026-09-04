@@ -55,7 +55,7 @@ func FindGeoFeedRow(ipStr string, rows []GeoFeedRow) (GeoFeedRow, bool) {
 
 	for _, row := range rows {
 		if row.IPNet != nil && row.IPNet.Contains(ip) {
-			return cloneGeoFeedRow(row), true
+			return row, true
 		}
 	}
 	return GeoFeedRow{}, false
@@ -106,15 +106,4 @@ func prefixToIPNet(prefix netip.Prefix) *net.IPNet {
 		IP:   append(net.IP(nil), ip[:]...),
 		Mask: net.CIDRMask(bits, 128),
 	}
-}
-
-func cloneGeoFeedRow(row GeoFeedRow) GeoFeedRow {
-	if row.IPNet == nil {
-		return row
-	}
-	row.IPNet = &net.IPNet{
-		IP:   append(net.IP(nil), row.IPNet.IP...),
-		Mask: append(net.IPMask(nil), row.IPNet.Mask...),
-	}
-	return row
 }
