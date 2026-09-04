@@ -70,6 +70,7 @@ var (
 	prepareNextTraceAPIV4FastIPFn    = ipgeo.PrepareNextTraceAPIV4FastIP
 	tracerouteWithContextFn          = trace.TracerouteWithContext
 	lookupIPGeoFn                    = trace.LookupIPGeo
+	lookupIPGeoWithSessionFn         = trace.LookupIPGeoWithSession
 	runMTRFn                         = trace.RunMTR
 	runMTRRawFn                      = trace.RunMTRRaw
 	runMTUTraceFn                    = mtutrace.Run
@@ -291,11 +292,13 @@ func (s *Service) AnnotateIPs(ctx context.Context, req AnnotateIPsRequest) (Anno
 	timeout := positiveOrDefault(req.TimeoutMs, defaultTimeoutMs)
 	provider, needsNextTraceAPIV3 := resolveStandaloneDataProvider(req.DataProvider)
 	return withServiceRuntime(ctx, runtimeOptions{NeedsNextTraceAPIV3: needsNextTraceAPIV3}, func() (AnnotateIPsResponse, error) {
+		session := ipgeo.GetSourceSession(provider)
 		annotator := nali.New(nali.Config{
-			Source:  ipgeo.GetSource(provider),
+			Source:  session.Source,
 			Timeout: time.Duration(timeout) * time.Millisecond,
 			Lang:    normalizeLanguage(req.Language),
 			Family:  family,
+			DN42:    session.Refresh != nil,
 		})
 		return AnnotateIPsResponse{
 			Text: annotator.AnnotateLine(ctx, req.Text),
@@ -313,7 +316,14 @@ func (s *Service) GeoLookup(ctx context.Context, req GeoLookupRequest) (GeoLooku
 	}
 	provider, needsNextTraceAPIV3 := resolveStandaloneDataProvider(req.DataProvider)
 	return withServiceRuntime(ctx, runtimeOptions{NeedsNextTraceAPIV3: needsNextTraceAPIV3}, func() (GeoLookupResponse, error) {
-		geo, err := lookupIPGeoFn(ctx, ipgeo.GetSource(provider), normalizeLanguage(req.Language), false, defaultQueries, query)
+		session := ipgeo.GetSourceSession(provider)
+		var geo *ipgeo.IPGeoData
+		var err error
+		if session.Refresh != nil {
+			geo, err = lookupIPGeoWithSessionFn(ctx, session, normalizeLanguage(req.Language), false, defaultQueries, query)
+		} else {
+			geo, err = lookupIPGeoFn(ctx, session.Source, normalizeLanguage(req.Language), false, defaultQueries, query)
+		}
 		if err != nil {
 			return GeoLookupResponse{}, err
 		}
@@ -406,6 +416,7 @@ func (s *Service) buildMTUConfig(ctx context.Context, req MTUTraceRequest) (mtut
 		port = 33494
 	}
 	provider, _ := resolveMTUDataProvider(req.DataProvider)
+	session := ipgeo.GetSourceSessionWithGeoDNS(provider, req.DotServer)
 	return mtutrace.Config{
 		Target:         target,
 		DstIP:          ip,
@@ -420,8 +431,9 @@ func (s *Service) buildMTUConfig(ctx context.Context, req MTUTraceRequest) (mtut
 		TTLInterval:    time.Duration(positiveOrDefault(req.TTLIntervalMs, defaultTTLIntervalMs)) * time.Millisecond,
 		RDNS:           !req.DisableRDNS,
 		AlwaysWaitRDNS: req.AlwaysRDNS,
-		IPGeoSource:    ipgeo.GetSourceWithGeoDNS(provider, req.DotServer),
+		IPGeoSource:    session.Source,
 		Lang:           normalizeLanguage(req.Language),
+		DN42:           session.Refresh != nil,
 	}, nil
 }
 
@@ -518,15 +530,19 @@ func resolveDataProvider(req *TraceRequest) (string, bool) {
 		req.DN42 = true
 	}
 	if req.DN42 {
-		config.InitConfig()
-		req.DisableMaptrace = true
 		provider = "DN42"
 	}
 	needsNextTraceAPIV3 := ipgeo.IsNextTraceAPIProvider(provider)
 	if needsNextTraceAPIV3 && util.EnvDataProvider != "" {
 		provider = normalizeDataProvider(util.EnvDataProvider, "")
-		needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(provider)
 	}
+	if strings.EqualFold(provider, "DN42") {
+		req.DN42 = true
+		config.InitConfig()
+		req.DisableMaptrace = true
+		provider = "DN42"
+	}
+	needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(provider)
 	return provider, needsNextTraceAPIV3
 }
 
@@ -542,8 +558,12 @@ func resolveStandaloneDataProvider(raw string) (string, bool) {
 	needsNextTraceAPIV3 := ipgeo.IsNextTraceAPIProvider(provider)
 	if needsNextTraceAPIV3 && util.EnvDataProvider != "" {
 		provider = normalizeDataProvider(util.EnvDataProvider, "")
-		needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(provider)
 	}
+	if strings.EqualFold(strings.TrimSpace(provider), "DN42") {
+		config.InitConfig()
+		provider = "DN42"
+	}
+	needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(provider)
 	return provider, needsNextTraceAPIV3
 }
 
@@ -560,32 +580,34 @@ func buildTraceConfig(req TraceRequest, method trace.Method, ip net.IP, provider
 	if req.TOS != nil {
 		tos = *req.TOS
 	}
+	session := ipgeo.GetSourceSessionWithGeoDNS(provider, req.DotServer)
 	return trace.Config{
-		OSType:           resolveOSType(),
-		ICMPMode:         req.ICMPMode,
-		SrcAddr:          strings.TrimSpace(req.SourceAddress),
-		SrcPort:          req.SourcePort,
-		SourceDevice:     strings.TrimSpace(req.SourceDevice),
-		BeginHop:         positiveOrDefault(req.BeginHop, defaultBeginHop),
-		MaxHops:          positiveOrDefault(req.MaxHops, defaultMaxHops),
-		NumMeasurements:  positiveOrDefault(req.Queries, defaultQueries),
-		MaxAttempts:      req.MaxAttempts,
-		ParallelRequests: positiveOrDefault(req.ParallelRequests, defaultParallelRequests),
-		Timeout:          time.Duration(positiveOrDefault(req.TimeoutMs, defaultTimeoutMs)) * time.Millisecond,
-		DstIP:            ip,
-		DstPort:          port,
-		IPGeoSource:      ipgeo.GetSourceWithGeoDNS(provider, req.DotServer),
-		RDNS:             !req.DisableRDNS,
-		AlwaysWaitRDNS:   req.AlwaysRDNS,
-		PacketInterval:   positiveOrDefault(req.PacketInterval, defaultPacketIntervalMs),
-		TTLInterval:      positiveOrDefault(req.TTLInterval, defaultTTLIntervalMs),
-		Lang:             normalizeLanguage(req.Language),
-		DN42:             req.DN42,
-		PktSize:          packetSizeSpec.PayloadSize,
-		RandomPacketSize: packetSizeSpec.Random,
-		TOS:              tos,
-		Maptrace:         !req.DisableMaptrace,
-		DisableMPLS:      req.DisableMPLS,
+		OSType:             resolveOSType(),
+		ICMPMode:           req.ICMPMode,
+		SrcAddr:            strings.TrimSpace(req.SourceAddress),
+		SrcPort:            req.SourcePort,
+		SourceDevice:       strings.TrimSpace(req.SourceDevice),
+		BeginHop:           positiveOrDefault(req.BeginHop, defaultBeginHop),
+		MaxHops:            positiveOrDefault(req.MaxHops, defaultMaxHops),
+		NumMeasurements:    positiveOrDefault(req.Queries, defaultQueries),
+		MaxAttempts:        req.MaxAttempts,
+		ParallelRequests:   positiveOrDefault(req.ParallelRequests, defaultParallelRequests),
+		Timeout:            time.Duration(positiveOrDefault(req.TimeoutMs, defaultTimeoutMs)) * time.Millisecond,
+		DstIP:              ip,
+		DstPort:            port,
+		IPGeoSource:        session.Source,
+		RefreshIPGeoSource: session.Refresh,
+		RDNS:               !req.DisableRDNS,
+		AlwaysWaitRDNS:     req.AlwaysRDNS,
+		PacketInterval:     positiveOrDefault(req.PacketInterval, defaultPacketIntervalMs),
+		TTLInterval:        positiveOrDefault(req.TTLInterval, defaultTTLIntervalMs),
+		Lang:               normalizeLanguage(req.Language),
+		DN42:               req.DN42 || session.Refresh != nil,
+		PktSize:            packetSizeSpec.PayloadSize,
+		RandomPacketSize:   packetSizeSpec.Random,
+		TOS:                tos,
+		Maptrace:           !req.DisableMaptrace,
+		DisableMPLS:        req.DisableMPLS,
 	}, nil
 }
 

@@ -364,6 +364,7 @@ func buildMTUTraceConfig(
 	ttlIntervalMs int,
 	rdns bool,
 	alwaysWaitRDNS bool,
+	dn42 bool,
 	geoSource ipgeo.Source,
 	lang string,
 ) mtutrace.Config {
@@ -383,6 +384,7 @@ func buildMTUTraceConfig(
 		AlwaysWaitRDNS: alwaysWaitRDNS,
 		IPGeoSource:    geoSource,
 		Lang:           lang,
+		DN42:           dn42,
 	}
 }
 

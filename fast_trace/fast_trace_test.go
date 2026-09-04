@@ -13,9 +13,11 @@ import (
 
 	"github.com/fatih/color"
 
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
 	"github.com/nxtrace/NTrace-core/wshandle"
+	"github.com/spf13/viper"
 )
 
 func TestTrace(t *testing.T) {
@@ -306,6 +308,62 @@ func fastTraceTestParams(outputPath string) ParamsFastTrace {
 	}
 }
 
+func TestBuildFileTraceConfigUsesPinnedDN42Source(t *testing.T) {
+	wantSourceCalls := 0
+	source := func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
+		wantSourceCalls++
+		return &ipgeo.IPGeoData{Country: "DN42"}, nil
+	}
+	cfg, err := buildFileTraceConfig(ParamsFastTrace{
+		Context:      context.Background(),
+		MaxHops:      30,
+		Timeout:      time.Second,
+		DataProvider: " dn42 ",
+		IPGeoSource:  source,
+	}, trace.ICMPTrace, IpListElement{Ip: "10.0.0.1", Version4: true})
+	if err != nil {
+		t.Fatalf("buildFileTraceConfig returned error: %v", err)
+	}
+	if !cfg.DN42 || cfg.IPGeoSource == nil {
+		t.Fatalf("DN42 config = %+v", cfg)
+	}
+	if _, err := cfg.IPGeoSource("10.0.0.1", time.Second, "en", false); err != nil {
+		t.Fatalf("pinned source returned error: %v", err)
+	}
+	if wantSourceCalls != 1 {
+		t.Fatalf("source calls = %d, want 1", wantSourceCalls)
+	}
+}
+
+func TestPinFastTraceGeoSourceNormalizesDN42Provider(t *testing.T) {
+	dir := t.TempDir()
+	geoFeedPath := filepath.Join(dir, "geofeed.csv")
+	ptrPath := filepath.Join(dir, "ptr.csv")
+	if err := os.WriteFile(geoFeedPath, []byte("10.0.0.0/8,us,US,DN42 City\n"), 0o600); err != nil {
+		t.Fatalf("write geofeed: %v", err)
+	}
+	if err := os.WriteFile(ptrPath, nil, 0o600); err != nil {
+		t.Fatalf("write ptr: %v", err)
+	}
+	previousGeoFeedPath := viper.Get("geoFeedPath")
+	previousPtrPath := viper.Get("ptrPath")
+	viper.Set("geoFeedPath", geoFeedPath)
+	viper.Set("ptrPath", ptrPath)
+	t.Cleanup(func() {
+		viper.Set("geoFeedPath", previousGeoFeedPath)
+		viper.Set("ptrPath", previousPtrPath)
+	})
+
+	params := pinFastTraceGeoSource(ParamsFastTrace{DataProvider: " dn42 "})
+	if params.IPGeoSource == nil || !fastTraceDN42(params) {
+		t.Fatalf("pinned params = %+v", params)
+	}
+	geo, err := params.IPGeoSource("10.0.0.1", time.Second, "en", false)
+	if err != nil || geo.City != "DN42 City" {
+		t.Fatalf("pinned source = (%+v, %v), want DN42 City", geo, err)
+	}
+}
+
 func TestTestFileSkipsFastTraceWSWhenRuntimePrepared(t *testing.T) {
 	file := emptyFastTraceFile(t)
 	oldInit := initFastTraceWSFn
@@ -335,6 +393,27 @@ func TestTestFileSkipsFastTraceWSWhenRuntimePrepared(t *testing.T) {
 	}
 	if closeCalls != 0 {
 		t.Fatalf("closeFastTraceWS calls = %d, want 0 when runtime is prepared", closeCalls)
+	}
+}
+
+func TestTestFileSkipsFastTraceWSForDN42Provider(t *testing.T) {
+	file := emptyFastTraceFile(t)
+	oldInit := initFastTraceWSFn
+	var initCalls int
+	initFastTraceWSFn = func(context.Context) *wshandle.WsConn {
+		initCalls++
+		return nil
+	}
+	t.Cleanup(func() { initFastTraceWSFn = oldInit })
+
+	testFile(ParamsFastTrace{
+		Context:      context.Background(),
+		File:         file,
+		DataProvider: "DN42",
+	}, trace.ICMPTrace)
+
+	if initCalls != 0 {
+		t.Fatalf("initFastTraceWS calls = %d, want 0 for DN42", initCalls)
 	}
 }
 

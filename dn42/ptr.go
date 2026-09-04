@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/spf13/viper"
+	"github.com/nxtrace/NTrace-core/config"
 )
 
 type PtrRow struct {
@@ -31,7 +31,7 @@ func matchesPattern(prefix string, s string) bool {
 }
 
 func FindPtrRecord(ptr string) (PtrRow, error) {
-	path := viper.GetString("ptrPath")
+	path := config.PtrPath()
 	if path == "" {
 		return PtrRow{}, errors.New("ptrPath not configured")
 	}

@@ -6,11 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/spf13/viper"
 )
 
+var viperMu sync.RWMutex
+
 func InitConfig() {
+	viperMu.Lock()
+	defer viperMu.Unlock()
+
 	// 配置文件名， 不加扩展
 	viper.SetConfigName("nt_config") // name of config file (without extension)
 	// 设置文件的扩展名
@@ -80,4 +86,16 @@ func InitConfig() {
 		fmt.Println("加载配置文件失败:", err)
 		return
 	}
+}
+
+func GeoFeedPath() string {
+	viperMu.RLock()
+	defer viperMu.RUnlock()
+	return viper.GetString("geoFeedPath")
+}
+
+func PtrPath() string {
+	viperMu.RLock()
+	defer viperMu.RUnlock()
+	return viper.GetString("ptrPath")
 }

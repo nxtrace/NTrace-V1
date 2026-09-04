@@ -31,6 +31,32 @@ func TestEnrichHopMetadataGeoSuccess(t *testing.T) {
 	}
 }
 
+func TestEnrichHopMetadataDN42BypassesReservedAddressFilter(t *testing.T) {
+	calls := 0
+	cfg := Config{
+		DN42:    true,
+		Timeout: time.Second,
+		IPGeoSource: func(ip string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
+			calls++
+			if ip != "10.0.0.1" {
+				t.Fatalf("lookup ip = %q, want 10.0.0.1", ip)
+			}
+			return &ipgeo.IPGeoData{CountryEn: "DN42"}, nil
+		},
+	}
+
+	hop, changed := enrichHopMetadata(context.Background(), cfg, Hop{IP: "10.0.0.1", Event: EventTimeExceeded})
+	if !changed {
+		t.Fatal("expected DN42 metadata to change")
+	}
+	if hop.Geo == nil || hop.Geo.CountryEn != "DN42" {
+		t.Fatalf("unexpected geo: %+v", hop.Geo)
+	}
+	if calls != 1 {
+		t.Fatalf("lookup calls = %d, want 1", calls)
+	}
+}
+
 func TestEnrichHopMetadataDisableGeoIPReturnsNoGeo(t *testing.T) {
 	cfg := Config{
 		IPGeoSource: ipgeo.GetSource("disable-geoip"),

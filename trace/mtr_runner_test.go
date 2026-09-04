@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace/internal"
 )
 
@@ -27,6 +28,17 @@ func (m *mockProber) probeRound(ctx context.Context) (*Result, error) {
 
 func (m *mockProber) close() {
 	atomic.AddInt32(&m.closed, 1)
+}
+
+type resettableMockProber struct {
+	*mockProber
+	resetFn func()
+}
+
+func (m *resettableMockProber) resetFinalTTL() {
+	if m.resetFn != nil {
+		m.resetFn()
+	}
 }
 
 func constantResultProber(res *Result) *mockProber {
@@ -73,6 +85,81 @@ func TestMTRLoopMaxRounds(t *testing.T) {
 	}
 	if atomic.LoadInt32(&prober.closed) != 1 {
 		t.Error("prober.close() was not called")
+	}
+}
+
+func TestMTRLoopResetRefreshesStableSource(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	var rounds atomic.Int32
+	var proberResets atomic.Int32
+	var sourceGeneration atomic.Int32
+	sourceGeneration.Store(1)
+	prober := &resettableMockProber{
+		mockProber: &mockProber{
+			roundFn: func(_ context.Context) (*Result, error) {
+				rounds.Add(1)
+				return mkResult([]Hop{mkHop(1, "172.20.0.5", time.Millisecond)}), nil
+			},
+		},
+		resetFn: func() {
+			proberResets.Add(1)
+		},
+	}
+
+	var refreshCalls atomic.Int32
+	var resetConsumed atomic.Bool
+	config := Config{
+		DN42: true,
+		IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+			if sourceGeneration.Load() == 1 {
+				return &ipgeo.IPGeoData{Asnumber: "OLD"}, nil
+			}
+			return &ipgeo.IPGeoData{Asnumber: "NEW"}, nil
+		},
+		RefreshIPGeoSource: func() {
+			refreshCalls.Add(1)
+			if proberResets.Load() == 0 {
+				t.Error("source refreshed before prober state reset")
+			}
+			sourceGeneration.Store(2)
+		},
+	}
+
+	var snapshotsAfterReset int
+	err := mtrLoop(context.Background(), prober, config, MTROptions{
+		MaxRounds: 2,
+		Interval:  time.Millisecond,
+		IsResetRequested: func() bool {
+			return rounds.Load() >= 1 && resetConsumed.CompareAndSwap(false, true)
+		},
+	}, NewMTRAggregator(), func(_ int, stats []MTRHopStat) {
+		if !resetConsumed.Load() {
+			if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "OLD" {
+				t.Errorf("pre-reset stats = %+v, want OLD metadata", stats)
+			}
+			return
+		}
+		snapshotsAfterReset++
+		if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "NEW" {
+			t.Errorf("post-reset stats = %+v, want NEW metadata", stats)
+		}
+	}, true, fastBackoff)
+	if err != nil {
+		t.Fatalf("mtrLoop() error = %v", err)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("source refresh calls = %d, want 1", got)
+	}
+	if got := proberResets.Load(); got != 1 {
+		t.Fatalf("prober reset calls = %d, want 1", got)
+	}
+	if got := rounds.Load(); got != 3 {
+		t.Fatalf("probe rounds = %d, want 3 (one before reset plus two after)", got)
+	}
+	if snapshotsAfterReset != 2 {
+		t.Fatalf("post-reset snapshots = %d, want 2", snapshotsAfterReset)
 	}
 }
 

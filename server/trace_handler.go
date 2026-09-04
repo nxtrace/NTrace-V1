@@ -186,16 +186,20 @@ func resolveTraceDataProvider(req *traceRequest) (string, bool) {
 		req.DN42 = true
 	}
 	if req.DN42 {
-		config.InitConfig()
-		req.DisableMaptrace = true
 		dataProvider = "DN42"
 	}
 
 	needsNextTraceAPIV3 := ipgeo.IsNextTraceAPIProvider(dataProvider)
 	if needsNextTraceAPIV3 && util.EnvDataProvider != "" {
 		dataProvider = normalizeDataProvider(util.EnvDataProvider, "")
-		needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(dataProvider)
 	}
+	if strings.EqualFold(dataProvider, "DN42") {
+		req.DN42 = true
+		config.InitConfig()
+		req.DisableMaptrace = true
+		dataProvider = "DN42"
+	}
+	needsNextTraceAPIV3 = ipgeo.IsNextTraceAPIProvider(dataProvider)
 	needsNextTraceAPIV3 = needsNextTraceAPIV3 && !ipgeo.NextTraceAPIV4TokenConfigured()
 
 	return dataProvider, needsNextTraceAPIV3
@@ -400,32 +404,34 @@ func buildTraceConfig(req traceRequest, method trace.Method, ip net.IP, dataProv
 		ostype = 2
 	}
 
+	session := ipgeo.GetSourceSessionWithGeoDNS(dataProvider, req.DotServer)
 	return trace.Config{
-		OSType:           ostype,
-		ICMPMode:         req.ICMPMode,
-		SrcAddr:          req.SourceAddress,
-		SrcPort:          req.SourcePort,
-		SourceDevice:     strings.TrimSpace(req.SourceDevice),
-		BeginHop:         beginHop,
-		MaxHops:          maxHops,
-		NumMeasurements:  queries,
-		MaxAttempts:      req.MaxAttempts,
-		ParallelRequests: parallel,
-		Timeout:          time.Duration(timeout) * time.Millisecond,
-		DstIP:            ip,
-		DstPort:          port,
-		IPGeoSource:      ipgeo.GetSourceWithGeoDNS(dataProvider, req.DotServer),
-		RDNS:             !req.DisableRDNS,
-		AlwaysWaitRDNS:   alwaysWait,
-		PacketInterval:   req.PacketInterval,
-		TTLInterval:      req.TTLInterval,
-		Lang:             lang,
-		DN42:             req.DN42,
-		PktSize:          packetSizeSpec.PayloadSize,
-		RandomPacketSize: packetSizeSpec.Random,
-		TOS:              tos,
-		Maptrace:         !req.DisableMaptrace,
-		DisableMPLS:      req.DisableMPLS,
+		OSType:             ostype,
+		ICMPMode:           req.ICMPMode,
+		SrcAddr:            req.SourceAddress,
+		SrcPort:            req.SourcePort,
+		SourceDevice:       strings.TrimSpace(req.SourceDevice),
+		BeginHop:           beginHop,
+		MaxHops:            maxHops,
+		NumMeasurements:    queries,
+		MaxAttempts:        req.MaxAttempts,
+		ParallelRequests:   parallel,
+		Timeout:            time.Duration(timeout) * time.Millisecond,
+		DstIP:              ip,
+		DstPort:            port,
+		IPGeoSource:        session.Source,
+		RefreshIPGeoSource: session.Refresh,
+		RDNS:               !req.DisableRDNS,
+		AlwaysWaitRDNS:     alwaysWait,
+		PacketInterval:     req.PacketInterval,
+		TTLInterval:        req.TTLInterval,
+		Lang:               lang,
+		DN42:               req.DN42 || session.Refresh != nil,
+		PktSize:            packetSizeSpec.PayloadSize,
+		RandomPacketSize:   packetSizeSpec.Random,
+		TOS:                tos,
+		Maptrace:           !req.DisableMaptrace,
+		DisableMPLS:        req.DisableMPLS,
 	}, nil
 }
 

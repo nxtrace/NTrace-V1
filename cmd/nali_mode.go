@@ -218,11 +218,15 @@ func runNaliMode(ctx context.Context, opts naliRunOptions) error {
 	restoreFastIPOutput := setFastIPOutputSuppression(true)
 	defer restoreFastIPOutput()
 
-	if opts.dn42 {
+	dn42Configured := opts.dn42 || isDN42Provider(opts.data)
+	if dn42Configured {
 		applyDN42DataOrigin(&opts.data)
 	}
 	nextTraceAPIV3WS := initNextTraceAPIV3WebSocket(ctx, &opts.data, &opts.pow, false)
 	defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
+	if !dn42Configured && isDN42Provider(opts.data) {
+		applyDN42DataOrigin(&opts.data)
+	}
 
 	family := nali.FamilyAll
 	if opts.ipv4Only {
@@ -235,5 +239,6 @@ func runNaliMode(ctx context.Context, opts naliRunOptions) error {
 		Timeout: time.Duration(opts.timeoutMs) * time.Millisecond,
 		Lang:    opts.lang,
 		Family:  family,
+		DN42:    isDN42Provider(opts.data),
 	}, opts.stdin, opts.stdout, opts.target)
 }

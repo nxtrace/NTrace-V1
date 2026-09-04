@@ -845,6 +845,9 @@ func runFastTraceModeWithRuntime(ctx context.Context, dn42 bool, dataOrigin *str
 	nextTraceAPIV3WS, runtimePrepared := prepareFastTraceRuntimeEnvironment(ctx, dn42, dataOrigin, disableMaptrace, powProvider)
 	defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
 	params.RuntimePrepared = runtimePrepared
+	params.DataProvider = *dataOrigin
+	params.IPGeoSource = ipgeo.GetSource(*dataOrigin)
+	params.DN42 = isDN42Provider(*dataOrigin)
 	return maybeRunFastTraceMode(from, fastTraceFlag, file, params, method)
 }
 
@@ -895,11 +898,15 @@ func resolveCLITargetOrExit(raw string, usage string) string {
 }
 
 func applyDN42Mode(enabled bool, dataOrigin *string, disableMaptrace *bool) {
-	if !enabled {
+	if !enabled && !isDN42Provider(*dataOrigin) {
 		return
 	}
 	applyDN42DataOrigin(dataOrigin)
 	*disableMaptrace = true
+}
+
+func isDN42Provider(provider string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), "DN42")
 }
 
 func applyDN42DataOrigin(dataOrigin *string) {
@@ -909,14 +916,24 @@ func applyDN42DataOrigin(dataOrigin *string) {
 
 func prepareRuntimeEnvironment(ctx context.Context, dn42 bool, dataOrigin *string, disableMaptrace *bool, powProvider *string, asyncNextTraceAPIV3 bool) *wshandle.WsConn {
 	capabilitiesCheck()
+	dn42Configured := dn42 || isDN42Provider(*dataOrigin)
 	applyDN42Mode(dn42, dataOrigin, disableMaptrace)
-	return initNextTraceAPIV3WebSocket(ctx, dataOrigin, powProvider, asyncNextTraceAPIV3)
+	conn := initNextTraceAPIV3WebSocket(ctx, dataOrigin, powProvider, asyncNextTraceAPIV3)
+	if !dn42Configured {
+		applyDN42Mode(false, dataOrigin, disableMaptrace)
+	}
+	return conn
 }
 
 func prepareFastTraceRuntimeEnvironment(ctx context.Context, dn42 bool, dataOrigin *string, disableMaptrace *bool, powProvider *string) (*wshandle.WsConn, bool) {
 	capabilitiesCheck()
+	dn42Configured := dn42 || isDN42Provider(*dataOrigin)
 	applyDN42Mode(dn42, dataOrigin, disableMaptrace)
-	return initNextTraceAPIRuntime(ctx, dataOrigin, powProvider, false)
+	conn, prepared := initNextTraceAPIRuntime(ctx, dataOrigin, powProvider, false)
+	if !dn42Configured {
+		applyDN42Mode(false, dataOrigin, disableMaptrace)
+	}
+	return conn, prepared
 }
 
 func initNextTraceAPIV3WebSocket(ctx context.Context, dataOrigin, powProvider *string, async bool) *wshandle.WsConn {
@@ -1031,31 +1048,34 @@ func buildTraceConfig(
 	tos int,
 	disableMPLS bool,
 ) trace.Config {
+	dn42 = dn42 || isDN42Provider(dataOrigin)
+	session := ipgeo.GetSourceSession(dataOrigin)
 	return trace.Config{
-		OSType:           osType,
-		ICMPMode:         icmpMode,
-		DN42:             dn42,
-		SrcAddr:          srcAddr,
-		SrcPort:          srcPort,
-		SourceDevice:     strings.TrimSpace(sourceDevice),
-		BeginHop:         beginHop,
-		DstIP:            ip,
-		DstPort:          port,
-		MaxHops:          maxHops,
-		PacketInterval:   packetInterval,
-		TTLInterval:      ttlInterval,
-		NumMeasurements:  numMeasurements,
-		MaxAttempts:      maxAttempts,
-		ParallelRequests: parallelRequests,
-		Lang:             lang,
-		RDNS:             !noRDNS,
-		AlwaysWaitRDNS:   alwaysRDNS,
-		IPGeoSource:      ipgeo.GetSource(dataOrigin),
-		Timeout:          time.Duration(timeout) * time.Millisecond,
-		PktSize:          packetSize,
-		RandomPacketSize: randomPacketSize,
-		TOS:              tos,
-		DisableMPLS:      disableMPLS,
+		OSType:             osType,
+		ICMPMode:           icmpMode,
+		DN42:               dn42,
+		SrcAddr:            srcAddr,
+		SrcPort:            srcPort,
+		SourceDevice:       strings.TrimSpace(sourceDevice),
+		BeginHop:           beginHop,
+		DstIP:              ip,
+		DstPort:            port,
+		MaxHops:            maxHops,
+		PacketInterval:     packetInterval,
+		TTLInterval:        ttlInterval,
+		NumMeasurements:    numMeasurements,
+		MaxAttempts:        maxAttempts,
+		ParallelRequests:   parallelRequests,
+		Lang:               lang,
+		RDNS:               !noRDNS,
+		AlwaysWaitRDNS:     alwaysRDNS,
+		IPGeoSource:        session.Source,
+		RefreshIPGeoSource: session.Refresh,
+		Timeout:            time.Duration(timeout) * time.Millisecond,
+		PktSize:            packetSize,
+		RandomPacketSize:   randomPacketSize,
+		TOS:                tos,
+		DisableMPLS:        disableMPLS,
 	}
 }
 
@@ -1635,6 +1655,7 @@ func Execute() {
 			*ttlInterval,
 			!*norDNS,
 			*alwaysrDNS,
+			isDN42Provider(*dataOrigin),
 			ipgeo.GetSource(*dataOrigin),
 			*lang,
 		)
@@ -1717,7 +1738,7 @@ func Execute() {
 		&trace.Config{
 			Context:         rootCtx,
 			OSType:          osType,
-			DN42:            *dn42,
+			DN42:            *dn42 || isDN42Provider(*dataOrigin),
 			NumMeasurements: *numMeasurements,
 			Lang:            *lang,
 			RDNS:            !*norDNS,

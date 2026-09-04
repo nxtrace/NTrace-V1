@@ -119,13 +119,16 @@ func (rt *mtrLoopRuntime) handleReset() {
 		return
 	}
 
+	if resetter, ok := rt.prober.(mtrResetter); ok {
+		resetter.resetFinalTTL()
+	}
+	if rt.config.RefreshIPGeoSource != nil {
+		rt.config.RefreshIPGeoSource()
+	}
 	rt.agg.Reset()
 	rt.iteration = 0
 	rt.consecutiveErrors = 0
 	rt.backoff = rt.bo.Initial
-	if resetter, ok := rt.prober.(mtrResetter); ok {
-		resetter.resetFinalTTL()
-	}
 	rt.pathTracker.reset()
 }
 

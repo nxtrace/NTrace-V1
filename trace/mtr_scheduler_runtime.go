@@ -809,7 +809,10 @@ func (rt *mtrSchedulerRuntime) handleReset() {
 	}
 
 	rt.generation++
-	rt.resetMetadataContext()
+	rt.cancelMetadataLookups()
+	if rt.cfg.BaseConfig.RefreshIPGeoSource != nil {
+		rt.cfg.BaseConfig.RefreshIPGeoSource()
+	}
 	for idx := range rt.states {
 		rt.states[idx] = mtrHopState{}
 	}
@@ -824,10 +827,6 @@ func (rt *mtrSchedulerRuntime) handleReset() {
 	rt.pathTracker.reset()
 	rt.agg.Reset()
 	_ = rt.prober.Reset()
-}
-
-func (rt *mtrSchedulerRuntime) resetMetadataContext() {
-	rt.cancelMetadataLookups()
 	rt.metadataCtx, rt.metadataCancel = context.WithCancel(rt.ctx)
 }
 
