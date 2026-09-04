@@ -25,24 +25,6 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-type closeIdleRoundTripper struct {
-	closed *int32
-}
-
-func (rt *closeIdleRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Status:     "200 OK",
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(`{"ip":"` + req.URL.Query().Get("ip") + `"}`)),
-		Request:    req,
-	}, nil
-}
-
-func (rt *closeIdleRoundTripper) CloseIdleConnections() {
-	atomic.AddInt32(rt.closed, 1)
-}
-
 func withNextTraceAPIV4RetryDelays(t *testing.T, delays ...time.Duration) {
 	t.Helper()
 	old := nextTraceAPIV4RetryDelays
@@ -52,89 +34,59 @@ func withNextTraceAPIV4RetryDelays(t *testing.T, delays ...time.Duration) {
 	})
 }
 
-func resetNextTraceAPIV4ClientCache() {
-	nextTraceAPIV4ClientCacheMu.Lock()
-	defer nextTraceAPIV4ClientCacheMu.Unlock()
-	for _, client := range nextTraceAPIV4ClientCache {
-		closeNextTraceAPIV4ClientIdleConnections(client)
+func resetNextTraceAPIV4TransportCache() {
+	nextTraceAPIV4TransportCacheMu.Lock()
+	transports := make([]*http.Transport, 0, len(nextTraceAPIV4TransportCache))
+	for _, transport := range nextTraceAPIV4TransportCache {
+		transports = append(transports, transport)
 	}
-	nextTraceAPIV4ClientCache = make(map[nextTraceAPIV4ClientCacheKey]*NextTraceAPIV4Client)
-	nextTraceAPIV4ClientCacheOrder = nil
+	nextTraceAPIV4TransportCache = make(map[nextTraceAPIV4TransportCacheKey]*http.Transport)
+	nextTraceAPIV4TransportCacheOrder = nil
+	nextTraceAPIV4TransportCacheMu.Unlock()
+	closeNextTraceAPIV4TransportIdleConnections(transports)
 }
 
-func nextTraceAPIV4ClientCacheLen() int {
-	nextTraceAPIV4ClientCacheMu.RLock()
-	defer nextTraceAPIV4ClientCacheMu.RUnlock()
-	return len(nextTraceAPIV4ClientCache)
-}
-
-func isolateNextTraceAPIV4ProxyEnv(t *testing.T) {
-	t.Helper()
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"} {
-		t.Setenv(key, "")
-	}
+func nextTraceAPIV4TransportCacheLen() int {
+	nextTraceAPIV4TransportCacheMu.RLock()
+	defer nextTraceAPIV4TransportCacheMu.RUnlock()
+	return len(nextTraceAPIV4TransportCache)
 }
 
 func TestNextTraceAPIV4GeoIPNormalizesTimeout(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
 	t.Cleanup(func() {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		resetNextTraceAPIV4ClientCache()
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_, _ = w.Write([]byte(`{"ip":"1.1.1.1"}`))
 	}))
 	defer srv.Close()
 	nextTraceAPIV4GeoEndpoint = srv.URL
+	resetNextTraceAPIV4TransportCache()
 
-	tests := []struct {
-		name    string
-		timeout time.Duration
-		want    time.Duration
-	}{
-		{name: "below minimum", timeout: time.Second, want: 2 * time.Second},
-		{name: "zero", timeout: 0, want: 2 * time.Second},
-		{name: "above minimum", timeout: 3 * time.Second, want: 3 * time.Second},
+	geo, err := NextTraceAPIV4GeoIP("1.1.1.1", time.Millisecond, "cn", false)
+	if err != nil {
+		t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resetNextTraceAPIV4ClientCache()
-			var got time.Duration
-			nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
-				got = timeout
-				client := srv.Client()
-				client.Timeout = timeout
-				return client
-			}
-			geo, err := NextTraceAPIV4GeoIP("1.1.1.1", tt.timeout, "cn", false)
-			if err != nil {
-				t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
-			}
-			if geo.IP != "1.1.1.1" {
-				t.Fatalf("IP = %q, want 1.1.1.1", geo.IP)
-			}
-			if got != tt.want {
-				t.Fatalf("timeout = %s, want %s", got, tt.want)
-			}
-		})
+	if geo.IP != "1.1.1.1" {
+		t.Fatalf("IP = %q, want 1.1.1.1", geo.IP)
 	}
 }
 
 func TestNextTraceAPIV4GeoIPUsesTimeoutAsTotalBudget(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	withNextTraceAPIV4RetryDelays(t, 3*time.Second, 3*time.Second)
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
 	t.Cleanup(func() {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		resetNextTraceAPIV4ClientCache()
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	attempts := 0
@@ -145,12 +97,7 @@ func TestNextTraceAPIV4GeoIPUsesTimeoutAsTotalBudget(t *testing.T) {
 	}))
 	defer srv.Close()
 	nextTraceAPIV4GeoEndpoint = srv.URL
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
-		client := srv.Client()
-		client.Timeout = timeout
-		return client
-	}
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	start := time.Now()
 	_, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false)
@@ -170,19 +117,28 @@ func TestNextTraceAPIV4GeoIPSharesTimeoutWithFastIPPrewarm(t *testing.T) {
 	isolateNextTraceAPIV4ProxyEnv(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
 	oldFastIPFn := nextTraceAPIV4FastIPFn
 	oldProxy := util.EnvProxyURL
+	oldCache := util.GetFastIPCache()
+	oldMeta := util.GetFastIPMetaCache()
 	t.Cleanup(func() {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
 		nextTraceAPIV4FastIPFn = oldFastIPFn
 		util.EnvProxyURL = oldProxy
-		resetNextTraceAPIV4ClientCache()
+		util.SetFastIPCacheState(oldCache, oldMeta)
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	util.EnvProxyURL = ""
-	nextTraceAPIV4GeoEndpoint = "https://" + nextTraceAPIV4APIHost + nextTraceAPIV4GeoPath
+	util.SetFastIPCacheState("", util.FastIPMeta{})
+	requestStarted := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestStarted <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	port := strconv.Itoa(srv.Listener.Addr().(*net.TCPAddr).Port)
+	nextTraceAPIV4GeoEndpoint = "http://" + nextTraceAPIV4APIHost + ":" + port + nextTraceAPIV4GeoPath
 	nextTraceAPIV4FastIPFn = func(ctx context.Context, _ string, _ string, enableOutput bool) (string, error) {
 		if enableOutput {
 			t.Fatal("FastIP enableOutput = true, want false for lookup fallback")
@@ -190,55 +146,44 @@ func TestNextTraceAPIV4GeoIPSharesTimeoutWithFastIPPrewarm(t *testing.T) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("FastIP context has no deadline")
 		}
-		time.Sleep(200 * time.Millisecond)
+		timer := time.NewTimer(750 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		util.SetFastIPCacheState("127.0.0.1", util.FastIPMeta{IP: "127.0.0.1"})
 		return "127.0.0.1", nil
 	}
 
 	timeout := 2 * time.Second
-	var lookupRemaining time.Duration
-	nextTraceAPIV4HTTPClientFactory = func(_ string, gotTimeout time.Duration) *http.Client {
-		if gotTimeout != timeout {
-			t.Fatalf("client timeout = %s, want %s", gotTimeout, timeout)
-		}
-		return &http.Client{
-			Timeout: gotTimeout,
-			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				deadline, ok := req.Context().Deadline()
-				if !ok {
-					t.Fatal("lookup context has no deadline")
-				}
-				lookupRemaining = time.Until(deadline)
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Status:     "200 OK",
-					Header:     make(http.Header),
-					Body:       io.NopCloser(strings.NewReader(`{"ip":"1.1.1.1"}`)),
-					Request:    req,
-				}, nil
-			}),
-		}
-	}
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
-	if _, err := NextTraceAPIV4GeoIP("1.1.1.1", timeout, "cn", false); err != nil {
-		t.Fatalf("NextTraceAPIV4GeoIP() error = %v", err)
+	start := time.Now()
+	if _, err := NextTraceAPIV4GeoIP("1.1.1.1", timeout, "cn", false); err == nil {
+		t.Fatal("NextTraceAPIV4GeoIP() error = nil, want deadline error")
 	}
-	if lookupRemaining >= timeout-100*time.Millisecond {
-		t.Fatalf("lookup remaining timeout = %s, want FastIP prewarm charged to same budget", lookupRemaining)
+	elapsed := time.Since(start)
+	if elapsed < 1700*time.Millisecond || elapsed > 2700*time.Millisecond {
+		t.Fatalf("elapsed = %s, want one shared %s budget including FastIP", elapsed, timeout)
+	}
+	select {
+	case <-requestStarted:
+	default:
+		t.Fatal("lookup did not start after FastIP prewarm")
 	}
 }
 
-func TestNextTraceAPIV4GeoIPReusesCachedClientAndConnection(t *testing.T) {
+func TestNextTraceAPIV4GeoIPReusesTransportAndConnection(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
 	t.Cleanup(func() {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		resetNextTraceAPIV4ClientCache()
+		resetNextTraceAPIV4TransportCache()
 	})
 
-	var factoryCalls int32
 	var newConns int32
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -253,13 +198,7 @@ func TestNextTraceAPIV4GeoIPReusesCachedClientAndConnection(t *testing.T) {
 	defer srv.Close()
 
 	nextTraceAPIV4GeoEndpoint = srv.URL
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
-		atomic.AddInt32(&factoryCalls, 1)
-		client := srv.Client()
-		client.Timeout = timeout
-		return client
-	}
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	for _, ip := range []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"} {
 		geo, err := NextTraceAPIV4GeoIP(ip, 2*time.Second, "cn", false)
@@ -271,8 +210,8 @@ func TestNextTraceAPIV4GeoIPReusesCachedClientAndConnection(t *testing.T) {
 		}
 	}
 
-	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
-		t.Fatalf("factory calls = %d, want 1 cached client", got)
+	if got := nextTraceAPIV4TransportCacheLen(); got != 1 {
+		t.Fatalf("transport cache size = %d, want 1", got)
 	}
 	if got := atomic.LoadInt32(&newConns); got != 1 {
 		t.Fatalf("new connections = %d, want 1 reused HTTP connection", got)
@@ -292,7 +231,7 @@ func TestNextTraceAPIV4GeoIPUsesFastIPForAPIEndpoint(t *testing.T) {
 		nextTraceAPIV4FastIPFn = oldFastIPFn
 		util.EnvProxyURL = oldProxy
 		util.SetFastIPCacheState(oldCache, oldMeta)
-		resetNextTraceAPIV4ClientCache()
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	util.EnvProxyURL = ""
@@ -332,7 +271,7 @@ func TestNextTraceAPIV4GeoIPUsesFastIPForAPIEndpoint(t *testing.T) {
 		util.SetFastIPCacheState("127.0.0.1", util.FastIPMeta{IP: "127.0.0.1"})
 		return "127.0.0.1", nil
 	}
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	geo, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false)
 	if err != nil {
@@ -343,6 +282,59 @@ func TestNextTraceAPIV4GeoIPUsesFastIPForAPIEndpoint(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&fastIPCalls); got != 1 {
 		t.Fatalf("FastIP calls = %d, want 1", got)
+	}
+}
+
+func TestNextTraceAPIV4FastIPDialPreservesTLSServerName(t *testing.T) {
+	isolateNextTraceAPIV4ProxyEnv(t)
+	oldProxy := util.EnvProxyURL
+	oldCache := util.GetFastIPCache()
+	oldMeta := util.GetFastIPMetaCache()
+	t.Cleanup(func() {
+		util.EnvProxyURL = oldProxy
+		util.SetFastIPCacheState(oldCache, oldMeta)
+	})
+	util.EnvProxyURL = ""
+
+	sniCh := make(chan string, 1)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sniCh <- r.TLS.ServerName
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(`{"ip":"1.1.1.1"}`))
+	}))
+	defer srv.Close()
+	listenerHost, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort() error = %v", err)
+	}
+	util.SetFastIPCacheState(listenerHost, util.FastIPMeta{IP: listenerHost})
+
+	endpoint := "https://" + net.JoinHostPort(nextTraceAPIV4APIHost, port) + nextTraceAPIV4GeoPath
+	policy := util.NewGeoDNSPolicy("", true)
+	transport := newNextTraceAPIV4Transport(endpoint, policy, nextTraceAPIV4ProxyPolicy{identity: "direct"})
+	tlsTransport, ok := srv.Client().Transport.(*http.Transport)
+	if !ok || tlsTransport.TLSClientConfig == nil {
+		t.Fatal("test server client has no TLS config")
+	}
+	transport.TLSClientConfig = tlsTransport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.InsecureSkipVerify = true //nolint:gosec // The local test verifies SNI, not certificate trust.
+	defer transport.CloseIdleConnections()
+
+	client := NewNextTraceAPIV4Client(endpoint, "test-token", &http.Client{Timeout: 2 * time.Second, Transport: transport})
+	geo, _, err := client.Lookup(context.Background(), "1.1.1.1")
+	if err != nil {
+		t.Fatalf("Lookup() error = %v", err)
+	}
+	if geo.IP != "1.1.1.1" {
+		t.Fatalf("IP = %q, want 1.1.1.1", geo.IP)
+	}
+	select {
+	case got := <-sniCh:
+		if got != nextTraceAPIV4APIHost {
+			t.Fatalf("TLS ServerName = %q, want %q", got, nextTraceAPIV4APIHost)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TLS server did not observe a handshake")
 	}
 }
 
@@ -428,17 +420,51 @@ func TestDialNextTraceAPIV4FallsBackWhenCachedFastIPFails(t *testing.T) {
 
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 	util.SetFastIPCacheState("127.0.0.2", util.FastIPMeta{IP: "127.0.0.2"})
-	conn, err := dialNextTraceAPIV4(context.Background(), &net.Dialer{Timeout: time.Second}, "tcp", net.JoinHostPort("127.0.0.1", port), "127.0.0.1", port)
+	dialer := &net.Dialer{Timeout: time.Second}
+	originalAddr := net.JoinHostPort("127.0.0.1", port)
+	var fallbackAddr string
+	fallbackDial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		fallbackAddr = addr
+		return dialer.DialContext(ctx, network, addr)
+	}
+	conn, err := dialNextTraceAPIV4(context.Background(), dialer, fallbackDial, "tcp", originalAddr, "127.0.0.1", port)
 	if err != nil {
 		t.Fatalf("dialNextTraceAPIV4() error = %v", err)
 	}
 	_ = conn.Close()
+	if fallbackAddr != originalAddr {
+		t.Fatalf("fallback addr = %q, want captured policy dialer addr %q", fallbackAddr, originalAddr)
+	}
 
 	select {
 	case serverConn := <-accepted:
 		_ = serverConn.Close()
 	case <-time.After(time.Second):
 		t.Fatal("fallback dial did not reach original host listener")
+	}
+}
+
+func TestDialNextTraceAPIV4CancellationReachesFallback(t *testing.T) {
+	oldCache := util.GetFastIPCache()
+	oldMeta := util.GetFastIPMetaCache()
+	t.Cleanup(func() {
+		util.SetFastIPCacheState(oldCache, oldMeta)
+	})
+
+	util.SetFastIPCacheState("192.0.2.1", util.FastIPMeta{IP: "192.0.2.1"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var fallbackCalls int32
+	fallbackDial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		atomic.AddInt32(&fallbackCalls, 1)
+		return nil, ctx.Err()
+	}
+	_, err := dialNextTraceAPIV4(ctx, &net.Dialer{}, fallbackDial, "tcp", "api.nxtrace.org:443", nextTraceAPIV4APIHost, nextTraceAPIV4DefaultPort)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("dialNextTraceAPIV4() error = %v, want context canceled", err)
+	}
+	if got := atomic.LoadInt32(&fallbackCalls); got != 1 {
+		t.Fatalf("fallback calls = %d, want 1", got)
 	}
 }
 
@@ -467,7 +493,7 @@ func TestPrepareNextTraceAPIV4FastIPSkipsStandardProxyEnv(t *testing.T) {
 	}
 }
 
-func TestNewNextTraceAPIV4HTTPClientSkipsFastIPDialForStandardProxyEnv(t *testing.T) {
+func TestNewNextTraceAPIV4TransportSkipsFastIPDialForStandardProxyEnv(t *testing.T) {
 	isolateNextTraceAPIV4ProxyEnv(t)
 	oldProxy := util.EnvProxyURL
 	t.Cleanup(func() {
@@ -476,19 +502,222 @@ func TestNewNextTraceAPIV4HTTPClientSkipsFastIPDialForStandardProxyEnv(t *testin
 
 	util.EnvProxyURL = ""
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:65535")
-	client := newNextTraceAPIV4HTTPClient(nextTraceAPIV4GeoEndpoint, time.Second)
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok || transport == nil || transport.DialContext == nil {
-		t.Fatalf("client transport = %#v, want http.Transport with DialContext", client.Transport)
+	policy := util.CurrentGeoDNSPolicy()
+	proxy := captureNextTraceAPIV4Proxy(nextTraceAPIV4GeoEndpoint)
+	transport := newNextTraceAPIV4Transport(nextTraceAPIV4GeoEndpoint, policy, proxy)
+	if transport == nil || transport.DialContext == nil {
+		t.Fatalf("transport = %#v, want http.Transport with DialContext", transport)
 	}
 	dialName := runtime.FuncForPC(reflect.ValueOf(transport.DialContext).Pointer()).Name()
-	if strings.Contains(dialName, "newNextTraceAPIV4HTTPClient") {
+	if strings.Contains(dialName, "newNextTraceAPIV4Transport") {
 		t.Fatalf("DialContext = %s, want util.NewGeoHTTPClient dialer when HTTPS_PROXY is set", dialName)
 	}
 }
 
+func TestNextTraceAPIV4EnvironmentProxyReevaluatesRedirectURL(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:18080")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:18443")
+	t.Setenv("NO_PROXY", "origin.example,bypass.example")
+
+	policy := captureNextTraceAPIV4Proxy("http://origin.example/v4/ipGeo")
+	tests := []struct {
+		name       string
+		requestURL string
+		wantProxy  string
+	}{
+		{name: "initial host bypasses proxy", requestURL: "http://origin.example/v4/ipGeo"},
+		{name: "https redirect uses https proxy", requestURL: "https://secure.example/v4/ipGeo", wantProxy: "http://127.0.0.1:18443"},
+		{name: "http redirect uses http proxy", requestURL: "http://plain.example/v4/ipGeo", wantProxy: "http://127.0.0.1:18080"},
+		{name: "redirected bypass host stays direct", requestURL: "https://bypass.example/v4/ipGeo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, tt.requestURL, nil)
+			if err != nil {
+				t.Fatalf("NewRequest() error = %v", err)
+			}
+			proxyURL, err := policy.proxy(req)
+			if err != nil {
+				t.Fatalf("proxy() error = %v", err)
+			}
+			got := ""
+			if proxyURL != nil {
+				got = proxyURL.String()
+			}
+			if got != tt.wantProxy {
+				t.Fatalf("proxy for %s = %q, want %q", tt.requestURL, got, tt.wantProxy)
+			}
+		})
+	}
+}
+
+func TestNextTraceAPIV4ExplicitProxyRemainsFixedAcrossRedirects(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
+	const explicitProxy = "http://127.0.0.1:19090"
+	util.EnvProxyURL = explicitProxy
+
+	policy := captureNextTraceAPIV4Proxy("http://origin.example/v4/ipGeo")
+	for _, requestURL := range []string{
+		"http://origin.example/v4/ipGeo",
+		"https://redirected.example/v4/ipGeo",
+	} {
+		req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+		proxyURL, err := policy.proxy(req)
+		if err != nil {
+			t.Fatalf("proxy() error = %v", err)
+		}
+		if proxyURL == nil || proxyURL.String() != explicitProxy {
+			t.Fatalf("proxy for %s = %v, want %s", requestURL, proxyURL, explicitProxy)
+		}
+	}
+}
+
+func TestPrepareNextTraceAPIV4FastIPEvaluatesOnlyInitialEndpoint(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:18443")
+	t.Setenv("NO_PROXY", nextTraceAPIV4APIHost)
+	oldFastIPFn := nextTraceAPIV4FastIPFn
+	t.Cleanup(func() {
+		nextTraceAPIV4FastIPFn = oldFastIPFn
+	})
+
+	var calls int32
+	nextTraceAPIV4FastIPFn = func(context.Context, string, string, bool) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		return "127.0.0.1", nil
+	}
+	policy := captureNextTraceAPIV4Proxy(nextTraceAPIV4GeoEndpoint)
+	if err := prepareNextTraceAPIV4FastIPWithProxy(context.Background(), nextTraceAPIV4GeoEndpoint, false, policy); err != nil {
+		t.Fatalf("prepareNextTraceAPIV4FastIPWithProxy() error = %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("FastIP calls = %d, want 1 for initial NO_PROXY endpoint", got)
+	}
+
+	redirectReq, err := http.NewRequest(http.MethodGet, "https://redirected.example/v4/ipGeo", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	proxyURL, err := policy.proxy(redirectReq)
+	if err != nil {
+		t.Fatalf("proxy() error = %v", err)
+	}
+	if proxyURL == nil || proxyURL.String() != "http://127.0.0.1:18443" {
+		t.Fatalf("redirect proxy = %v, want captured HTTPS_PROXY", proxyURL)
+	}
+}
+
+func TestNextTraceAPIV4HTTPSProxyPreservesCONNECTHostAndTLSServerName(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
+
+	sniCh := make(chan string, 1)
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case sniCh <- r.TLS.ServerName:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(`{"ip":"1.1.1.1"}`))
+	}))
+	defer target.Close()
+
+	connectHostCh := make(chan string, 1)
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		select {
+		case connectHostCh <- r.Host:
+		default:
+		}
+		upstream, err := net.DialTimeout("tcp", target.Listener.Addr().String(), time.Second)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			_ = upstream.Close()
+			http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
+			return
+		}
+		downstream, rw, err := hijacker.Hijack()
+		if err != nil {
+			_ = upstream.Close()
+			return
+		}
+		if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			_ = downstream.Close()
+			_ = upstream.Close()
+			return
+		}
+		if err := rw.Flush(); err != nil {
+			_ = downstream.Close()
+			_ = upstream.Close()
+			return
+		}
+		go func() {
+			_, _ = io.Copy(upstream, downstream)
+			_ = upstream.Close()
+		}()
+		go func() {
+			_, _ = io.Copy(downstream, upstream)
+			_ = downstream.Close()
+		}()
+	}))
+	defer proxyServer.Close()
+	t.Setenv("HTTPS_PROXY", proxyServer.URL)
+
+	_, port, err := net.SplitHostPort(target.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort() error = %v", err)
+	}
+	endpoint := "https://" + net.JoinHostPort(nextTraceAPIV4APIHost, port) + nextTraceAPIV4GeoPath
+	policy := util.NewGeoDNSPolicy("", true)
+	transport := newNextTraceAPIV4Transport(endpoint, policy, captureNextTraceAPIV4Proxy(endpoint))
+	tlsTransport, ok := target.Client().Transport.(*http.Transport)
+	if !ok || tlsTransport.TLSClientConfig == nil {
+		t.Fatal("test server client has no TLS config")
+	}
+	transport.TLSClientConfig = tlsTransport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.InsecureSkipVerify = true //nolint:gosec // The local test verifies CONNECT and SNI, not certificate trust.
+	defer transport.CloseIdleConnections()
+
+	client := NewNextTraceAPIV4Client(endpoint, "test-token", &http.Client{Timeout: 2 * time.Second, Transport: transport})
+	geo, _, err := client.Lookup(context.Background(), "1.1.1.1")
+	if err != nil {
+		t.Fatalf("Lookup() error = %v", err)
+	}
+	if geo.IP != "1.1.1.1" {
+		t.Fatalf("IP = %q, want 1.1.1.1", geo.IP)
+	}
+	wantConnectHost := net.JoinHostPort(nextTraceAPIV4APIHost, port)
+	select {
+	case got := <-connectHostCh:
+		if got != wantConnectHost {
+			t.Fatalf("CONNECT host = %q, want %q", got, wantConnectHost)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("proxy did not observe CONNECT")
+	}
+	select {
+	case got := <-sniCh:
+		if got != nextTraceAPIV4APIHost {
+			t.Fatalf("TLS ServerName = %q, want %q", got, nextTraceAPIV4APIHost)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TLS server did not observe a handshake")
+	}
+}
+
 func TestNextTraceAPIV4GeoIPSkipsFastIPForCustomEndpoint(t *testing.T) {
-	isolateNextTraceAPIV4ProxyEnv(t)
+	isolateNextTraceAPIV4ProxyState(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
 	oldFastIPFn := nextTraceAPIV4FastIPFn
@@ -498,7 +727,7 @@ func TestNextTraceAPIV4GeoIPSkipsFastIPForCustomEndpoint(t *testing.T) {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
 		nextTraceAPIV4FastIPFn = oldFastIPFn
 		util.SetFastIPCacheState(oldCache, oldMeta)
-		resetNextTraceAPIV4ClientCache()
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	var fastIPCalls int32
@@ -512,7 +741,7 @@ func TestNextTraceAPIV4GeoIPSkipsFastIPForCustomEndpoint(t *testing.T) {
 	}))
 	defer srv.Close()
 	nextTraceAPIV4GeoEndpoint = srv.URL
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	geo, err := NextTraceAPIV4GeoIP("8.8.8.8", 2*time.Second, "cn", false)
 	if err != nil {
@@ -536,7 +765,7 @@ func TestNextTraceAPIV4GeoIPUsesProxyInsteadOfFastIP(t *testing.T) {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
 		nextTraceAPIV4FastIPFn = oldFastIPFn
 		util.EnvProxyURL = oldProxy
-		resetNextTraceAPIV4ClientCache()
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	var proxyRequests int32
@@ -563,7 +792,7 @@ func TestNextTraceAPIV4GeoIPUsesProxyInsteadOfFastIP(t *testing.T) {
 	}
 	util.EnvProxyURL = proxy.URL
 	nextTraceAPIV4GeoEndpoint = "http://" + nextTraceAPIV4APIHost + ":65535" + nextTraceAPIV4GeoPath
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	geo, err := NextTraceAPIV4GeoIP("9.9.9.9", 2*time.Second, "cn", false)
 	if err != nil {
@@ -580,144 +809,211 @@ func TestNextTraceAPIV4GeoIPUsesProxyInsteadOfFastIP(t *testing.T) {
 	}
 }
 
-func TestNextTraceAPIV4GeoIPCacheKeyIncludesTokenAndTimeout(t *testing.T) {
-	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
+func TestNextTraceAPIV4ClientsShareTransportAcrossTokenAndTimeout(t *testing.T) {
+	isolateNextTraceAPIV4ProxyEnv(t)
+	oldFactory := nextTraceAPIV4TransportFactory
 	t.Cleanup(func() {
-		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		resetNextTraceAPIV4ClientCache()
-	})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = w.Write([]byte(`{"ip":"` + r.URL.Query().Get("ip") + `"}`))
-	}))
-	defer srv.Close()
-
-	var factoryCalls int32
-	nextTraceAPIV4GeoEndpoint = srv.URL
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
-		atomic.AddInt32(&factoryCalls, 1)
-		client := srv.Client()
-		client.Timeout = timeout
-		return client
-	}
-	resetNextTraceAPIV4ClientCache()
-
-	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "token-a")
-	if _, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false); err != nil {
-		t.Fatalf("first lookup error = %v", err)
-	}
-	if _, err := NextTraceAPIV4GeoIP("8.8.8.8", time.Second, "cn", false); err != nil {
-		t.Fatalf("same normalized timeout lookup error = %v", err)
-	}
-	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
-		t.Fatalf("factory calls after same key = %d, want 1", got)
-	}
-
-	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "token-b")
-	if _, err := NextTraceAPIV4GeoIP("9.9.9.9", 2*time.Second, "cn", false); err != nil {
-		t.Fatalf("token change lookup error = %v", err)
-	}
-	if got := atomic.LoadInt32(&factoryCalls); got != 2 {
-		t.Fatalf("factory calls after token change = %d, want 2", got)
-	}
-
-	if _, err := NextTraceAPIV4GeoIP("1.0.0.1", 3*time.Second, "cn", false); err != nil {
-		t.Fatalf("timeout change lookup error = %v", err)
-	}
-	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
-		t.Fatalf("factory calls after timeout change = %d, want 3", got)
-	}
-}
-
-func TestNextTraceAPIV4GeoIPCacheKeyIncludesGeoDNSResolver(t *testing.T) {
-	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
-	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
-	oldResolver := util.CurrentGeoDNSResolver()
-	t.Cleanup(func() {
-		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		util.SetGeoDNSResolver(oldResolver)
-		resetNextTraceAPIV4ClientCache()
-	})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = w.Write([]byte(`{"ip":"` + r.URL.Query().Get("ip") + `"}`))
-	}))
-	defer srv.Close()
-
-	var factoryCalls int32
-	nextTraceAPIV4GeoEndpoint = srv.URL
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
-		atomic.AddInt32(&factoryCalls, 1)
-		client := srv.Client()
-		client.Timeout = timeout
-		return client
-	}
-	util.SetGeoDNSResolver("")
-	resetNextTraceAPIV4ClientCache()
-
-	if _, err := NextTraceAPIV4GeoIP("1.1.1.1", 2*time.Second, "cn", false); err != nil {
-		t.Fatalf("default resolver lookup error = %v", err)
-	}
-	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
-		t.Fatalf("factory calls after default resolver = %d, want 1", got)
-	}
-
-	util.SetGeoDNSResolver("google")
-	if _, err := NextTraceAPIV4GeoIP("8.8.8.8", 2*time.Second, "cn", false); err != nil {
-		t.Fatalf("google resolver lookup error = %v", err)
-	}
-	if got := atomic.LoadInt32(&factoryCalls); got != 2 {
-		t.Fatalf("factory calls after google resolver = %d, want 2", got)
-	}
-
-	util.SetGeoDNSResolver("cloudflare")
-	if _, err := NextTraceAPIV4GeoIP("9.9.9.9", 2*time.Second, "cn", false); err != nil {
-		t.Fatalf("cloudflare resolver lookup error = %v", err)
-	}
-	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
-		t.Fatalf("factory calls after cloudflare resolver = %d, want 3", got)
-	}
-
-	util.SetGeoDNSResolver("google")
-	if _, err := NextTraceAPIV4GeoIP("1.0.0.1", 2*time.Second, "cn", false); err != nil {
-		t.Fatalf("google resolver reuse lookup error = %v", err)
-	}
-	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
-		t.Fatalf("factory calls after returning to google = %d, want 3", got)
-	}
-}
-
-func TestNextTraceAPIV4ClientCacheNormalizesEndpoint(t *testing.T) {
-	oldFactory := nextTraceAPIV4HTTPClientFactory
-	t.Cleanup(func() {
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		resetNextTraceAPIV4ClientCache()
+		nextTraceAPIV4TransportFactory = oldFactory
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	var factoryCalls int32
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
+	nextTraceAPIV4TransportFactory = func(string, util.GeoDNSPolicy, nextTraceAPIV4ProxyPolicy) *http.Transport {
 		atomic.AddInt32(&factoryCalls, 1)
-		return &http.Client{
-			Timeout: timeout,
-			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return nil, errors.New("unexpected request")
-			}),
-		}
+		return &http.Transport{}
 	}
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	endpoint := "https://api.example.test/v4/ipGeo"
-	client := cachedNextTraceAPIV4Client(" "+endpoint+" ", "test-token", 2*time.Second)
-	cached := cachedNextTraceAPIV4Client(endpoint, "test-token", 2*time.Second)
+	policy := util.CurrentGeoDNSPolicy()
+	proxy := captureNextTraceAPIV4Proxy(endpoint)
+	first := newNextTraceAPIV4ClientForPolicy(endpoint, "token-a", 2*time.Second, policy, proxy)
+	second := newNextTraceAPIV4ClientForPolicy(endpoint, "token-b", 3*time.Second, policy, proxy)
+	if first == second {
+		t.Fatal("clients were reused, want one lightweight client per construction")
+	}
+	if first.httpClient.Transport != second.httpClient.Transport {
+		t.Fatal("transport differs across token and timeout")
+	}
+	if first.token != "token-a" || second.token != "token-b" {
+		t.Fatalf("tokens = %q, %q, want per-client values", first.token, second.token)
+	}
+	if first.httpClient.Timeout != 2*time.Second || second.httpClient.Timeout != 3*time.Second {
+		t.Fatalf("timeouts = %s, %s, want per-client values", first.httpClient.Timeout, second.httpClient.Timeout)
+	}
+	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
+		t.Fatalf("transport factory calls = %d, want 1", got)
+	}
+}
 
-	if client != cached {
-		t.Fatal("cached client differs for endpoint with surrounding spaces")
+func TestNextTraceAPIV4TransportKeyIncludesFullGeoDNSPolicy(t *testing.T) {
+	oldFactory := nextTraceAPIV4TransportFactory
+	t.Cleanup(func() {
+		nextTraceAPIV4TransportFactory = oldFactory
+		resetNextTraceAPIV4TransportCache()
+	})
+
+	var factoryCalls int32
+	nextTraceAPIV4TransportFactory = func(string, util.GeoDNSPolicy, nextTraceAPIV4ProxyPolicy) *http.Transport {
+		atomic.AddInt32(&factoryCalls, 1)
+		return &http.Transport{}
+	}
+	resetNextTraceAPIV4TransportCache()
+
+	endpoint := "https://api.example.test/v4/ipGeo"
+	proxy := nextTraceAPIV4ProxyPolicy{identity: "direct"}
+	googleFallback := util.NewGeoDNSPolicy(" GOOGLE ", true)
+	googleStrict := util.NewGeoDNSPolicy("google", false)
+	cloudflareFallback := util.NewGeoDNSPolicy("cloudflare", true)
+
+	first := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, googleFallback, proxy)
+	strict := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, googleStrict, proxy)
+	cloudflare := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, cloudflareFallback, proxy)
+	reused := newNextTraceAPIV4ClientForPolicy(endpoint, "other-token", 3*time.Second, googleFallback, proxy)
+
+	if first.httpClient.Transport == strict.httpClient.Transport {
+		t.Fatal("fallback change reused transport")
+	}
+	if first.httpClient.Transport == cloudflare.httpClient.Transport {
+		t.Fatal("resolver change reused transport")
+	}
+	if first.httpClient.Transport != reused.httpClient.Transport {
+		t.Fatal("equivalent normalized policy did not reuse transport")
+	}
+	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
+		t.Fatalf("transport factory calls = %d, want 3 policies", got)
+	}
+}
+
+func TestNextTraceAPIV4TransportKeyIncludesProxyIdentity(t *testing.T) {
+	isolateNextTraceAPIV4ProxyEnv(t)
+	oldFactory := nextTraceAPIV4TransportFactory
+	oldProxy := util.EnvProxyURL
+	t.Cleanup(func() {
+		nextTraceAPIV4TransportFactory = oldFactory
+		util.EnvProxyURL = oldProxy
+		resetNextTraceAPIV4TransportCache()
+	})
+
+	var factoryCalls int32
+	nextTraceAPIV4TransportFactory = func(string, util.GeoDNSPolicy, nextTraceAPIV4ProxyPolicy) *http.Transport {
+		atomic.AddInt32(&factoryCalls, 1)
+		return &http.Transport{}
+	}
+	resetNextTraceAPIV4TransportCache()
+
+	endpoint := "https://api.example.test/v4/ipGeo"
+	policy := util.NewGeoDNSPolicy("", true)
+	util.EnvProxyURL = ""
+	direct := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, policy, captureNextTraceAPIV4Proxy(endpoint))
+	util.EnvProxyURL = "http://127.0.0.1:10001"
+	proxyOne := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, policy, captureNextTraceAPIV4Proxy(endpoint))
+	util.EnvProxyURL = "http://127.0.0.1:10002"
+	proxyTwo := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, policy, captureNextTraceAPIV4Proxy(endpoint))
+	util.EnvProxyURL = "http://127.0.0.1:10001"
+	proxyOneAgain := newNextTraceAPIV4ClientForPolicy(endpoint, "other-token", 3*time.Second, policy, captureNextTraceAPIV4Proxy(endpoint))
+
+	if direct.httpClient.Transport == proxyOne.httpClient.Transport {
+		t.Fatal("direct and proxied requests reused transport")
+	}
+	if proxyOne.httpClient.Transport == proxyTwo.httpClient.Transport {
+		t.Fatal("different proxies reused transport")
+	}
+	if proxyOne.httpClient.Transport != proxyOneAgain.httpClient.Transport {
+		t.Fatal("same proxy identity did not reuse transport")
+	}
+	if got := atomic.LoadInt32(&factoryCalls); got != 3 {
+		t.Fatalf("transport factory calls = %d, want 3 proxy identities", got)
+	}
+}
+
+func TestNextTraceAPIV4TransportKeyIncludesFullEnvironmentProxyConfig(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
+	oldFactory := nextTraceAPIV4TransportFactory
+	t.Cleanup(func() {
+		nextTraceAPIV4TransportFactory = oldFactory
+		resetNextTraceAPIV4TransportCache()
+	})
+
+	var factoryCalls int32
+	nextTraceAPIV4TransportFactory = func(string, util.GeoDNSPolicy, nextTraceAPIV4ProxyPolicy) *http.Transport {
+		atomic.AddInt32(&factoryCalls, 1)
+		return &http.Transport{}
+	}
+	resetNextTraceAPIV4TransportCache()
+
+	endpoint := "https://api.example.test/v4/ipGeo"
+	policy := util.NewGeoDNSPolicy("", true)
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:18443")
+	t.Setenv("NO_PROXY", "api.example.test")
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:18080")
+	first := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, policy, captureNextTraceAPIV4Proxy(endpoint))
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:18081")
+	second := newNextTraceAPIV4ClientForPolicy(endpoint, "token", 2*time.Second, policy, captureNextTraceAPIV4Proxy(endpoint))
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:18080")
+	firstAgain := newNextTraceAPIV4ClientForPolicy(endpoint, "other-token", 3*time.Second, policy, captureNextTraceAPIV4Proxy(endpoint))
+
+	if first.httpClient.Transport == second.httpClient.Transport {
+		t.Fatal("different environment proxy configurations reused transport")
+	}
+	if first.httpClient.Transport != firstAgain.httpClient.Transport {
+		t.Fatal("same environment proxy configuration did not reuse transport")
+	}
+	if got := atomic.LoadInt32(&factoryCalls); got != 2 {
+		t.Fatalf("transport factory calls = %d, want 2 configurations", got)
+	}
+}
+
+func TestNewNextTraceAPIV4TransportClonesSharedPolicyTransport(t *testing.T) {
+	isolateNextTraceAPIV4ProxyEnv(t)
+	oldProxy := util.EnvProxyURL
+	t.Cleanup(func() {
+		util.EnvProxyURL = oldProxy
+	})
+	util.EnvProxyURL = ""
+
+	policy := util.NewGeoDNSPolicy("", true)
+	shared, ok := util.NewSharedGeoHTTPClientWithPolicy(0, policy).Transport.(*http.Transport)
+	if !ok || shared == nil {
+		t.Fatal("shared policy transport is not *http.Transport")
+	}
+	derived := newNextTraceAPIV4Transport("https://api.example.test/v4/ipGeo", policy, captureNextTraceAPIV4Proxy("https://api.example.test/v4/ipGeo"))
+	if derived == shared {
+		t.Fatal("v4 transport reused mutable shared policy transport")
+	}
+	originalMaxIdle := shared.MaxIdleConns
+	derived.MaxIdleConns = originalMaxIdle + 1
+	if shared.MaxIdleConns != originalMaxIdle {
+		t.Fatal("mutating v4 transport changed shared policy transport")
+	}
+}
+
+func TestNextTraceAPIV4TransportCacheNormalizesEndpoint(t *testing.T) {
+	isolateNextTraceAPIV4ProxyEnv(t)
+	oldFactory := nextTraceAPIV4TransportFactory
+	t.Cleanup(func() {
+		nextTraceAPIV4TransportFactory = oldFactory
+		resetNextTraceAPIV4TransportCache()
+	})
+
+	var factoryCalls int32
+	nextTraceAPIV4TransportFactory = func(string, util.GeoDNSPolicy, nextTraceAPIV4ProxyPolicy) *http.Transport {
+		atomic.AddInt32(&factoryCalls, 1)
+		return &http.Transport{}
+	}
+	resetNextTraceAPIV4TransportCache()
+
+	endpoint := "https://api.example.test/v4/ipGeo"
+	policy := util.CurrentGeoDNSPolicy()
+	proxy := captureNextTraceAPIV4Proxy(endpoint)
+	client := newNextTraceAPIV4ClientForPolicy(" "+endpoint+" ", "test-token", 2*time.Second, policy, proxy)
+	cached := newNextTraceAPIV4ClientForPolicy(endpoint, "test-token", 2*time.Second, policy, proxy)
+
+	if client == cached {
+		t.Fatal("client was reused, want lightweight client per construction")
+	}
+	if client.httpClient.Transport != cached.httpClient.Transport {
+		t.Fatal("transport differs for endpoint with surrounding spaces")
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
 		t.Fatalf("factory calls = %d, want 1", got)
@@ -727,45 +1023,51 @@ func TestNextTraceAPIV4ClientCacheNormalizesEndpoint(t *testing.T) {
 	}
 }
 
-func TestNextTraceAPIV4ClientCacheEvictsOldestEntry(t *testing.T) {
-	oldFactory := nextTraceAPIV4HTTPClientFactory
-	oldResolver := util.CurrentGeoDNSResolver()
+func TestNextTraceAPIV4TransportCacheEvictsOldestEntry(t *testing.T) {
+	oldFactory := nextTraceAPIV4TransportFactory
+	oldCloseIdle := nextTraceAPIV4CloseIdleConnections
 	t.Cleanup(func() {
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		util.SetGeoDNSResolver(oldResolver)
-		resetNextTraceAPIV4ClientCache()
+		nextTraceAPIV4TransportFactory = oldFactory
+		nextTraceAPIV4CloseIdleConnections = oldCloseIdle
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	var factoryCalls int32
 	var closeIdleCalls int32
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
+	nextTraceAPIV4TransportFactory = func(string, util.GeoDNSPolicy, nextTraceAPIV4ProxyPolicy) *http.Transport {
 		atomic.AddInt32(&factoryCalls, 1)
-		return &http.Client{
-			Timeout:   timeout,
-			Transport: &closeIdleRoundTripper{closed: &closeIdleCalls},
-		}
+		return &http.Transport{}
 	}
-	util.SetGeoDNSResolver("")
-	resetNextTraceAPIV4ClientCache()
+	nextTraceAPIV4CloseIdleConnections = func(*http.Transport) {
+		atomic.AddInt32(&closeIdleCalls, 1)
+	}
+	resetNextTraceAPIV4TransportCache()
 
-	endpoint := "https://api.example.test/v4/ipGeo"
-	timeout := 2 * time.Second
-	firstKey := nextTraceAPIV4ClientCacheKey{
-		endpoint: endpoint,
-		token:    "token-0",
-		timeout:  timeout,
+	policy := util.NewGeoDNSPolicy("", true)
+	proxy := nextTraceAPIV4ProxyPolicy{identity: "direct"}
+	firstEndpoint := "https://api-0.example.test/v4/ipGeo"
+	firstKey := nextTraceAPIV4TransportCacheKey{
+		endpoint:      firstEndpoint,
+		geoDNSPolicy:  policy,
+		proxyIdentity: proxy.identity,
 	}
-	firstClient := cachedNextTraceAPIV4Client(endpoint, "token-0", timeout)
-	for i := 1; i <= nextTraceAPIV4CacheMaxSize; i++ {
-		_ = cachedNextTraceAPIV4Client(endpoint, "token-"+strconv.Itoa(i), timeout)
+	firstTransport := cachedNextTraceAPIV4Transport(firstEndpoint, policy, proxy)
+	for i := 1; i < nextTraceAPIV4CacheMaxSize; i++ {
+		endpoint := "https://api-" + strconv.Itoa(i) + ".example.test/v4/ipGeo"
+		_ = cachedNextTraceAPIV4Transport(endpoint, policy, proxy)
 	}
+	if cachedNextTraceAPIV4Transport(firstEndpoint, policy, proxy) != firstTransport {
+		t.Fatal("cache hit did not reuse first transport")
+	}
+	lastEndpoint := "https://api-" + strconv.Itoa(nextTraceAPIV4CacheMaxSize) + ".example.test/v4/ipGeo"
+	_ = cachedNextTraceAPIV4Transport(lastEndpoint, policy, proxy)
 
-	if got := nextTraceAPIV4ClientCacheLen(); got != nextTraceAPIV4CacheMaxSize {
+	if got := nextTraceAPIV4TransportCacheLen(); got != nextTraceAPIV4CacheMaxSize {
 		t.Fatalf("cache size = %d, want %d", got, nextTraceAPIV4CacheMaxSize)
 	}
-	nextTraceAPIV4ClientCacheMu.RLock()
-	_, firstStillCached := nextTraceAPIV4ClientCache[firstKey]
-	nextTraceAPIV4ClientCacheMu.RUnlock()
+	nextTraceAPIV4TransportCacheMu.RLock()
+	_, firstStillCached := nextTraceAPIV4TransportCache[firstKey]
+	nextTraceAPIV4TransportCacheMu.RUnlock()
 	if firstStillCached {
 		t.Fatal("oldest cache entry still present after exceeding cache size")
 	}
@@ -773,11 +1075,11 @@ func TestNextTraceAPIV4ClientCacheEvictsOldestEntry(t *testing.T) {
 		t.Fatalf("CloseIdleConnections calls after first eviction = %d, want 1", got)
 	}
 
-	recreated := cachedNextTraceAPIV4Client(endpoint, "token-0", timeout)
-	if recreated == firstClient {
-		t.Fatal("evicted cache entry reused old client")
+	recreated := cachedNextTraceAPIV4Transport(firstEndpoint, policy, proxy)
+	if recreated == firstTransport {
+		t.Fatal("evicted cache entry reused old transport")
 	}
-	if got := nextTraceAPIV4ClientCacheLen(); got != nextTraceAPIV4CacheMaxSize {
+	if got := nextTraceAPIV4TransportCacheLen(); got != nextTraceAPIV4CacheMaxSize {
 		t.Fatalf("cache size after recreating evicted entry = %d, want %d", got, nextTraceAPIV4CacheMaxSize)
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != int32(nextTraceAPIV4CacheMaxSize+2) {
@@ -788,45 +1090,46 @@ func TestNextTraceAPIV4ClientCacheEvictsOldestEntry(t *testing.T) {
 	}
 }
 
-func TestNextTraceAPIV4ClientCacheEvictsMultipleOldestEntries(t *testing.T) {
-	t.Cleanup(resetNextTraceAPIV4ClientCache)
-	resetNextTraceAPIV4ClientCache()
+func TestNextTraceAPIV4TransportCacheEvictsMultipleOldestEntries(t *testing.T) {
+	oldCloseIdle := nextTraceAPIV4CloseIdleConnections
+	t.Cleanup(func() {
+		nextTraceAPIV4CloseIdleConnections = oldCloseIdle
+		resetNextTraceAPIV4TransportCache()
+	})
+	resetNextTraceAPIV4TransportCache()
 
 	var closeIdleCalls int32
-	endpoint := "https://api.example.test/v4/ipGeo"
-	timeout := 2 * time.Second
 	total := nextTraceAPIV4CacheMaxSize + 3
-	keys := make([]nextTraceAPIV4ClientCacheKey, 0, total)
+	keys := make([]nextTraceAPIV4TransportCacheKey, 0, total)
+	policy := util.NewGeoDNSPolicy("", true)
+	proxy := nextTraceAPIV4ProxyPolicy{identity: "direct"}
+	nextTraceAPIV4CloseIdleConnections = func(*http.Transport) {
+		atomic.AddInt32(&closeIdleCalls, 1)
+	}
 
-	nextTraceAPIV4ClientCacheMu.Lock()
+	nextTraceAPIV4TransportCacheMu.Lock()
 	for i := 0; i < total; i++ {
-		key := nextTraceAPIV4ClientCacheKey{
-			endpoint: endpoint,
-			token:    "token-" + strconv.Itoa(i),
-			timeout:  timeout,
+		key := nextTraceAPIV4TransportCacheKey{
+			endpoint:      "https://api-" + strconv.Itoa(i) + ".example.test/v4/ipGeo",
+			geoDNSPolicy:  policy,
+			proxyIdentity: proxy.identity,
 		}
 		keys = append(keys, key)
-		nextTraceAPIV4ClientCache[key] = &NextTraceAPIV4Client{
-			endpoint: endpoint,
-			token:    key.token,
-			httpClient: &http.Client{
-				Timeout:   timeout,
-				Transport: &closeIdleRoundTripper{closed: &closeIdleCalls},
-			},
-		}
-		nextTraceAPIV4ClientCacheOrder = append(nextTraceAPIV4ClientCacheOrder, key)
+		nextTraceAPIV4TransportCache[key] = &http.Transport{}
+		nextTraceAPIV4TransportCacheOrder = append(nextTraceAPIV4TransportCacheOrder, key)
 	}
-	evictNextTraceAPIV4ClientCacheLocked()
-	gotLen := len(nextTraceAPIV4ClientCache)
-	gotOrder := append([]nextTraceAPIV4ClientCacheKey(nil), nextTraceAPIV4ClientCacheOrder...)
+	evicted := evictNextTraceAPIV4TransportCacheLocked()
+	gotLen := len(nextTraceAPIV4TransportCache)
+	gotOrder := append([]nextTraceAPIV4TransportCacheKey(nil), nextTraceAPIV4TransportCacheOrder...)
 	evictedStillCached := false
 	for _, key := range keys[:3] {
-		if nextTraceAPIV4ClientCache[key] != nil {
+		if nextTraceAPIV4TransportCache[key] != nil {
 			evictedStillCached = true
 			break
 		}
 	}
-	nextTraceAPIV4ClientCacheMu.Unlock()
+	nextTraceAPIV4TransportCacheMu.Unlock()
+	closeNextTraceAPIV4TransportIdleConnections(evicted)
 
 	if gotLen != nextTraceAPIV4CacheMaxSize {
 		t.Fatalf("cache size = %d, want %d", gotLen, nextTraceAPIV4CacheMaxSize)
@@ -842,14 +1145,17 @@ func TestNextTraceAPIV4ClientCacheEvictsMultipleOldestEntries(t *testing.T) {
 	}
 }
 
-func TestNextTraceAPIV4GeoIPCachesClientConcurrently(t *testing.T) {
+func TestNextTraceAPIV4GeoIPCachesTransportConcurrently(t *testing.T) {
+	isolateNextTraceAPIV4ProxyEnv(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "test-token")
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
+	oldFactory := nextTraceAPIV4TransportFactory
+	oldProxy := util.EnvProxyURL
 	t.Cleanup(func() {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		resetNextTraceAPIV4ClientCache()
+		nextTraceAPIV4TransportFactory = oldFactory
+		util.EnvProxyURL = oldProxy
+		resetNextTraceAPIV4TransportCache()
 	})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -859,14 +1165,15 @@ func TestNextTraceAPIV4GeoIPCachesClientConcurrently(t *testing.T) {
 	defer srv.Close()
 
 	var factoryCalls int32
+	util.EnvProxyURL = ""
 	nextTraceAPIV4GeoEndpoint = srv.URL
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
+	nextTraceAPIV4TransportFactory = func(string, util.GeoDNSPolicy, nextTraceAPIV4ProxyPolicy) *http.Transport {
 		atomic.AddInt32(&factoryCalls, 1)
-		client := srv.Client()
-		client.Timeout = timeout
-		return client
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		return transport
 	}
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 20)
@@ -886,7 +1193,7 @@ func TestNextTraceAPIV4GeoIPCachesClientConcurrently(t *testing.T) {
 		}
 	}
 	if got := atomic.LoadInt32(&factoryCalls); got != 1 {
-		t.Fatalf("factory calls = %d, want 1 cached client under concurrency", got)
+		t.Fatalf("transport factory calls = %d, want 1 under concurrency", got)
 	}
 }
 
