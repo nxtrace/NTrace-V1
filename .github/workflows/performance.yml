@@ -1,0 +1,428 @@
+name: Performance Evidence
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  linux-reference:
+    name: Linux cross-reference (no threshold)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BENCH_COUNT: "10"
+      BENCH_TIME: "1s"
+      BENCH_GOMAXPROCS: "10"
+      PROFILE_TIME: "30s"
+      GOEXPERIMENT: nojsonv2
+    steps:
+      - name: Checkout head history
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Select comparison commit
+        id: refs
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -Eeuo pipefail
+
+          has_harness() {
+            git cat-file -e "${1}:scripts/perf/run_benchmarks.sh" 2>/dev/null &&
+              git cat-file -e "${1}:scripts/perf/profile_benchmark.sh" 2>/dev/null
+          }
+
+          reference_sha=""
+          reference_kind="unavailable"
+          range=""
+
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            candidate_sha="${PR_BASE_SHA}"
+            range="${PR_BASE_SHA}..${HEAD_SHA}"
+          elif candidate_sha="$(git rev-parse "${HEAD_SHA}^" 2>/dev/null)"; then
+            range="${candidate_sha}..${HEAD_SHA}"
+          else
+            candidate_sha=""
+          fi
+
+          if [[ -n "${candidate_sha}" ]] && has_harness "${candidate_sha}"; then
+            reference_sha="${candidate_sha}"
+            reference_kind="base"
+          elif [[ -n "${range}" ]]; then
+            while IFS= read -r commit; do
+              if has_harness "${commit}"; then
+                reference_sha="${commit}"
+                reference_kind="first-harness"
+                break
+              fi
+            done < <(git rev-list --reverse "${range}")
+          fi
+
+          if [[ -z "${reference_sha}" ]]; then
+            echo "FAIL: no comparison commit contains the performance harness" >&2
+            exit 1
+          fi
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ || ! "${reference_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL: head and comparison refs must be full commit SHAs" >&2
+            exit 1
+          fi
+          if [[ "${reference_sha}" == "${HEAD_SHA}" ]]; then
+            echo "FAIL: comparison commit must differ from head" >&2
+            exit 1
+          fi
+
+          reference_go_directive="$(git show "${reference_sha}:go.mod" | awk '$1 == "go" { print $2; exit }')"
+          case "${reference_go_directive}" in
+            1.26*)
+              reference_go_version="1.26.8"
+              reference_toolchain="go1.26.8"
+              ;;
+            1.27*)
+              reference_go_version="1.27.1"
+              reference_toolchain="go1.27.1"
+              ;;
+            *)
+              echo "FAIL: unsupported comparison go directive: ${reference_go_directive:-missing}" >&2
+              exit 1
+              ;;
+          esac
+
+          evidence_dir="${RUNNER_TEMP}/performance-evidence"
+          mkdir -p "${evidence_dir}"
+          {
+            echo "head_sha=${HEAD_SHA}"
+            echo "reference_sha=${reference_sha:-unavailable}"
+            echo "reference_kind=${reference_kind}"
+            echo "reference_go_directive=${reference_go_directive}"
+            echo "reference_toolchain=${reference_toolchain}"
+            echo "event=${EVENT_NAME}"
+            echo "note=Linux measurements are cross-reference evidence only; no performance threshold is enforced."
+          } | tee "${evidence_dir}/selection.txt"
+
+          {
+            echo "head_sha=${HEAD_SHA}"
+            echo "reference_sha=${reference_sha}"
+            echo "reference_kind=${reference_kind}"
+            echo "reference_go_version=${reference_go_version}"
+            echo "reference_toolchain=${reference_toolchain}"
+          } >> "${GITHUB_OUTPUT}"
+
+          git switch --detach "${reference_sha}"
+          if [[ "$(git rev-parse HEAD)" != "${reference_sha}" ]]; then
+            echo "FAIL: comparison checkout did not resolve to ${reference_sha}" >&2
+            exit 1
+          fi
+
+      - name: Set up comparison Go
+        if: ${{ steps.refs.outputs.reference_sha != '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.refs.outputs.reference_go_version }}
+          check-latest: true
+          cache: false
+
+      - name: Record comparison environment
+        if: ${{ steps.refs.outputs.reference_sha != '' }}
+        shell: bash
+        env:
+          GOTOOLCHAIN: ${{ steps.refs.outputs.reference_toolchain }}
+          REFERENCE_KIND: ${{ steps.refs.outputs.reference_kind }}
+        run: |
+          set -Eeuo pipefail
+          result_dir="${RUNNER_TEMP}/performance-evidence/reference"
+          mkdir -p "${result_dir}"
+          {
+            echo "kind=${REFERENCE_KIND}"
+            echo "commit=$(git rev-parse HEAD)"
+            go version
+            echo "GOEXPERIMENT=$(go env GOEXPERIMENT)"
+            echo "GOMAXPROCS=${BENCH_GOMAXPROCS}"
+            echo "benchmark_count=${BENCH_COUNT}"
+            echo "benchmark_time=${BENCH_TIME}"
+            uname -a
+            lscpu
+          } > "${result_dir}/environment.txt"
+
+      - name: Benchmark comparison commit
+        id: reference_bench
+        if: ${{ steps.refs.outputs.reference_sha != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: ${{ steps.refs.outputs.reference_toolchain }}
+          PERF_RESULT_DIR: ${{ runner.temp }}/performance-evidence/reference
+        run: bash scripts/perf/run_benchmarks.sh reference
+
+      - name: Time comparison test suite
+        id: reference_tests
+        if: ${{ steps.refs.outputs.reference_sha != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: ${{ steps.refs.outputs.reference_toolchain }}
+        run: |
+          set -Eeuo pipefail
+          result_dir="${RUNNER_TEMP}/performance-evidence/reference"
+          /usr/bin/time -f 'elapsed_seconds=%e\nmax_rss_kb=%M\nexit_status=%x' \
+            -o "${result_dir}/tests.time.txt" \
+            go test -count=1 ./... 2>&1 | tee "${result_dir}/tests.txt"
+
+      - name: Profile comparison MTR benchmark
+        id: reference_profile
+        if: ${{ steps.refs.outputs.reference_sha != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: ${{ steps.refs.outputs.reference_toolchain }}
+          PERF_RESULT_DIR: ${{ runner.temp }}/performance-evidence/reference
+        run: bash scripts/perf/profile_benchmark.sh ./trace BenchmarkMTRAggregatorSnapshot64TTL4Paths reference-mtr
+
+      - name: Build comparison binaries
+        id: reference_build
+        if: ${{ steps.refs.outputs.reference_sha != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: ${{ steps.refs.outputs.reference_toolchain }}
+        run: |
+          set -Eeuo pipefail
+          result_dir="${RUNNER_TEMP}/performance-evidence/reference"
+          binary_dir="${result_dir}/binaries"
+          mkdir -p "${binary_dir}"
+          build_flags=(-buildvcs=false -trimpath -ldflags '-s -w -buildid=')
+
+          go build "${build_flags[@]}" -o "${binary_dir}/nexttrace" .
+          go build "${build_flags[@]}" -tags flavor_tiny -o "${binary_dir}/nexttrace-tiny" .
+          go build "${build_flags[@]}" -tags flavor_ntr -o "${binary_dir}/ntr" .
+
+          printf 'flavor\tbytes\n' > "${result_dir}/sizes.tsv"
+          for binary in "${binary_dir}"/*; do
+            printf '%s\t%s\n' "$(basename "${binary}")" "$(stat -c '%s' "${binary}")" >> "${result_dir}/sizes.tsv"
+          done
+          file "${binary_dir}"/* > "${result_dir}/binaries.txt"
+          sha256sum "${binary_dir}"/* > "${result_dir}/binaries.sha256"
+
+      - name: Switch to head commit
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL: head ref must be a full commit SHA" >&2
+            exit 1
+          fi
+          git switch --detach "${HEAD_SHA}"
+          if [[ "$(git rev-parse HEAD)" != "${HEAD_SHA}" ]]; then
+            echo "FAIL: head checkout did not resolve to ${HEAD_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Set up head Go 1.27.1
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+          check-latest: true
+          cache: false
+
+      - name: Record head environment
+        shell: bash
+        env:
+          GOTOOLCHAIN: go1.27.1
+        run: |
+          set -Eeuo pipefail
+          result_dir="${RUNNER_TEMP}/performance-evidence/head"
+          mkdir -p "${result_dir}"
+          {
+            echo "kind=head"
+            echo "commit=$(git rev-parse HEAD)"
+            go version
+            echo "GOEXPERIMENT=$(go env GOEXPERIMENT)"
+            echo "GOMAXPROCS=${BENCH_GOMAXPROCS}"
+            echo "benchmark_count=${BENCH_COUNT}"
+            echo "benchmark_time=${BENCH_TIME}"
+            uname -a
+            lscpu
+          } > "${result_dir}/environment.txt"
+
+      - name: Benchmark head commit
+        id: head_bench
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: go1.27.1
+          PERF_RESULT_DIR: ${{ runner.temp }}/performance-evidence/head
+        run: bash scripts/perf/run_benchmarks.sh head
+
+      - name: Time head test suite
+        id: head_tests
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: go1.27.1
+        run: |
+          set -Eeuo pipefail
+          result_dir="${RUNNER_TEMP}/performance-evidence/head"
+          /usr/bin/time -f 'elapsed_seconds=%e\nmax_rss_kb=%M\nexit_status=%x' \
+            -o "${result_dir}/tests.time.txt" \
+            go test -count=1 ./... 2>&1 | tee "${result_dir}/tests.txt"
+
+      - name: Profile head MTR benchmark
+        id: head_profile
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: go1.27.1
+          PERF_RESULT_DIR: ${{ runner.temp }}/performance-evidence/head
+        run: bash scripts/perf/profile_benchmark.sh ./trace BenchmarkMTRAggregatorSnapshot64TTL4Paths head-mtr
+
+      - name: Build head binaries
+        id: head_build
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: go1.27.1
+        run: |
+          set -Eeuo pipefail
+          result_dir="${RUNNER_TEMP}/performance-evidence/head"
+          binary_dir="${result_dir}/binaries"
+          mkdir -p "${binary_dir}"
+          build_flags=(-buildvcs=false -trimpath -ldflags '-s -w -buildid=')
+
+          go build "${build_flags[@]}" -o "${binary_dir}/nexttrace" .
+          go build "${build_flags[@]}" -tags flavor_tiny -o "${binary_dir}/nexttrace-tiny" .
+          go build "${build_flags[@]}" -tags flavor_ntr -o "${binary_dir}/ntr" .
+
+          printf 'flavor\tbytes\n' > "${result_dir}/sizes.tsv"
+          for binary in "${binary_dir}"/*; do
+            printf '%s\t%s\n' "$(basename "${binary}")" "$(stat -c '%s' "${binary}")" >> "${result_dir}/sizes.tsv"
+          done
+          file "${binary_dir}"/* > "${result_dir}/binaries.txt"
+          sha256sum "${binary_dir}"/* > "${result_dir}/binaries.sha256"
+
+      - name: Summarize benchmark comparison
+        id: benchstat
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: go1.27.1
+        run: |
+          set -Eeuo pipefail
+          evidence_dir="${RUNNER_TEMP}/performance-evidence"
+          reference_raw="${evidence_dir}/reference/reference.bench.txt"
+          head_raw="${evidence_dir}/head/head.bench.txt"
+          summary="${evidence_dir}/benchstat.txt"
+
+          if [[ ! -s "${reference_raw}" || ! -s "${head_raw}" ]]; then
+            echo "benchstat unavailable: reference or head benchmark output is missing" | tee "${summary}"
+            exit 1
+          fi
+
+          bash scripts/perf/compare_benchmarks.sh "${reference_raw}" "${head_raw}" | tee "${summary}"
+          {
+            echo "## Linux performance cross-reference"
+            echo
+            echo "These measurements are informational; no performance threshold is enforced."
+            echo
+            echo '```text'
+            cat "${summary}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload performance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/performance-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify performance evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          REFERENCE_SHA: ${{ steps.refs.outputs.reference_sha }}
+          REFERENCE_BENCH_OUTCOME: ${{ steps.reference_bench.outcome }}
+          REFERENCE_TESTS_OUTCOME: ${{ steps.reference_tests.outcome }}
+          REFERENCE_PROFILE_OUTCOME: ${{ steps.reference_profile.outcome }}
+          REFERENCE_BUILD_OUTCOME: ${{ steps.reference_build.outcome }}
+          HEAD_BENCH_OUTCOME: ${{ steps.head_bench.outcome }}
+          HEAD_TESTS_OUTCOME: ${{ steps.head_tests.outcome }}
+          HEAD_PROFILE_OUTCOME: ${{ steps.head_profile.outcome }}
+          HEAD_BUILD_OUTCOME: ${{ steps.head_build.outcome }}
+          BENCHSTAT_OUTCOME: ${{ steps.benchstat.outcome }}
+        run: |
+          set -Eeuo pipefail
+          evidence_dir="${RUNNER_TEMP}/performance-evidence"
+          failed=0
+
+          require_success() {
+            local label="$1"
+            local outcome="$2"
+            if [[ "${outcome}" != "success" ]]; then
+              echo "FAIL: ${label} step outcome is ${outcome:-unavailable}" >&2
+              failed=1
+            fi
+          }
+
+          require_file() {
+            local path="$1"
+            if [[ ! -s "${path}" ]]; then
+              echo "FAIL: missing or empty evidence file: ${path}" >&2
+              failed=1
+            fi
+          }
+
+          require_success "head benchmark" "${HEAD_BENCH_OUTCOME}"
+          require_success "head tests" "${HEAD_TESTS_OUTCOME}"
+          require_success "head profile" "${HEAD_PROFILE_OUTCOME}"
+          require_success "head binary build" "${HEAD_BUILD_OUTCOME}"
+          require_success "benchstat" "${BENCHSTAT_OUTCOME}"
+
+          require_file "${evidence_dir}/selection.txt"
+          require_file "${evidence_dir}/head/head.bench.txt"
+          require_file "${evidence_dir}/head/tests.time.txt"
+          require_file "${evidence_dir}/head/head-mtr.cpu.pprof"
+          require_file "${evidence_dir}/head/head-mtr.heap.pprof"
+          require_file "${evidence_dir}/head/sizes.tsv"
+          require_file "${evidence_dir}/head/binaries/nexttrace"
+          require_file "${evidence_dir}/head/binaries/nexttrace-tiny"
+          require_file "${evidence_dir}/head/binaries/ntr"
+          require_file "${evidence_dir}/benchstat.txt"
+
+          if [[ -n "${REFERENCE_SHA}" ]]; then
+            require_success "comparison benchmark" "${REFERENCE_BENCH_OUTCOME}"
+            require_success "comparison tests" "${REFERENCE_TESTS_OUTCOME}"
+            require_success "comparison profile" "${REFERENCE_PROFILE_OUTCOME}"
+            require_success "comparison binary build" "${REFERENCE_BUILD_OUTCOME}"
+
+            require_file "${evidence_dir}/reference/reference.bench.txt"
+            require_file "${evidence_dir}/reference/tests.time.txt"
+            require_file "${evidence_dir}/reference/reference-mtr.cpu.pprof"
+            require_file "${evidence_dir}/reference/reference-mtr.heap.pprof"
+            require_file "${evidence_dir}/reference/sizes.tsv"
+            require_file "${evidence_dir}/reference/binaries/nexttrace"
+            require_file "${evidence_dir}/reference/binaries/nexttrace-tiny"
+            require_file "${evidence_dir}/reference/binaries/ntr"
+          fi
+
+          if (( failed != 0 )); then
+            exit 1
+          fi

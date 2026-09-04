@@ -18,15 +18,23 @@ on:
     tags: [ "v*" ]
     paths:
       - "**/*.go"
+      - "**/testdata/**"
       - "go.mod"
       - "go.sum"
+      - "default.pgo"
+      - ".cross_compile.sh"
+      - "scripts/perf/**"
       - ".github/workflows/*.yml"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - "**/*.go"
+      - "**/testdata/**"
       - "go.mod"
       - "go.sum"
+      - "default.pgo"
+      - ".cross_compile.sh"
+      - "scripts/perf/**"
       - ".github/workflows/*.yml"
 
 jobs:
@@ -65,6 +73,8 @@ jobs:
           - { goos: openbsd, goarch: arm64 }
           - { goos: openbsd, goarch: arm,    goarm: 7 }
     env:
+      GOTOOLCHAIN: go1.27.1
+      GOEXPERIMENT: nojsonv2
       CGO_ENABLED: ${{ matrix.goos == 'android' && 1 || 0 }}
       GOOS:   ${{ matrix.goos }}
       GOARCH: ${{ matrix.goarch }}
@@ -80,7 +90,7 @@ jobs:
       - name: Set up Go (built-in cache)
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.27.1'
           check-latest: true
           cache: true
 
@@ -211,6 +221,8 @@ jobs:
       fail-fast: false
       matrix: { goarch: [ amd64, arm64 ] }
     env:
+      GOTOOLCHAIN: go1.27.1
+      GOEXPERIMENT: nojsonv2
       CGO_ENABLED: 1
       GOOS: darwin
       GOARCH: ${{ matrix.goarch }}
@@ -224,7 +236,7 @@ jobs:
       - name: Set up Go (built-in cache)
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.27.1'
           check-latest: true
           cache: true
 
@@ -252,8 +264,8 @@ jobs:
           CC="$(xcrun -f clang)";  CXX="$(xcrun -f clang++)"
           echo "CC=${CC}"   >> "$GITHUB_ENV"
           echo "CXX=${CXX}" >> "$GITHUB_ENV"
-          echo "CGO_CFLAGS=-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=11.0"  >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=11.0" >> "$GITHUB_ENV"
+          echo "CGO_CFLAGS=-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=13.0"  >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=13.0" >> "$GITHUB_ENV"
 
           BUILD_VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
           BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -267,11 +279,12 @@ jobs:
 
       - name: Build all flavors (Darwin, CGO+libpcap via SDK)
         run: |
+          set -Eeuo pipefail
           mkdir -p dist
           LD_BASE="-X github.com/nxtrace/NTrace-core/config.Version=${BUILD_VERSION} \
                    -X github.com/nxtrace/NTrace-core/config.BuildDate=${BUILD_DATE} \
                    -X github.com/nxtrace/NTrace-core/config.CommitID=${COMMIT_SHA1} \
-                   -w -s"
+                   -macos=13.0 -w -s"
           for SPEC in "nexttrace:" "nexttrace-tiny:flavor_tiny" "ntr:flavor_ntr"; do
             BIN="${SPEC%%:*}"
             TAGS="${SPEC#*:}"
@@ -281,6 +294,39 @@ jobs:
             BUILD_ARGS+=( -o "dist/${NAME}" -ldflags "$LD_BASE" )
             echo "build => dist/${NAME}  (tags: ${TAGS:-none})"
             go build "${BUILD_ARGS[@]}"
+          done
+
+      - name: Verify Darwin minimum OS
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+          artifacts=(dist/*_darwin_"${GOARCH}")
+          if [[ "${#artifacts[@]}" -ne 3 ]]; then
+            echo "FAIL: expected 3 Darwin artifacts, found ${#artifacts[@]}" >&2
+            exit 1
+          fi
+
+          for artifact in "${artifacts[@]}"; do
+            vtool_info="$(xcrun vtool -show-build "${artifact}")"
+            vtool_commands="$(awk '$1 == "cmd" && $2 == "LC_BUILD_VERSION" { count++ } END { print count + 0 }' <<<"${vtool_info}")"
+            vtool_minos="$(awk '$1 == "minos" { print $2 }' <<<"${vtool_info}")"
+            if [[ "${vtool_commands}" != "1" || "${vtool_minos}" != "13.0" ]]; then
+              echo "FAIL: ${artifact} does not have exactly one LC_BUILD_VERSION with minos 13.0" >&2
+              echo "${vtool_info}" >&2
+              exit 1
+            fi
+
+            otool_info="$(otool -l "${artifact}")"
+            otool_minos="$(awk '
+              $1 == "cmd" { in_build_version = ($2 == "LC_BUILD_VERSION") }
+              in_build_version && $1 == "minos" { print $2 }
+            ' <<<"${otool_info}")"
+            if [[ "${otool_minos}" != "13.0" ]]; then
+              echo "FAIL: otool did not confirm minos 13.0 for ${artifact}" >&2
+              echo "${otool_info}" >&2
+              exit 1
+            fi
+            echo "verified ${artifact}: LC_BUILD_VERSION minos 13.0"
           done
 
       - name: Verify tiny/ntr decoupling

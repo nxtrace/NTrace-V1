@@ -205,9 +205,12 @@ Starting from this release, NextTrace is published in **three flavors** under th
 
 ### Manual Build
 
-Build from source with Go 1.26.5+ installed:
+Build from source with Go 1.27.1+ installed. Release-equivalent builds currently use `GOEXPERIMENT=nojsonv2` to retain the established JSON behavior during the transition:
 
 ```bash
+export GOTOOLCHAIN=go1.27.1
+export GOEXPERIMENT=nojsonv2
+
 # Full (all features)
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
@@ -218,15 +221,18 @@ go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
 
-On macOS, source builds require Xcode Command Line Tools and cgo because TCP/UDP packet capture links against the system `libpcap`. For a native build, `go env CGO_ENABLED` must report `1`. If it reports `0`, remove any persistent override with `go env -u CGO_ENABLED`, ensure `xcode-select -p` succeeds, and build with `CGO_ENABLED=1`.
+On macOS, source builds require macOS 13.0 or later, Xcode Command Line Tools, and cgo because TCP/UDP packet capture links against the system `libpcap`. For a native build, `go env CGO_ENABLED` must report `1`. If it reports `0`, remove any persistent override with `go env -u CGO_ENABLED`, ensure `xcode-select -p` succeeds, and build with `CGO_ENABLED=1`.
 
 Cross-compile example:
 
 ```bash
 # Linux arm64, Tiny flavor
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+GOTOOLCHAIN=go1.27.1 GOEXPERIMENT=nojsonv2 \
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny_linux_arm64 -ldflags "-w -s" .
 ```
+
+Benchmark tooling is pinned in `go.mod`; compare saved results with `go tool benchstat before.txt after.txt`.
 
 The `tiny` and `ntr` flavors use **compile-time build tags** to exclude modules — this is not a runtime switch. You can verify with `go version -m <binary>` that `gin`, `globalping-cli`, and `github.com/natesales/q` are absent from `nexttrace-tiny` and `ntr`.
 

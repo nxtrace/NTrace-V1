@@ -206,9 +206,12 @@ Document Language: [English](README.md) | 简体中文
 
 ### 手动编译
 
-需要 Go 1.26.5+ 环境：
+需要 Go 1.27.1+ 环境。与正式发布一致的构建目前使用 `GOEXPERIMENT=nojsonv2`，以在迁移期间保持既有 JSON 行为：
 
 ```bash
+export GOTOOLCHAIN=go1.27.1
+export GOEXPERIMENT=nojsonv2
+
 # 完整版（所有功能）
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
@@ -219,15 +222,18 @@ go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
 
-macOS 源码编译需要 Xcode Command Line Tools 和 cgo，因为 TCP/UDP 抓包会链接系统 `libpcap`。原生编译时，`go env CGO_ENABLED` 必须输出 `1`；若输出 `0`，请用 `go env -u CGO_ENABLED` 清除持久化覆盖，确认 `xcode-select -p` 成功后，再以 `CGO_ENABLED=1` 编译。
+macOS 源码编译需要 macOS 13.0 或更高版本、Xcode Command Line Tools 和 cgo，因为 TCP/UDP 抓包会链接系统 `libpcap`。原生编译时，`go env CGO_ENABLED` 必须输出 `1`；若输出 `0`，请用 `go env -u CGO_ENABLED` 清除持久化覆盖，确认 `xcode-select -p` 成功后，再以 `CGO_ENABLED=1` 编译。
 
 交叉编译示例：
 
 ```bash
 # Linux arm64 精简版
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+GOTOOLCHAIN=go1.27.1 GOEXPERIMENT=nojsonv2 \
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny_linux_arm64 -ldflags "-w -s" .
 ```
+
+benchmark 工具已由 `go.mod` 固定版本；可用 `go tool benchstat before.txt after.txt` 比较保存的结果。
 
 `tiny` 和 `ntr` 版本通过 **编译期 build tags** 裁剪模块——不是运行时开关。可通过 `go version -m <binary>` 验证 `nexttrace-tiny` 和 `ntr` 中不包含 `gin`、`globalping-cli` 与 `github.com/natesales/q`。
 

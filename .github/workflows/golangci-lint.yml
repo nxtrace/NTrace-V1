@@ -14,16 +14,22 @@ on:
       - main
     paths:
       - "**/*.go"
+      - "**/testdata/**"
       - "go.mod"
       - "go.sum"
+      - "default.pgo"
+      - "scripts/perf/**"
       - ".golangci.yml"
       - ".github/workflows/golangci-lint.yml"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - "**/*.go"
+      - "**/testdata/**"
       - "go.mod"
       - "go.sum"
+      - "default.pgo"
+      - "scripts/perf/**"
       - ".golangci.yml"
       - ".github/workflows/golangci-lint.yml"
 
@@ -31,6 +37,8 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: go1.27.1
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v7
@@ -40,12 +48,13 @@ jobs:
       - name: Set up Go (built-in cache)
         uses: actions/setup-go@v7
         with:
-          go-version: "1.26.5"
+          go-version: "1.27.1"
           check-latest: true
           cache: true
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12
+          version: v2.13.2
+          install-mode: goinstall
           only-new-issues: true
