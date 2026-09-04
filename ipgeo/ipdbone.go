@@ -56,7 +56,7 @@ func (c *IPDBOneTokenCache) GetToken() string {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
-	if c.token == "" || time.Now().After(c.expiresAt) {
+	if c.token == "" || !time.Now().Before(c.expiresAt) {
 		return ""
 	}
 	return c.token
