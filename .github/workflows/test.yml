@@ -110,7 +110,10 @@ jobs:
       - name: Check shell syntax
         if: ${{ matrix.os == 'ubuntu-latest' }}
         shell: bash
-        run: bash -n .cross_compile.sh scripts/perf/*.sh
+        run: |
+          for script in .cross_compile.sh scripts/perf/*.sh; do
+            bash -n "${script}"
+          done
 
       - name: Build all flavors on Linux
         if: ${{ matrix.os == 'ubuntu-latest' }}
