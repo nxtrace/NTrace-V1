@@ -1215,6 +1215,25 @@ func TestNormalizedNextTraceAPIProviderArgsParseAgainstCanonicalSelector(t *test
 	}
 }
 
+func TestDataProviderSelectorAcceptsDN42(t *testing.T) {
+	for _, args := range [][]string{
+		{"nexttrace", "-d", "DN42"},
+		{"nexttrace", "--data-provider=dn42"},
+	} {
+		parser := argparse.NewParser("nexttrace", "")
+		provider := registerDataProviderFlag(parser)
+		if err := parser.Parse(args); err != nil {
+			t.Fatalf("Parse(%q) error = %v", args, err)
+		}
+		if !isDN42Provider(*provider) {
+			t.Fatalf("Parse(%q) provider = %q, want DN42", args, *provider)
+		}
+		if usage := parser.Usage(nil); !strings.Contains(usage, "DN42") {
+			t.Fatalf("Parse(%q) usage does not mention DN42: %s", args, usage)
+		}
+	}
+}
+
 func TestInitNextTraceAPIRuntimeCanonicalizesLegacyEnvironmentAlias(t *testing.T) {
 	isolateCmdNextTraceAPIV4TokenFiles(t)
 	oldEnvDataProvider := util.EnvDataProvider

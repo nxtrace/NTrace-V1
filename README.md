@@ -655,7 +655,7 @@ In MTR mode (`--mtr`, `-r`, `-w`, including `--raw`), `-i/--ttl-time` sets the *
 >
 > Note: `--mtr` cannot be used together with `--table`, `--classic`, `--json`, `--output`, `--output-default`, `--route-path`, `--from`, `--fast-trace`, `--file`, or `--deploy`.
 
-#### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`)
+#### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`, `DN42`)
 
 ##### LeoMoeAPI name migration
 
@@ -809,7 +809,7 @@ Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
                  [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
                  [--max-attempts <integer>] [--parallel-requests <integer>]
                  [-m|--max-hops <integer>] [-d|--data-provider
-                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip)]
+                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip|DN42|dn42)]
                  [--pow-provider (api.nxtrace.org|sakura)] [-n|--no-rdns]
                  [-a|--always-rdns] [-P|--route-path] [--dn42] [-o|--output
                  "<value>"] [-O|--output-default] [--table] [--raw]
@@ -864,7 +864,7 @@ Arguments:
   -d  --data-provider                Choose IP Geographic Data Provider
                                      [NextTrace-API, IP.SB, IPInfo, IPInsight,
                                      IP-API.com, IPInfoLocal, ipdb.one,
-                                     chunzhen, disable-geoip]. Default:
+                                     chunzhen, disable-geoip, DN42]. Default:
                                      NextTrace-API
       --pow-provider                 Choose PoW Provider for NextTrace API v3
                                      [api.nxtrace.org, sakura] For China
