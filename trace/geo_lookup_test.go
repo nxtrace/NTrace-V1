@@ -222,6 +222,46 @@ func TestLookupGeoWithRetryExpiredDeadlineReturnsDeadlineExceeded(t *testing.T) 
 	}
 }
 
+func TestLookupGeoWithRetryContinuesAfterAttemptDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timeouts := make(chan time.Duration, 2)
+		var calls atomic.Int32
+		sourceDone := make(chan struct{})
+		source := func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+			timeouts <- timeout
+			if calls.Add(1) == 1 {
+				time.Sleep(timeout + time.Second)
+				close(sourceDone)
+				return nil, context.DeadlineExceeded
+			}
+			return &ipgeo.IPGeoData{IP: ip, Asnumber: "64515"}, nil
+		}
+
+		geo, err := lookupGeoWithRetry(Config{
+			IPGeoSource:     source,
+			NumMeasurements: 2,
+		}, "203.0.113.10", "203.0.113.10", false)
+		if err != nil {
+			t.Fatalf("lookupGeoWithRetry() error = %v", err)
+		}
+		if geo == nil || geo.Asnumber != "64515" {
+			t.Fatalf("lookupGeoWithRetry() geo = %+v, want ASN 64515", geo)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("geo source calls = %d, want 2", got)
+		}
+		if got := <-timeouts; got != 2*time.Second {
+			t.Fatalf("first geo timeout = %s, want 2s", got)
+		}
+		if got := <-timeouts; got != 3*time.Second {
+			t.Fatalf("second geo timeout = %s, want 3s", got)
+		}
+
+		synctest.Wait()
+		<-sourceDone
+	})
+}
+
 func TestLookupGeoWithRetryClampsLargeOffset(t *testing.T) {
 	ClearCaches()
 	t.Cleanup(ClearCaches)

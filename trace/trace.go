@@ -1310,12 +1310,13 @@ func lookupGeoWithRetry(c Config, _ string, query string, dn42 bool) (*ipgeo.IPG
 		attemptErr := attemptCtx.Err()
 		cancel()
 		if err != nil {
-			lastErr = err
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			if attemptErr != nil {
-				return nil, attemptErr
+				lastErr = attemptErr
+			} else {
+				lastErr = err
 			}
 			continue
 		}
