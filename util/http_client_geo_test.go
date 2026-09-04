@@ -243,7 +243,7 @@ func geoProxyHelperEnvironment(base []string, helperEnv, proxyURL string) []stri
 		"HTTPS_PROXY":    "",
 		"ALL_PROXY":      "",
 		"NO_PROXY":       "",
-		"http_proxy":     "",
+		"http_proxy":     proxyURL,
 		"https_proxy":    "",
 		"all_proxy":      "",
 		"no_proxy":       "",
