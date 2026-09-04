@@ -23,7 +23,7 @@ bits 的合同，因此选用 prefix map。
 | --- | --- |
 | parent | `d2e27a66fbc13a4056d7cc4bf1d6c6da30164511` |
 | production benchmark head | `9ee2d1c53d6022a0d9990a38d184d9a38c371251` |
-| reviewed implementation/artifact head | `2e914d891d8a0b594041066a9e9797446d531355` |
+| reviewed implementation/artifact head | `d5775afa410e6b708d6ae7ff8e987909369a87ca` |
 | 主机 | Apple M5，10 核，32 GB 内存，AC 供电 |
 | 系统 | macOS 26.6.2，darwin/arm64 |
 | 工具链 | Go 1.27.1，`GOEXPERIMENT=nojsonv2` |
@@ -124,9 +124,9 @@ CPU 93.06% 累积于 `GeoFeedIndex.Lookup`，主要为 family lookup 和 map acc
 
 | Flavor | parent | implementation head | 未压缩变化 | UPX 变化 |
 | --- | ---: | ---: | ---: | ---: |
-| nexttrace | 29,687,968 / 9,693,824 B | 29,753,504 / 9,705,552 B | +0.2207% | +0.1210% |
-| nexttrace-tiny | 10,879,136 / 4,074,364 B | 10,879,136 / 4,090,140 B | 0.0000% | +0.3872% |
-| ntr | 10,879,136 / 4,074,220 B | 10,879,136 / 4,089,876 B | 0.0000% | +0.3843% |
+| nexttrace | 29,687,968 / 9,693,824 B | 29,753,504 / 9,705,360 B | +0.2207% | +0.1190% |
+| nexttrace-tiny | 10,879,136 / 4,074,364 B | 10,879,136 / 4,090,276 B | 0.0000% | +0.3905% |
+| ntr | 10,879,136 / 4,074,220 B | 10,879,136 / 4,090,164 B | 0.0000% | +0.3913% |
 
 ## 验证
 
@@ -134,7 +134,7 @@ CPU 93.06% 累积于 `GeoFeedIndex.Lookup`，主要为 family lookup 和 map acc
 
 - 4 列、6+ 列、短行、5 列、坏 CIDR、结构错误、I/O 错误和空文件。
 - 最长前缀、重复 prefix 最后一条有效记录覆盖、IPv4-mapped IPv6 和 0 alloc lookup。
-- path/mtime/size reload、失败保留、generation、并发装载及不可变快照。
+- path/mtime/size reload、stat/open 文件身份、失败保留、generation、并发装载及不可变快照。
 - 国家代码精确小写匹配和未知值回退。
 - CLI、REST/WS、service/MCP、FastTrace、nali、MTU 的 DN42 source 固定与保留地址查询。
 - MTR legacy/per-hop reset 刷新、旧 generation 取消及结果隔离。
