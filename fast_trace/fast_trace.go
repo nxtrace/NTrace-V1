@@ -55,6 +55,7 @@ type ParamsFastTrace struct {
 	RuntimePrepared bool
 	DataProvider    string
 	IPGeoSource     ipgeo.Source
+	IPGeoDescriptor func() ipgeo.SourceDescriptor
 	DN42            bool
 }
 
@@ -79,7 +80,7 @@ func fastTraceGeoSource(params ParamsFastTrace) ipgeo.Source {
 	if params.IPGeoSource != nil {
 		return params.IPGeoSource
 	}
-	return ipgeo.GetSource(fastTraceDataProvider(params))
+	return trace.CachedGeoSource(ipgeo.GetSourceDescriptorWithGeoDNS(fastTraceDataProvider(params), params.Dot))
 }
 
 func fastTraceDataProvider(params ParamsFastTrace) string {
@@ -98,9 +99,12 @@ func fastTraceDN42(params ParamsFastTrace) bool {
 }
 
 func pinFastTraceGeoSource(params ParamsFastTrace) ParamsFastTrace {
-	if params.IPGeoSource == nil {
-		params.IPGeoSource = fastTraceGeoSource(params)
+	if params.IPGeoSource != nil {
+		return params
 	}
+	descriptor := ipgeo.GetSourceDescriptorWithGeoDNS(fastTraceDataProvider(params), params.Dot)
+	params.IPGeoSource = trace.CachedGeoSource(descriptor)
+	params.IPGeoDescriptor = func() ipgeo.SourceDescriptor { return descriptor }
 	return params
 }
 
@@ -295,6 +299,7 @@ func buildFileTraceConfig(params ParamsFastTrace, tracerouteMethod trace.Method,
 		PacketInterval:   100,
 		TTLInterval:      500,
 		IPGeoSource:      fastTraceGeoSource(params),
+		IPGeoDescriptor:  params.IPGeoDescriptor,
 		Timeout:          params.Timeout,
 		SrcAddr:          params.SrcAddr,
 		SourceDevice:     params.SrcDev,
@@ -450,6 +455,7 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 		PacketInterval:   100,
 		TTLInterval:      500,
 		IPGeoSource:      fastTraceGeoSource(f.ParamsFastTrace),
+		IPGeoDescriptor:  f.ParamsFastTrace.IPGeoDescriptor,
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
 		SourceDevice:     f.ParamsFastTrace.SrcDev,

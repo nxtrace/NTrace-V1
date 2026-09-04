@@ -650,13 +650,8 @@ func TestLateMetadataCannotOverwritePromotedTerminalHop(t *testing.T) {
 	oldIP := net.ParseIP("8.8.4.101")
 	destinationIP := net.ParseIP("8.8.4.102")
 	oldKey := oldIP.String()
-	destinationKey := destinationIP.String()
-	geoCache.Delete(oldKey)
-	geoCache.Delete(destinationKey)
-	t.Cleanup(func() {
-		geoCache.Delete(oldKey)
-		geoCache.Delete(destinationKey)
-	})
+	ClearCaches()
+	t.Cleanup(ClearCaches)
 
 	oldStarted := make(chan struct{}, 1)
 	releaseOld := make(chan struct{})

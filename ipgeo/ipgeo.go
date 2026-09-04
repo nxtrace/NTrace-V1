@@ -30,6 +30,23 @@ type IPGeoData struct {
 
 type Source = func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error)
 
+// SourceDescriptor identifies a Source and the backend state that affects its
+// results. Namespace is empty only for descriptors constructed by callers.
+type SourceDescriptor struct {
+	Source        Source
+	Namespace     string
+	Backend       string
+	Generation    uint64
+	HasGeneration bool
+}
+
+// SourceDescriptorSession returns a descriptor whose Source and generation
+// belong to the same provider snapshot. Refresh is nil for static providers.
+type SourceDescriptorSession struct {
+	Current func() SourceDescriptor
+	Refresh func()
+}
+
 // SourceSession pins any provider state used by Source. Refresh is non-nil only
 // for providers whose snapshot can change during a long-lived session.
 type SourceSession struct {
@@ -37,8 +54,38 @@ type SourceSession struct {
 	Refresh func()
 }
 
-// NextTraceAPIProvider is the canonical data-provider value for the official API.
-const NextTraceAPIProvider = "NextTrace-API"
+const (
+	// NextTraceAPIProvider is the canonical user-facing provider value for the official API.
+	NextTraceAPIProvider = "NextTrace-API"
+
+	// SourceNamespaceNextTraceAPI identifies the official NextTrace GeoIP service.
+	SourceNamespaceNextTraceAPI = "nexttrace-api"
+	// SourceNamespaceIPAPI identifies both IPAPI.com and ip-api.com aliases.
+	SourceNamespaceIPAPI = "ip-api.com"
+	// SourceNamespaceIPSB identifies the IP.SB provider.
+	SourceNamespaceIPSB = "ip.sb"
+	// SourceNamespaceIPInsight identifies the IPInsight provider.
+	SourceNamespaceIPInsight = "ipinsight"
+	// SourceNamespaceIPInfo identifies the IPInfo provider.
+	SourceNamespaceIPInfo = "ipinfo"
+	// SourceNamespaceIPInfoLocal identifies the local IPInfo database.
+	SourceNamespaceIPInfoLocal = "ipinfolocal"
+	// SourceNamespaceChunzhen identifies the local Chunzhen database.
+	SourceNamespaceChunzhen = "chunzhen"
+	// SourceNamespaceIPDBOne identifies the IPDB.One provider.
+	SourceNamespaceIPDBOne = "ipdb.one"
+	// SourceNamespaceDisableGeoIP identifies the no-op GeoIP provider.
+	SourceNamespaceDisableGeoIP = "disable-geoip"
+	// SourceNamespaceDN42 identifies the DN42 GeoFeed provider.
+	SourceNamespaceDN42 = "dn42"
+
+	// SourceBackendNextTraceAPIV3 identifies the WebSocket API implementation.
+	SourceBackendNextTraceAPIV3 = "v3-websocket"
+	// SourceBackendNextTraceAPIV4 identifies the HTTP API implementation.
+	SourceBackendNextTraceAPIV4 = "v4-http"
+	// SourceBackendDN42GeoFeed identifies the DN42 GeoFeed implementation.
+	SourceBackendDN42GeoFeed = "geofeed"
+)
 
 // CanonicalizeNextTraceAPIProvider maps current and legacy official API names to the canonical value.
 func CanonicalizeNextTraceAPIProvider(provider string) string {
@@ -56,61 +103,131 @@ func IsNextTraceAPIProvider(provider string) bool {
 }
 
 func GetSource(s string) Source {
-	return GetSourceSession(s).Source
+	return GetSourceDescriptor(s).Source
 }
 
 // GetSourceSession returns a source whose provider state is fixed until Refresh
 // is called.
 func GetSourceSession(s string) SourceSession {
-	var source Source
-	switch strings.ToUpper(CanonicalizeNextTraceAPIProvider(s)) {
-	case "DN42":
-		return newDN42SourceSession()
-	case "NEXTTRACE-API":
-		source = NextTraceAPISource()
-	case "IP.SB":
-		source = IPSB
-	case "IPINSIGHT":
-		source = IPInSight
-	case "IPAPI.COM":
-		source = IPApiCom
-	case "IP-API.COM":
-		source = IPApiCom
-	case "IPINFO":
-		source = IPInfo
-	case "IPINFOLOCAL":
-		source = IPInfoLocal
-	case "CHUNZHEN":
-		source = Chunzhen
-	case "DISABLE-GEOIP":
-		source = disableGeoIP
-	case "IPDB.ONE":
-		source = IPDBOne
-	default:
-		source = NextTraceAPISource()
-	}
-	return SourceSession{Source: source}
+	return sourceSessionFromDescriptorSession(GetSourceDescriptorSession(s))
 }
 
 func GetSourceWithGeoDNS(s string, dotServer string) Source {
-	return GetSourceSessionWithGeoDNS(s, dotServer).Source
+	return GetSourceDescriptorWithGeoDNS(s, dotServer).Source
 }
 
 // GetSourceSessionWithGeoDNS applies a scoped DNS policy without changing the
 // session's refresh behavior.
 func GetSourceSessionWithGeoDNS(s string, dotServer string) SourceSession {
-	session := GetSourceSession(s)
-	base := session.Source
+	return sourceSessionFromDescriptorSession(GetSourceDescriptorSessionWithGeoDNS(s, dotServer))
+}
+
+// GetSourceDescriptor returns the current descriptor for provider s.
+func GetSourceDescriptor(s string) SourceDescriptor {
+	return GetSourceDescriptorSession(s).Current()
+}
+
+// GetSourceDescriptorWithGeoDNS returns the current descriptor with a scoped
+// DNS policy applied to its Source.
+func GetSourceDescriptorWithGeoDNS(s string, dotServer string) SourceDescriptor {
+	return GetSourceDescriptorSessionWithGeoDNS(s, dotServer).Current()
+}
+
+// GetSourceDescriptorSession returns a provider session with canonical cache
+// identity metadata.
+func GetSourceDescriptorSession(s string) SourceDescriptorSession {
+	return getSourceDescriptorSession(s, "", false)
+}
+
+// GetSourceDescriptorSessionWithGeoDNS applies a scoped DNS policy without
+// changing descriptor identity or refresh behavior.
+func GetSourceDescriptorSessionWithGeoDNS(s string, dotServer string) SourceDescriptorSession {
 	dotServer = strings.TrimSpace(strings.ToLower(dotServer))
-	if base == nil {
-		return session
+	return getSourceDescriptorSession(s, dotServer, true)
+}
+
+func getSourceDescriptorSession(s string, dotServer string, withGeoDNS bool) SourceDescriptorSession {
+	if sourceSelector(s) == "DN42" {
+		return newDN42SourceDescriptorSession(dotServer, withGeoDNS)
 	}
-	session.Source = func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
+
+	descriptor := sourceDescriptor(s)
+	descriptor.Source = applyGeoDNS(descriptor.Source, dotServer, withGeoDNS)
+	return SourceDescriptorSession{
+		Current: func() SourceDescriptor { return descriptor },
+	}
+}
+
+func sourceDescriptor(s string) SourceDescriptor {
+	switch sourceSelector(s) {
+	case "NEXTTRACE-API":
+		return nextTraceAPISourceDescriptor()
+	case "IP.SB":
+		return staticSourceDescriptor(IPSB, SourceNamespaceIPSB)
+	case "IPINSIGHT":
+		return staticSourceDescriptor(IPInSight, SourceNamespaceIPInsight)
+	case "IPAPI.COM", "IP-API.COM":
+		return staticSourceDescriptor(IPApiCom, SourceNamespaceIPAPI)
+	case "IPINFO":
+		return staticSourceDescriptor(IPInfo, SourceNamespaceIPInfo)
+	case "IPINFOLOCAL":
+		return staticSourceDescriptor(IPInfoLocal, SourceNamespaceIPInfoLocal)
+	case "CHUNZHEN":
+		return staticSourceDescriptor(Chunzhen, SourceNamespaceChunzhen)
+	case "DISABLE-GEOIP":
+		return staticSourceDescriptor(disableGeoIP, SourceNamespaceDisableGeoIP)
+	case "IPDB.ONE":
+		return staticSourceDescriptor(IPDBOne, SourceNamespaceIPDBOne)
+	default:
+		return nextTraceAPISourceDescriptor()
+	}
+}
+
+func sourceSelector(provider string) string {
+	return strings.ToUpper(strings.TrimSpace(CanonicalizeNextTraceAPIProvider(provider)))
+}
+
+func nextTraceAPISourceDescriptor() SourceDescriptor {
+	if NextTraceAPIV4TokenConfigured() {
+		return SourceDescriptor{
+			Source:    NextTraceAPIV4GeoIP,
+			Namespace: SourceNamespaceNextTraceAPI,
+			Backend:   SourceBackendNextTraceAPIV4,
+		}
+	}
+	return SourceDescriptor{
+		Source:    NextTraceAPIV3GeoIP,
+		Namespace: SourceNamespaceNextTraceAPI,
+		Backend:   SourceBackendNextTraceAPIV3,
+	}
+}
+
+func staticSourceDescriptor(source Source, namespace string) SourceDescriptor {
+	return SourceDescriptor{Source: source, Namespace: namespace, Backend: namespace}
+}
+
+func applyGeoDNS(source Source, dotServer string, enabled bool) Source {
+	if source == nil || !enabled {
+		return source
+	}
+	return func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
 		return util.WithGeoDNSResolver(dotServer, func() (*IPGeoData, error) {
-			return base(ip, timeout, lang, maptrace)
+			return source(ip, timeout, lang, maptrace)
 		})
 	}
-	return session
+}
+
+func sourceSessionFromDescriptorSession(session SourceDescriptorSession) SourceSession {
+	current := session.Current()
+	if session.Refresh == nil {
+		return SourceSession{Source: current.Source}
+	}
+	return SourceSession{
+		Source: func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
+			return session.Current().Source(ip, timeout, lang, maptrace)
+		},
+		Refresh: session.Refresh,
+	}
 }
 
 func disableGeoIP(string, time.Duration, string, bool) (*IPGeoData, error) {

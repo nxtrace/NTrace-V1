@@ -13,20 +13,28 @@ import (
 )
 
 func TestClearCachesRemovesAllEntries(t *testing.T) {
-	geoCache.Store("198.51.100.1", &ipgeo.IPGeoData{IP: "198.51.100.1"})
-	geoCache.Store("2001:db8::1", &ipgeo.IPGeoData{IP: "2001:db8::1"})
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+	var calls atomic.Int32
+	descriptor := geoCacheTestDescriptor(func(ip string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
+		calls.Add(1)
+		return &ipgeo.IPGeoData{IP: ip}, nil
+	})
+	if _, err := LookupIPGeoWithDescriptor(context.Background(), descriptor, "en", false, 1, "8.8.8.8"); err != nil {
+		t.Fatalf("initial LookupIPGeoWithDescriptor() error = %v", err)
+	}
 
 	ClearCaches()
 
-	if _, ok := geoCache.Load("198.51.100.1"); ok {
-		t.Fatal("IPv4 cache entry remained after ClearCaches")
+	if _, err := LookupIPGeoWithDescriptor(context.Background(), descriptor, "en", false, 1, "8.8.8.8"); err != nil {
+		t.Fatalf("post-clear LookupIPGeoWithDescriptor() error = %v", err)
 	}
-	if _, ok := geoCache.Load("2001:db8::1"); ok {
-		t.Fatal("IPv6 cache entry remained after ClearCaches")
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("source calls = %d, want 2 after ClearCaches", got)
 	}
 }
 
-func TestLookupIPGeoCachesResults(t *testing.T) {
+func TestLookupIPGeoBareSourceBypassesProcessCache(t *testing.T) {
 	ClearCaches()
 	t.Cleanup(ClearCaches)
 
@@ -53,8 +61,60 @@ func TestLookupIPGeoCachesResults(t *testing.T) {
 		}
 	}
 
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("geo source calls = %d, want 2 for unnamespaced source", got)
+	}
+}
+
+func TestLookupIPGeoWithDescriptorCachesResults(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	var calls atomic.Int32
+	descriptor := geoCacheTestDescriptor(func(ip string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
+		calls.Add(1)
+		return &ipgeo.IPGeoData{IP: ip, Asnumber: "13335"}, nil
+	})
+	for range 2 {
+		geo, err := LookupIPGeoWithDescriptor(context.Background(), descriptor, "en", false, 1, "1.1.1.1")
+		if err != nil {
+			t.Fatalf("LookupIPGeoWithDescriptor() error = %v", err)
+		}
+		if geo == nil || geo.Asnumber != "13335" {
+			t.Fatalf("LookupIPGeoWithDescriptor() geo = %+v, want ASN 13335", geo)
+		}
+	}
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("geo source calls = %d, want 1 due to shared cache", got)
+		t.Fatalf("geo source calls = %d, want 1 due to descriptor cache", got)
+	}
+}
+
+func TestLookupIPGeoWithDescriptorDN42BypassesFilterAndCaches(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	var calls atomic.Int32
+	descriptor := ipgeo.SourceDescriptor{
+		Source: func(ip string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
+			calls.Add(1)
+			return &ipgeo.IPGeoData{IP: ip, Asnumber: "4242420001"}, nil
+		},
+		Namespace:     ipgeo.SourceNamespaceDN42,
+		Backend:       ipgeo.SourceBackendDN42GeoFeed,
+		Generation:    1,
+		HasGeneration: true,
+	}
+	for range 2 {
+		geo, err := LookupIPGeoWithDescriptor(context.Background(), descriptor, "en", false, 1, "10.23.0.1")
+		if err != nil {
+			t.Fatalf("LookupIPGeoWithDescriptor() error = %v", err)
+		}
+		if geo == nil || geo.Asnumber != "4242420001" {
+			t.Fatalf("LookupIPGeoWithDescriptor() geo = %+v, want DN42 result", geo)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("DN42 source calls = %d, want 1", got)
 	}
 }
 
@@ -71,46 +131,75 @@ func TestLookupIPGeoRejectsNonIPTargets(t *testing.T) {
 	}
 }
 
-func TestLookupIPGeoHonorsContextCancellationDuringRetry(t *testing.T) {
-	ClearCaches()
-	t.Cleanup(ClearCaches)
+func TestLookupIPGeoHonorsContextCancellationDuringSourceCall(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		started := make(chan struct{})
+		release := make(chan struct{})
+		sourceDone := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			_, err := LookupIPGeo(ctx, func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
+				close(started)
+				<-release
+				close(sourceDone)
+				return &ipgeo.IPGeoData{}, nil
+			}, "en", false, 1, "8.8.8.8")
+			done <- err
+		}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	sourceEntered := make(chan struct{}, 1)
-	source := func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+		<-started
+		cancel()
+		synctest.Wait()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("LookupIPGeo() error = %v, want context.Canceled", err)
+		}
 		select {
-		case sourceEntered <- struct{}{}:
+		case <-sourceDone:
+			t.Fatal("blocked source finished before release")
 		default:
 		}
-		time.Sleep(200 * time.Millisecond)
-		return nil, context.DeadlineExceeded
-	}
+		close(release)
+		synctest.Wait()
+		<-sourceDone
+	})
+}
 
-	done := make(chan error, 1)
-	start := time.Now()
-	go func() {
-		_, err := LookupIPGeo(ctx, source, "en", false, 3, "8.8.8.8")
-		done <- err
-	}()
+func TestLookupIPGeoWithDescriptorHonorsContextCancellation(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		started := make(chan struct{})
+		release := make(chan struct{})
+		sourceDone := make(chan struct{})
+		done := make(chan error, 1)
+		descriptor := geoCacheTestDescriptor(func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
+			close(started)
+			<-release
+			close(sourceDone)
+			return &ipgeo.IPGeoData{}, nil
+		})
+		go func() {
+			_, err := LookupIPGeoWithDescriptor(ctx, descriptor, "en", false, 1, "8.8.8.8")
+			done <- err
+		}()
 
-	select {
-	case <-sourceEntered:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for geo lookup attempt to start")
-	}
-	cancel()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("LookupIPGeo() error = nil, want cancellation")
+		<-started
+		cancel()
+		synctest.Wait()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("LookupIPGeoWithDescriptor() error = %v, want context.Canceled", err)
 		}
-		if time.Since(start) >= 150*time.Millisecond {
-			t.Fatalf("LookupIPGeo() returned too slowly after cancellation: %v", time.Since(start))
+		select {
+		case <-sourceDone:
+			t.Fatal("blocked descriptor source finished before release")
+		default:
 		}
-	case <-time.After(time.Second):
-		t.Fatal("LookupIPGeo() did not return after cancellation")
-	}
+		close(release)
+		synctest.Wait()
+		<-sourceDone
+	})
 }
 
 func TestLookupGeoWithRetryExpiredDeadlineReturnsDeadlineExceeded(t *testing.T) {
@@ -131,6 +220,46 @@ func TestLookupGeoWithRetryExpiredDeadlineReturnsDeadlineExceeded(t *testing.T) 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("lookupGeoWithRetry() error = %v, want DeadlineExceeded", err)
 	}
+}
+
+func TestLookupGeoWithRetryContinuesAfterAttemptDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timeouts := make(chan time.Duration, 2)
+		var calls atomic.Int32
+		sourceDone := make(chan struct{})
+		source := func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+			timeouts <- timeout
+			if calls.Add(1) == 1 {
+				time.Sleep(timeout + time.Second)
+				close(sourceDone)
+				return nil, context.DeadlineExceeded
+			}
+			return &ipgeo.IPGeoData{IP: ip, Asnumber: "64515"}, nil
+		}
+
+		geo, err := lookupGeoWithRetry(Config{
+			IPGeoSource:     source,
+			NumMeasurements: 2,
+		}, "203.0.113.10", "203.0.113.10", false)
+		if err != nil {
+			t.Fatalf("lookupGeoWithRetry() error = %v", err)
+		}
+		if geo == nil || geo.Asnumber != "64515" {
+			t.Fatalf("lookupGeoWithRetry() geo = %+v, want ASN 64515", geo)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("geo source calls = %d, want 2", got)
+		}
+		if got := <-timeouts; got != 2*time.Second {
+			t.Fatalf("first geo timeout = %s, want 2s", got)
+		}
+		if got := <-timeouts; got != 3*time.Second {
+			t.Fatalf("second geo timeout = %s, want 3s", got)
+		}
+
+		synctest.Wait()
+		<-sourceDone
+	})
 }
 
 func TestLookupGeoWithRetryClampsLargeOffset(t *testing.T) {
@@ -164,29 +293,27 @@ func TestLookupGeoWithRetryDN42BypassesCache(t *testing.T) {
 	t.Cleanup(ClearCaches)
 
 	const key = "172.20.0.1,dn42.example"
-	stale := &ipgeo.IPGeoData{Asnumber: "STALE"}
-	geoCache.Store(key, stale)
-
 	var calls atomic.Int32
 	fresh := &ipgeo.IPGeoData{Asnumber: "FRESH"}
-	geo, err := lookupGeoWithRetry(Config{
-		IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
-			calls.Add(1)
-			return fresh, nil
-		},
+	source := func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+		calls.Add(1)
+		return fresh, nil
+	}
+	config := Config{
+		IPGeoSource:     source,
 		NumMeasurements: 1,
-	}, key, key, true)
-	if err != nil {
-		t.Fatalf("lookupGeoWithRetry() error = %v", err)
 	}
-	if geo != fresh {
-		t.Fatalf("lookupGeoWithRetry() geo = %+v, want fresh result", geo)
+	for range 2 {
+		geo, err := lookupGeoWithRetry(config, key, key, true)
+		if err != nil {
+			t.Fatalf("lookupGeoWithRetry() error = %v", err)
+		}
+		if geo != fresh {
+			t.Fatalf("lookupGeoWithRetry() geo = %+v, want fresh result", geo)
+		}
 	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("DN42 source calls = %d, want 1", got)
-	}
-	if cached, ok := geoCache.Load(key); !ok || cached != stale {
-		t.Fatalf("DN42 lookup changed shared cache: got %#v, want original stale entry", cached)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("DN42 source calls = %d, want 2 for bare source", got)
 	}
 }
 
@@ -299,7 +426,6 @@ func TestLookupIPGeoWithSessionBypassesFilterAndCacheWithoutRefreshing(t *testin
 	t.Cleanup(ClearCaches)
 
 	const query = "10.23.0.1"
-	geoCache.Store(query, &ipgeo.IPGeoData{Asnumber: "STALE"})
 
 	var state atomic.Int32
 	state.Store(1)
@@ -334,8 +460,5 @@ func TestLookupIPGeoWithSessionBypassesFilterAndCacheWithoutRefreshing(t *testin
 	}
 	if got := refreshCalls.Load(); got != 0 {
 		t.Fatalf("LookupIPGeoWithSession invoked Refresh %d times, want 0", got)
-	}
-	if cached, ok := geoCache.Load(query); !ok || cached.(*ipgeo.IPGeoData).Asnumber != "STALE" {
-		t.Fatalf("session lookup changed shared cache: %#v", cached)
 	}
 }

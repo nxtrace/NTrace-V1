@@ -32,23 +32,57 @@ func DN42(ip string, _ time.Duration, _ string, _ bool) (*IPGeoData, error) {
 	return lookupDN42(index, ip)
 }
 
-func newDN42SourceSession() SourceSession {
-	var index atomic.Pointer[dn42.GeoFeedIndex]
+func newDN42SourceDescriptorSession(dotServer string, withGeoDNS bool) SourceDescriptorSession {
+	return newDN42SourceDescriptorSessionWithLoader(dotServer, withGeoDNS, dn42.LoadGeoFeedIndex)
+}
+
+func newDN42SourceDescriptorSessionWithLoader(
+	dotServer string,
+	withGeoDNS bool,
+	load func() (*dn42.GeoFeedIndex, error),
+) SourceDescriptorSession {
+	var current atomic.Pointer[SourceDescriptor]
+	initialIndex, _ := load()
+	initial := dn42SourceDescriptor(initialIndex, dotServer, withGeoDNS)
+	current.Store(&initial)
+
 	refresh := func() {
-		next, _ := dn42.LoadGeoFeedIndex()
-		if next != nil {
-			index.Store(next)
+		index, _ := load()
+		if index == nil {
+			return
+		}
+		next := dn42SourceDescriptor(index, dotServer, withGeoDNS)
+		for {
+			previous := current.Load()
+			if previous != nil && previous.HasGeneration && previous.Generation >= next.Generation {
+				return
+			}
+			if current.CompareAndSwap(previous, &next) {
+				return
+			}
 		}
 	}
-	refresh()
 
-	return SourceSession{
-		Source: func(ip string, _ time.Duration, _ string, _ bool) (*IPGeoData, error) {
-			current := index.Load()
-			return lookupDN42(current, ip)
-		},
+	return SourceDescriptorSession{
+		Current: func() SourceDescriptor { return *current.Load() },
 		Refresh: refresh,
 	}
+}
+
+func dn42SourceDescriptor(index *dn42.GeoFeedIndex, dotServer string, withGeoDNS bool) SourceDescriptor {
+	source := Source(func(ip string, _ time.Duration, _ string, _ bool) (*IPGeoData, error) {
+		return lookupDN42(index, ip)
+	})
+	descriptor := SourceDescriptor{
+		Source:    applyGeoDNS(source, dotServer, withGeoDNS),
+		Namespace: SourceNamespaceDN42,
+		Backend:   SourceBackendDN42GeoFeed,
+	}
+	if index != nil {
+		descriptor.Generation = index.Generation()
+		descriptor.HasGeneration = true
+	}
+	return descriptor
 }
 
 func lookupDN42(index *dn42.GeoFeedIndex, ip string) (*IPGeoData, error) {

@@ -239,6 +239,12 @@ func TestBuildTraceConfig_PropagatesSessionScopedFields(t *testing.T) {
 	if cfg.IPGeoSource == nil {
 		t.Fatal("buildTraceConfig IPGeoSource = nil, want wrapped source")
 	}
+	if cfg.IPGeoDescriptor == nil {
+		t.Fatal("buildTraceConfig IPGeoDescriptor = nil")
+	}
+	if descriptor := cfg.IPGeoDescriptor(); descriptor.Namespace != ipgeo.SourceNamespaceIPInfo {
+		t.Fatalf("buildTraceConfig descriptor = %+v, want IPInfo", descriptor)
+	}
 	if cfg.TOS != 0 {
 		t.Fatalf("buildTraceConfig TOS = %d, want 0", cfg.TOS)
 	}
@@ -249,7 +255,7 @@ func TestBuildTraceConfig_DN42CarriesRefreshableSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildTraceConfig returned error: %v", err)
 	}
-	if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.RefreshIPGeoSource == nil {
+	if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.IPGeoDescriptor == nil || cfg.RefreshIPGeoSource == nil {
 		t.Fatalf("DN42 config = %+v", cfg)
 	}
 }

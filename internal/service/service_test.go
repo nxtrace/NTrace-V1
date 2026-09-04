@@ -289,8 +289,11 @@ func TestMTRReportCarriesPinnedDN42SourceAndRefresh(t *testing.T) {
 	})
 
 	runMTRFn = func(_ context.Context, _ trace.Method, cfg trace.Config, _ trace.MTROptions, _ trace.MTROnSnapshot) error {
-		if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.RefreshIPGeoSource == nil {
+		if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.IPGeoDescriptor == nil || cfg.RefreshIPGeoSource == nil {
 			return errors.New("MTR did not receive the DN42 source session")
+		}
+		if descriptor := cfg.IPGeoDescriptor(); descriptor.Namespace != ipgeo.SourceNamespaceDN42 || !descriptor.HasGeneration {
+			return fmt.Errorf("MTR descriptor = %+v", descriptor)
 		}
 		first, err := cfg.IPGeoSource("10.0.0.1", time.Second, "en", false)
 		if err != nil || first.City != "First" {
@@ -374,10 +377,12 @@ func TestAnnotateIPsAndGeoLookupInitializeDefaultNextTraceAPIV3Runtime(t *testin
 	defer restore()
 
 	var ensureCalls int
+	var lookupDescriptor ipgeo.SourceDescriptor
 	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
-	lookupIPGeoFn = func(_ context.Context, _ ipgeo.Source, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
+	lookupIPGeoWithDescriptorFn = func(_ context.Context, descriptor ipgeo.SourceDescriptor, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
+		lookupDescriptor = descriptor
 		return &ipgeo.IPGeoData{IP: query, Asnumber: "AS13335"}, nil
 	}
 
@@ -390,6 +395,9 @@ func TestAnnotateIPsAndGeoLookupInitializeDefaultNextTraceAPIV3Runtime(t *testin
 	if ensureCalls != 2 {
 		t.Fatalf("ensureNextTraceAPIV3Connection calls = %d, want 2", ensureCalls)
 	}
+	if lookupDescriptor.Namespace != ipgeo.SourceNamespaceNextTraceAPI || lookupDescriptor.Backend != ipgeo.SourceBackendNextTraceAPIV3 {
+		t.Fatalf("GeoLookup descriptor = %+v, want NextTrace API v3", lookupDescriptor)
+	}
 }
 
 func TestGeoLookupUsesNextTraceAPIV4FastIPInsteadOfV3WebSocketWhenTokenConfigured(t *testing.T) {
@@ -399,6 +407,7 @@ func TestGeoLookupUsesNextTraceAPIV4FastIPInsteadOfV3WebSocketWhenTokenConfigure
 
 	var ensureCalls int
 	var prepareCalls int
+	var lookupDescriptor ipgeo.SourceDescriptor
 	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
@@ -412,7 +421,8 @@ func TestGeoLookupUsesNextTraceAPIV4FastIPInsteadOfV3WebSocketWhenTokenConfigure
 		}
 		return nil
 	}
-	lookupIPGeoFn = func(_ context.Context, _ ipgeo.Source, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
+	lookupIPGeoWithDescriptorFn = func(_ context.Context, descriptor ipgeo.SourceDescriptor, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
+		lookupDescriptor = descriptor
 		return &ipgeo.IPGeoData{IP: query, Asnumber: "AS13335"}, nil
 	}
 
@@ -424,6 +434,9 @@ func TestGeoLookupUsesNextTraceAPIV4FastIPInsteadOfV3WebSocketWhenTokenConfigure
 	}
 	if prepareCalls != 1 {
 		t.Fatalf("PrepareNextTraceAPIV4FastIP calls = %d, want 1", prepareCalls)
+	}
+	if lookupDescriptor.Namespace != ipgeo.SourceNamespaceNextTraceAPI || lookupDescriptor.Backend != ipgeo.SourceBackendNextTraceAPIV4 {
+		t.Fatalf("GeoLookup descriptor = %+v, want NextTrace API v4", lookupDescriptor)
 	}
 }
 
@@ -441,7 +454,7 @@ func TestGeoLookupFallsBackToNextTraceAPIV3WebSocketWhenV4FastIPFails(t *testing
 		prepareCalls++
 		return errors.New("fastip unavailable")
 	}
-	lookupIPGeoFn = func(_ context.Context, _ ipgeo.Source, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
+	lookupIPGeoWithDescriptorFn = func(_ context.Context, _ ipgeo.SourceDescriptor, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
 		return &ipgeo.IPGeoData{IP: query, Asnumber: "AS13335"}, nil
 	}
 
@@ -464,7 +477,7 @@ func TestAnnotateIPsAndGeoLookupSkipNextTraceAPIRuntimeForDisabledGeoIP(t *testi
 	ensureNextTraceAPIV3ConnectionFn = func(context.Context) {
 		ensureCalls++
 	}
-	lookupIPGeoFn = func(_ context.Context, _ ipgeo.Source, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
+	lookupIPGeoWithDescriptorFn = func(_ context.Context, _ ipgeo.SourceDescriptor, _ string, _ bool, _ int, query string) (*ipgeo.IPGeoData, error) {
 		return &ipgeo.IPGeoData{IP: query}, nil
 	}
 
@@ -571,8 +584,7 @@ func stubServiceRuntimeForTests(t *testing.T) func() {
 	oldEnsureNextTraceAPIV3 := ensureNextTraceAPIV3ConnectionFn
 	oldPrepareFastIP := prepareNextTraceAPIV4FastIPFn
 	oldTracerouteWithContext := tracerouteWithContextFn
-	oldLookupIPGeo := lookupIPGeoFn
-	oldLookupIPGeoWithSession := lookupIPGeoWithSessionFn
+	oldLookupIPGeoWithDescriptor := lookupIPGeoWithDescriptorFn
 	oldRunMTR := runMTRFn
 	oldRunMTRRaw := runMTRRawFn
 	oldRunMTU := runMTUTraceFn
@@ -589,8 +601,7 @@ func stubServiceRuntimeForTests(t *testing.T) func() {
 		ensureNextTraceAPIV3ConnectionFn = oldEnsureNextTraceAPIV3
 		prepareNextTraceAPIV4FastIPFn = oldPrepareFastIP
 		tracerouteWithContextFn = oldTracerouteWithContext
-		lookupIPGeoFn = oldLookupIPGeo
-		lookupIPGeoWithSessionFn = oldLookupIPGeoWithSession
+		lookupIPGeoWithDescriptorFn = oldLookupIPGeoWithDescriptor
 		runMTRFn = oldRunMTR
 		runMTRRawFn = oldRunMTRRaw
 		runMTUTraceFn = oldRunMTU

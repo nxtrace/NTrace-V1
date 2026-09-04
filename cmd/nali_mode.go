@@ -11,6 +11,7 @@ import (
 
 	"github.com/nxtrace/NTrace-core/internal/nali"
 	"github.com/nxtrace/NTrace-core/ipgeo"
+	"github.com/nxtrace/NTrace-core/trace"
 )
 
 func registerNaliFlag(parser *argparse.Parser) *bool {
@@ -235,7 +236,7 @@ func runNaliMode(ctx context.Context, opts naliRunOptions) error {
 		family = nali.Family6
 	}
 	return nali.Run(ctx, nali.Config{
-		Source:  ipgeo.GetSourceWithGeoDNS(opts.data, opts.dot),
+		Source:  trace.CachedGeoSource(ipgeo.GetSourceDescriptorWithGeoDNS(opts.data, opts.dot)),
 		Timeout: time.Duration(opts.timeoutMs) * time.Millisecond,
 		Lang:    opts.lang,
 		Family:  family,

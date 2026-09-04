@@ -52,6 +52,7 @@ func (f *FastTracer) tracert_v6(location string, ispCollection ISPCollection) {
 		PacketInterval:   100,
 		TTLInterval:      500,
 		IPGeoSource:      fastTraceGeoSource(f.ParamsFastTrace),
+		IPGeoDescriptor:  f.ParamsFastTrace.IPGeoDescriptor,
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
 		SourceDevice:     f.ParamsFastTrace.SrcDev,

@@ -405,7 +405,9 @@ func buildTraceConfig(req traceRequest, method trace.Method, ip net.IP, dataProv
 		ostype = 2
 	}
 
-	session := ipgeo.GetSourceSessionWithGeoDNS(dataProvider, req.DotServer)
+	descriptorSession := ipgeo.GetSourceDescriptorSessionWithGeoDNS(dataProvider, req.DotServer)
+	descriptor := descriptorSession.Current()
+	session := trace.CachedGeoSourceSession(descriptorSession)
 	return trace.Config{
 		OSType:             ostype,
 		ICMPMode:           req.ICMPMode,
@@ -421,13 +423,14 @@ func buildTraceConfig(req traceRequest, method trace.Method, ip net.IP, dataProv
 		DstIP:              ip,
 		DstPort:            port,
 		IPGeoSource:        session.Source,
+		IPGeoDescriptor:    descriptorSession.Current,
 		RefreshIPGeoSource: session.Refresh,
 		RDNS:               !req.DisableRDNS,
 		AlwaysWaitRDNS:     alwaysWait,
 		PacketInterval:     req.PacketInterval,
 		TTLInterval:        req.TTLInterval,
 		Lang:               lang,
-		DN42:               req.DN42 || session.Refresh != nil,
+		DN42:               req.DN42 || descriptor.Namespace == ipgeo.SourceNamespaceDN42,
 		PktSize:            packetSizeSpec.PayloadSize,
 		RandomPacketSize:   packetSizeSpec.Random,
 		TOS:                tos,

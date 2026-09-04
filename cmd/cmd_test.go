@@ -513,8 +513,11 @@ func TestBuildTraceConfigPinsAndRefreshesDN42Source(t *testing.T) {
 		30, 50, 300, 3, 3, 18, "en", true, false, "DN42", 1000,
 		0, false, 0, false,
 	)
-	if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.RefreshIPGeoSource == nil {
+	if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.IPGeoDescriptor == nil || cfg.RefreshIPGeoSource == nil {
 		t.Fatalf("DN42 config = %+v", cfg)
+	}
+	if descriptor := cfg.IPGeoDescriptor(); descriptor.Namespace != ipgeo.SourceNamespaceDN42 || !descriptor.HasGeneration {
+		t.Fatalf("DN42 descriptor = %+v", descriptor)
 	}
 	first, err := cfg.IPGeoSource("10.0.0.1", time.Second, "en", false)
 	if err != nil || first.City != "First" {
