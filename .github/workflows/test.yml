@@ -65,14 +65,16 @@ jobs:
         if: ${{ matrix.os != 'windows-latest' }}
         shell: bash
         run: |
-          sudo env GOTOOLCHAIN="${GOTOOLCHAIN}" go test -v -covermode=count -coverprofile='coverage.out' ./...
+          GO_BIN="$(command -v go)"
+          sudo env GOTOOLCHAIN=go1.27.1 "${GO_BIN}" test -v -covermode=count -coverprofile='coverage.out' ./...
 
       - name: Test alternate flavors with unix
         if: ${{ matrix.os != 'windows-latest' }}
         shell: bash
         run: |
-          sudo env GOTOOLCHAIN="${GOTOOLCHAIN}" go test -tags flavor_tiny ./cmd ./server
-          sudo env GOTOOLCHAIN="${GOTOOLCHAIN}" go test -tags flavor_ntr ./cmd ./server
+          GO_BIN="$(command -v go)"
+          sudo env GOTOOLCHAIN=go1.27.1 "${GO_BIN}" test -tags flavor_tiny ./cmd ./server
+          sudo env GOTOOLCHAIN=go1.27.1 "${GO_BIN}" test -tags flavor_ntr ./cmd ./server
 
       - name: Verify q v0.19.12 adapter parity
         if: ${{ matrix.os == 'ubuntu-latest' }}
@@ -152,9 +154,10 @@ jobs:
 
       - name: Test with legacy JSON implementation
         run: |
-          sudo env GOTOOLCHAIN="${GOTOOLCHAIN}" GOEXPERIMENT="${GOEXPERIMENT}" go test ./...
-          sudo env GOTOOLCHAIN="${GOTOOLCHAIN}" GOEXPERIMENT="${GOEXPERIMENT}" go test -tags flavor_tiny ./cmd ./server
-          sudo env GOTOOLCHAIN="${GOTOOLCHAIN}" GOEXPERIMENT="${GOEXPERIMENT}" go test -tags flavor_ntr ./cmd ./server
+          GO_BIN="$(command -v go)"
+          sudo env GOTOOLCHAIN=go1.27.1 GOEXPERIMENT=nojsonv2 "${GO_BIN}" test ./...
+          sudo env GOTOOLCHAIN=go1.27.1 GOEXPERIMENT=nojsonv2 "${GO_BIN}" test -tags flavor_tiny ./cmd ./server
+          sudo env GOTOOLCHAIN=go1.27.1 GOEXPERIMENT=nojsonv2 "${GO_BIN}" test -tags flavor_ntr ./cmd ./server
 
   race:
     name: Race detector (Ubuntu)
