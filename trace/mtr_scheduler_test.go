@@ -1087,6 +1087,9 @@ func TestScheduler_AsyncMetadataSnapshotsBeforeGeoCompletes(t *testing.T) {
 }
 
 func TestScheduler_AsyncMetadataDedupesAndCachesByIP(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
 	var lookupCount int32
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
@@ -1109,11 +1112,11 @@ func TestScheduler_AsyncMetadataDedupesAndCachesByIP(t *testing.T) {
 		FillGeo:          true,
 		AsyncMetadata:    true,
 		BaseConfig: Config{
-			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+			IPGeoSource: CachedGeoSource(geoCacheTestDescriptor(func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
 				atomic.AddInt32(&lookupCount, 1)
 				time.Sleep(50 * time.Millisecond)
 				return &ipgeo.IPGeoData{Asnumber: "64513"}, nil
-			},
+			})),
 			Timeout: time.Second,
 		},
 	}, nil, nil)
@@ -1396,8 +1399,15 @@ func TestScheduler_AsyncMetadataUsesGeoCacheWithoutSourceLookup(t *testing.T) {
 	t.Cleanup(ClearCaches)
 
 	const ip = "8.8.8.82"
-	geoCache.Store(ip, &ipgeo.IPGeoData{Asnumber: "CACHE"})
 	var lookupCount int32
+	geoSource := CachedGeoSource(geoCacheTestDescriptor(func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+		atomic.AddInt32(&lookupCount, 1)
+		return &ipgeo.IPGeoData{Asnumber: "CACHE"}, nil
+	}))
+	if _, err := geoSource(ip, time.Second, "", false); err != nil {
+		t.Fatalf("seed geo cache: %v", err)
+	}
+	atomic.StoreInt32(&lookupCount, 0)
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			return mtrProbeResult{
@@ -1420,11 +1430,8 @@ func TestScheduler_AsyncMetadataUsesGeoCacheWithoutSourceLookup(t *testing.T) {
 		FillGeo:          true,
 		AsyncMetadata:    true,
 		BaseConfig: Config{
-			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
-				atomic.AddInt32(&lookupCount, 1)
-				return nil, errors.New("should use cache")
-			},
-			Timeout: time.Second,
+			IPGeoSource: geoSource,
+			Timeout:     time.Second,
 		},
 	}, nil, nil)
 	if err != nil {
@@ -2096,6 +2103,14 @@ func TestLookupMTRMetadataDN42BypassesRFCFilter(t *testing.T) {
 }
 
 func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	slowSource := func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+		time.Sleep(geoTimeoutForAttempt(0) + time.Second)
+		return &ipgeo.IPGeoData{Asnumber: "64514"}, nil
+	}
+	descriptor := geoCacheTestDescriptor(slowSource)
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			return mtrProbeResult{
@@ -2118,11 +2133,9 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 		FillGeo:          true,
 		AsyncMetadata:    true,
 		BaseConfig: Config{
-			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
-				time.Sleep(geoTimeoutForAttempt(0) + time.Second)
-				return &ipgeo.IPGeoData{Asnumber: "64514"}, nil
-			},
-			Timeout: 80 * time.Millisecond,
+			IPGeoSource:     slowSource,
+			IPGeoDescriptor: func() ipgeo.SourceDescriptor { return descriptor },
+			Timeout:         80 * time.Millisecond,
 		},
 	}, nil, nil)
 	if err != nil {

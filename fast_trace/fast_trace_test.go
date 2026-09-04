@@ -327,6 +327,9 @@ func TestBuildFileTraceConfigUsesPinnedDN42Source(t *testing.T) {
 	if !cfg.DN42 || cfg.IPGeoSource == nil {
 		t.Fatalf("DN42 config = %+v", cfg)
 	}
+	if cfg.IPGeoDescriptor != nil {
+		t.Fatal("custom IPGeoSource should not receive a process-cache descriptor")
+	}
 	if _, err := cfg.IPGeoSource("10.0.0.1", time.Second, "en", false); err != nil {
 		t.Fatalf("pinned source returned error: %v", err)
 	}
@@ -363,8 +366,11 @@ func TestPinFastTraceGeoSourceUsesEffectiveDN42Provider(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			params := pinFastTraceGeoSource(tt.params)
-			if params.IPGeoSource == nil || !fastTraceDN42(params) {
+			if params.IPGeoSource == nil || params.IPGeoDescriptor == nil || !fastTraceDN42(params) {
 				t.Fatalf("pinned params = %+v", params)
+			}
+			if descriptor := params.IPGeoDescriptor(); descriptor.Namespace != ipgeo.SourceNamespaceDN42 || !descriptor.HasGeneration {
+				t.Fatalf("pinned descriptor = %+v", descriptor)
 			}
 			geo, err := params.IPGeoSource("10.0.0.1", time.Second, "en", false)
 			if err != nil || geo.City != "DN42 City" {

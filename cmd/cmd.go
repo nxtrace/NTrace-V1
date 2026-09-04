@@ -846,7 +846,9 @@ func runFastTraceModeWithRuntime(ctx context.Context, dn42 bool, dataOrigin *str
 	defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
 	params.RuntimePrepared = runtimePrepared
 	params.DataProvider = *dataOrigin
-	params.IPGeoSource = ipgeo.GetSource(*dataOrigin)
+	descriptor := ipgeo.GetSourceDescriptorWithGeoDNS(*dataOrigin, params.Dot)
+	params.IPGeoSource = trace.CachedGeoSource(descriptor)
+	params.IPGeoDescriptor = func() ipgeo.SourceDescriptor { return descriptor }
 	params.DN42 = isDN42Provider(*dataOrigin)
 	return maybeRunFastTraceMode(from, fastTraceFlag, file, params, method)
 }
@@ -1049,7 +1051,8 @@ func buildTraceConfig(
 	disableMPLS bool,
 ) trace.Config {
 	dn42 = dn42 || isDN42Provider(dataOrigin)
-	session := ipgeo.GetSourceSession(dataOrigin)
+	descriptorSession := ipgeo.GetSourceDescriptorSession(dataOrigin)
+	session := trace.CachedGeoSourceSession(descriptorSession)
 	return trace.Config{
 		OSType:             osType,
 		ICMPMode:           icmpMode,
@@ -1070,6 +1073,7 @@ func buildTraceConfig(
 		RDNS:               !noRDNS,
 		AlwaysWaitRDNS:     alwaysRDNS,
 		IPGeoSource:        session.Source,
+		IPGeoDescriptor:    descriptorSession.Current,
 		RefreshIPGeoSource: session.Refresh,
 		Timeout:            time.Duration(timeout) * time.Millisecond,
 		PktSize:            packetSize,
@@ -1656,7 +1660,7 @@ func Execute() {
 			!*norDNS,
 			*alwaysrDNS,
 			isDN42Provider(*dataOrigin),
-			ipgeo.GetSource(*dataOrigin),
+			trace.CachedGeoSource(ipgeo.GetSourceDescriptorWithGeoDNS(*dataOrigin, *dot)),
 			*lang,
 		)
 		if err := runStandaloneMTUMode(conf, *jsonPrint); err != nil {
@@ -1713,6 +1717,21 @@ func Execute() {
 		}
 	}
 
+	globalpingConfig := trace.Config{
+		Context:         rootCtx,
+		OSType:          osType,
+		DN42:            *dn42 || isDN42Provider(*dataOrigin),
+		NumMeasurements: *numMeasurements,
+		Lang:            *lang,
+		RDNS:            !*norDNS,
+		AlwaysWaitRDNS:  *alwaysrDNS,
+		Timeout:         time.Duration(*timeout) * time.Millisecond,
+	}
+	if *from != "" {
+		globalpingDescriptor := ipgeo.GetSourceDescriptorWithGeoDNS(*dataOrigin, *dot)
+		globalpingConfig.IPGeoSource = trace.CachedGeoSource(globalpingDescriptor)
+		globalpingConfig.IPGeoDescriptor = func() ipgeo.SourceDescriptor { return globalpingDescriptor }
+	}
 	if maybeHandleGlobalping(
 		*from,
 		&trace.GlobalpingOptions{
@@ -1735,17 +1754,7 @@ func Execute() {
 			JSONPrint:    *jsonPrint,
 			ClearScreen:  stdoutIsTTY,
 		},
-		&trace.Config{
-			Context:         rootCtx,
-			OSType:          osType,
-			DN42:            *dn42 || isDN42Provider(*dataOrigin),
-			NumMeasurements: *numMeasurements,
-			Lang:            *lang,
-			RDNS:            !*norDNS,
-			AlwaysWaitRDNS:  *alwaysrDNS,
-			IPGeoSource:     ipgeo.GetSource(*dataOrigin),
-			Timeout:         time.Duration(*timeout) * time.Millisecond,
-		},
+		&globalpingConfig,
 	) {
 		return
 	}
