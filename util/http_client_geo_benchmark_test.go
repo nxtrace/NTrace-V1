@@ -137,10 +137,90 @@ func BenchmarkNewGeoHTTPClient(b *testing.B) {
 	})
 }
 
+func BenchmarkNewSharedGeoHTTPClient(b *testing.B) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "geo")
+	}))
+	b.Cleanup(server.Close)
+
+	b.Run("Construct", func(b *testing.B) {
+		b.ReportAllocs()
+		var client *http.Client
+		for b.Loop() {
+			client = NewSharedGeoHTTPClient(5 * time.Second)
+		}
+		b.ReportMetric(1, "clients/op")
+		benchmarkGeoHTTPClientSink = client
+	})
+
+	b.Run("MultiClientSequential", func(b *testing.B) {
+		clients := newSharedGeoHTTPBenchmarkClients(benchmarkGeoHTTPClientCount)
+		b.Cleanup(func() { closeGeoHTTPBenchmarkClients(clients) })
+		warmGeoHTTPBenchmarkClients(b, clients, server.URL)
+
+		b.ReportAllocs()
+		var total int64
+		clientIndex := 0
+		for b.Loop() {
+			n, err := runGeoHTTPBenchmarkRequest(clients[clientIndex], server.URL)
+			if err != nil {
+				b.Fatalf("client %d: %v", clientIndex, err)
+			}
+			total += n
+			clientIndex++
+			if clientIndex == len(clients) {
+				clientIndex = 0
+			}
+		}
+		b.ReportMetric(benchmarkGeoHTTPClientCount, "clients/set")
+		b.ReportMetric(1, "requests/op")
+		benchmarkGeoHTTPBytesSink = total
+	})
+
+	b.Run("MultiClientConcurrent", func(b *testing.B) {
+		clients := newSharedGeoHTTPBenchmarkClients(benchmarkGeoHTTPClientCount)
+		b.Cleanup(func() { closeGeoHTTPBenchmarkClients(clients) })
+		warmGeoHTTPBenchmarkClients(b, clients, server.URL)
+		results := make([]int64, benchmarkGeoHTTPClientCount)
+		errs := make([]error, benchmarkGeoHTTPClientCount)
+
+		b.ReportAllocs()
+		var total int64
+		for b.Loop() {
+			var wg sync.WaitGroup
+			wg.Add(benchmarkGeoHTTPClientCount)
+			for i, client := range clients {
+				go func(index int, requestClient *http.Client) {
+					defer wg.Done()
+					results[index], errs[index] = runGeoHTTPBenchmarkRequest(requestClient, server.URL)
+				}(i, client)
+			}
+			wg.Wait()
+			for i, err := range errs {
+				if err != nil {
+					b.Fatalf("client %d: %v", i, err)
+				}
+				total += results[i]
+			}
+		}
+		b.ReportMetric(benchmarkGeoHTTPClientCount, "clients/set")
+		b.ReportMetric(benchmarkGeoHTTPClientCount, "requests/op")
+		benchmarkGeoHTTPBytesSink = total
+	})
+}
+
 func newGeoHTTPBenchmarkClients(count int) []*http.Client {
 	clients := make([]*http.Client, count)
 	for i := range clients {
 		clients[i] = NewGeoHTTPClient(5 * time.Second)
+	}
+	return clients
+}
+
+func newSharedGeoHTTPBenchmarkClients(count int) []*http.Client {
+	clients := make([]*http.Client, count)
+	for i := range clients {
+		clients[i] = NewSharedGeoHTTPClient(5 * time.Second)
 	}
 	return clients
 }

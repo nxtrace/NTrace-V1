@@ -80,7 +80,7 @@ func GetSource(s string) Source {
 func GetSourceWithGeoDNS(s string, dotServer string) Source {
 	base := GetSource(s)
 	dotServer = strings.TrimSpace(strings.ToLower(dotServer))
-	if base == nil || dotServer == "" {
+	if base == nil {
 		return base
 	}
 	return func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {

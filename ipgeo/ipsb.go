@@ -14,11 +14,12 @@ import (
 
 func IPSB(ip string, timeout time.Duration, _ string, _ bool) (*IPGeoData, error) {
 	url := token.BaseOrDefault("https://api.ip.sb/geoip/") + ip
-	client := util.NewGeoHTTPClient(timeout)
-	req, err := http.NewRequest("GET", url, nil)
+	client := util.NewSharedGeoHTTPClient(timeout)
+	req, cancel, err := newGeoRequest(http.MethodGet, url, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("ip.sb: failed to create request: %w", err)
 	}
+	defer cancel()
 	// 设置 UA，ip.sb 默认禁止 go-client User-Agent 的 api 请求
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:100.0) Gecko/20100101 Firefox/100.0")
 	content, err := client.Do(req)

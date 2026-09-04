@@ -14,11 +14,12 @@ import (
 
 func Chunzhen(ip string, timeout time.Duration, _ string, _ bool) (*IPGeoData, error) {
 	url := util.GetEnvDefault("NEXTTRACE_CHUNZHENURL", "http://127.0.0.1:2060") + "?ip=" + ip
-	client := util.NewGeoHTTPClient(timeout)
-	req, err := http.NewRequest("GET", url, nil)
+	client := util.NewSharedGeoHTTPClient(timeout)
+	req, cancel, err := newGeoRequest(http.MethodGet, url, timeout)
 	if err != nil {
 		return &IPGeoData{}, fmt.Errorf("chunzhen: failed to create request: %w", err)
 	}
+	defer cancel()
 	content, err := client.Do(req)
 	if err != nil {
 		log.Println("纯真 请求超时(2s)，请切换其他API使用")
