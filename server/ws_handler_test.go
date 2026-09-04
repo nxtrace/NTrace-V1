@@ -26,13 +26,15 @@ type fakeWSConn struct {
 	writeStarted  chan struct{}
 	writeBlock    chan struct{}
 	closeOnce     sync.Once
+	writeOnce     sync.Once
+	closed        chan struct{}
 	closeCount    int
 	controlCount  int
 	deadlineCount int
 }
 
 func newFakeWSConn(blockWrites bool) *fakeWSConn {
-	conn := &fakeWSConn{}
+	conn := &fakeWSConn{closed: make(chan struct{})}
 	if blockWrites {
 		conn.writeStarted = make(chan struct{})
 		conn.writeBlock = make(chan struct{})
@@ -82,19 +84,24 @@ func (f *fakeWSConn) WriteControl(messageType int, data []byte, deadline time.Ti
 }
 
 func (f *fakeWSConn) Close() error {
+	f.mu.Lock()
+	f.closeCount++
+	f.mu.Unlock()
 	f.closeOnce.Do(func() {
-		f.mu.Lock()
-		f.closeCount++
-		f.mu.Unlock()
-		if f.writeBlock != nil {
-			close(f.writeBlock)
-		}
+		close(f.closed)
 	})
 	return nil
 }
 
 func (f *fakeWSConn) NextReader() (messageType int, r io.Reader, err error) {
+	<-f.closed
 	return 0, nil, io.EOF
+}
+
+func (f *fakeWSConn) releaseWrites() {
+	if f.writeBlock != nil {
+		f.writeOnce.Do(func() { close(f.writeBlock) })
+	}
 }
 
 type fakeWSInitConn struct {
@@ -232,7 +239,7 @@ func TestTraceWebsocketCanonicalizesLegacyProviderInStartAndComplete(t *testing.
 func TestNewWSSessionContextInheritsParentCancellation(t *testing.T) {
 	parent, cancelParent := context.WithCancel(context.Background())
 	ctx, cancel := newWSSessionContext(parent)
-	defer cancel()
+	defer cancel(nil)
 
 	cancelParent()
 
@@ -248,8 +255,11 @@ func TestNewWSSessionContextInheritsParentCancellation(t *testing.T) {
 
 func TestWSTraceSessionSend_QueueOverflowReturnsErrSlowConsumer(t *testing.T) {
 	conn := newFakeWSConn(true)
-	session := newWSTraceSession(conn, "cn", 1)
-	defer session.finish()
+	session := newWSTraceSession(context.Background(), conn, "cn", 1)
+	defer func() {
+		conn.releaseWrites()
+		session.finish()
+	}()
 
 	if err := session.send(wsEnvelope{Type: "first"}); err != nil {
 		t.Fatalf("first send returned error: %v", err)
@@ -267,11 +277,12 @@ func TestWSTraceSessionSend_QueueOverflowReturnsErrSlowConsumer(t *testing.T) {
 	if !session.closed.Load() {
 		t.Fatal("session should be marked closed after queue overflow")
 	}
+	conn.releaseWrites()
 }
 
 func TestWSTraceSessionWriter_PreservesEnvelopeOrder(t *testing.T) {
 	conn := newFakeWSConn(false)
-	session := newWSTraceSession(conn, "cn", 4)
+	session := newWSTraceSession(context.Background(), conn, "cn", 4)
 
 	if err := session.send(wsEnvelope{Type: "start"}); err != nil {
 		t.Fatalf("first send returned error: %v", err)
@@ -294,7 +305,7 @@ func TestWSTraceSessionWriter_PreservesEnvelopeOrder(t *testing.T) {
 
 func TestWSTraceSessionClose_IsIdempotent(t *testing.T) {
 	conn := newFakeWSConn(false)
-	session := newWSTraceSession(conn, "cn", 4)
+	session := newWSTraceSession(context.Background(), conn, "cn", 4)
 
 	session.closeWithCode(websocket.CloseTryAgainLater, "slow consumer")
 	session.closeWithCode(websocket.CloseTryAgainLater, "slow consumer")
@@ -325,7 +336,7 @@ func TestRunMTRTraceStreamsPathEndAndCompleteState(t *testing.T) {
 	}
 
 	conn := newFakeWSConn(false)
-	session := newWSTraceSession(conn, "en", 8)
+	session := newWSTraceSession(context.Background(), conn, "en", 8)
 	runMTRTrace(context.Background(), session, &traceExecution{
 		Method: trace.ICMPTrace,
 		Config: trace.Config{MaxHops: 5},
@@ -372,7 +383,7 @@ func TestRunMTRTraceCancellationDoesNotInventPathEnd(t *testing.T) {
 	}
 
 	conn := newFakeWSConn(false)
-	session := newWSTraceSession(conn, "en", 8)
+	session := newWSTraceSession(context.Background(), conn, "en", 8)
 	runMTRTrace(context.Background(), session, &traceExecution{
 		Method: trace.ICMPTrace,
 		Config: trace.Config{MaxHops: 5},
@@ -409,7 +420,7 @@ func TestRunSingleTraceCompleteUsesSnakeCaseStopReason(t *testing.T) {
 	}
 
 	conn := newFakeWSConn(false)
-	session := newWSTraceSession(conn, "en", 4)
+	session := newWSTraceSession(context.Background(), conn, "en", 4)
 	runSingleTrace(context.Background(), session, &traceExecution{
 		Target:       "example.test",
 		Protocol:     "ICMP",
