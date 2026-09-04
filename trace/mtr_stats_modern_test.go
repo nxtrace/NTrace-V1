@@ -146,6 +146,29 @@ func TestMTRAggregatorModernStableObservationOrder(t *testing.T) {
 	}
 }
 
+func TestMTRAggregatorModernFirstAttemptMetadataWinsWithinUpdate(t *testing.T) {
+	agg := NewMTRAggregator()
+	first := modernTestIPHop(1, "192.0.2.6", 10*time.Millisecond)
+	second := modernTestIPHop(1, "192.0.2.6", 11*time.Millisecond)
+	second.Hostname = "later.example"
+
+	row := modernTestFindIP(t, agg.Update(modernTestResult(map[int][]Hop{
+		1: {first, second},
+	}), 2), "192.0.2.6")
+	if row.Host != "" {
+		t.Fatalf("host = %q, want first observation's empty metadata", row.Host)
+	}
+
+	first.Hostname = "first.example"
+	second.Hostname = "last.example"
+	row = modernTestFindIP(t, agg.Update(modernTestResult(map[int][]Hop{
+		1: {first, second},
+	}), 2), "192.0.2.6")
+	if row.Host != "first.example" {
+		t.Fatalf("host = %q, want first observation metadata", row.Host)
+	}
+}
+
 func TestMTRAggregatorModernComparableIdentities(t *testing.T) {
 	mappedIPv4 := &net.IPAddr{IP: net.ParseIP("::ffff:192.0.2.10")}
 	plainIPv4 := &net.TCPAddr{IP: net.IP{192, 0, 2, 10}, Port: 33434}
@@ -317,6 +340,9 @@ func TestMTRAggregatorModernPublishedSnapshotSurvivesMutations(t *testing.T) {
 	assertPublishedUnchanged("ClearHop")
 	agg.Reset()
 	assertPublishedUnchanged("Reset")
+	if agg.snapshot != nil {
+		t.Fatalf("Reset retained %d internally cached rows", len(agg.snapshot))
+	}
 }
 
 func TestMTRAggregatorModernCloneIsolationByTTL(t *testing.T) {

@@ -151,6 +151,7 @@ func (agg *MTRAggregator) Reset() {
 	agg.owned = agg.owned[:0]
 	clear(agg.bucketSnapshots)
 	agg.bucketSnapshots = agg.bucketSnapshots[:0]
+	agg.snapshot = nil
 	agg.nextOrder = 0
 	agg.updateSeq = 0
 	agg.markDirtyLocked()
