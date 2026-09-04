@@ -95,7 +95,7 @@ func (family geoFeedFamilyIndex) lookup(addr netip.Addr) (GeoFeedRecord, bool) {
 }
 
 func (store *geoFeedStore) load(path string) (*GeoFeedIndex, error) {
-	identity, err := statGeoFeed(path)
+	identity, _, err := statGeoFeed(path)
 	if err != nil {
 		return store.current.Load(), err
 	}
@@ -106,7 +106,7 @@ func (store *geoFeedStore) load(path string) (*GeoFeedIndex, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	identity, err = statGeoFeed(path)
+	identity, statInfo, err := statGeoFeed(path)
 	if err != nil {
 		return store.current.Load(), err
 	}
@@ -115,7 +115,7 @@ func (store *geoFeedStore) load(path string) (*GeoFeedIndex, error) {
 	}
 
 	generation := store.nextGeneration + 1
-	index, err := loadGeoFeedFile(path, identity, generation)
+	index, err := loadGeoFeedFile(path, identity, statInfo, generation)
 	if err != nil {
 		return store.current.Load(), err
 	}
@@ -124,15 +124,15 @@ func (store *geoFeedStore) load(path string) (*GeoFeedIndex, error) {
 	return index, nil
 }
 
-func statGeoFeed(path string) (geoFeedFileIdentity, error) {
+func statGeoFeed(path string) (geoFeedFileIdentity, os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return geoFeedFileIdentity{}, err
+		return geoFeedFileIdentity{}, nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return geoFeedFileIdentity{}, fmt.Errorf("geofeed %q is not a regular file", path)
+		return geoFeedFileIdentity{}, nil, fmt.Errorf("geofeed %q is not a regular file", path)
 	}
-	return geoFeedFileIdentity{path: path, modTime: info.ModTime(), size: info.Size()}, nil
+	return geoFeedFileIdentity{path: path, modTime: info.ModTime(), size: info.Size()}, info, nil
 }
 
 func (identity geoFeedFileIdentity) equal(other geoFeedFileIdentity) bool {
@@ -144,18 +144,21 @@ func (identity geoFeedFileIdentity) equal(other geoFeedFileIdentity) bool {
 func loadGeoFeedFile(
 	path string,
 	wantIdentity geoFeedFileIdentity,
+	wantInfo os.FileInfo,
 	generation uint64,
 ) (*GeoFeedIndex, error) {
-	return loadGeoFeedFileWithFinalStat(path, wantIdentity, generation, os.Stat)
+	return loadGeoFeedFileWithFileOps(path, wantIdentity, wantInfo, generation, os.Open, os.Stat)
 }
 
-func loadGeoFeedFileWithFinalStat(
+func loadGeoFeedFileWithFileOps(
 	path string,
 	wantIdentity geoFeedFileIdentity,
+	wantInfo os.FileInfo,
 	generation uint64,
+	openFile func(string) (*os.File, error),
 	finalStat func(string) (os.FileInfo, error),
 ) (*GeoFeedIndex, error) {
-	file, err := os.Open(path)
+	file, err := openFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +173,7 @@ func loadGeoFeedFileWithFinalStat(
 		modTime: openedInfo.ModTime(),
 		size:    openedInfo.Size(),
 	}
-	if !wantIdentity.equal(openedIdentity) {
+	if !wantIdentity.equal(openedIdentity) || !os.SameFile(wantInfo, openedInfo) {
 		return nil, fmt.Errorf("geofeed %q changed before loading", path)
 	}
 

@@ -256,18 +256,46 @@ func TestLoadGeoFeedFileRejectsSameMetadataReplacement(t *testing.T) {
 	writeGeoFeedAt(t, path, content, modTime)
 	writeGeoFeedAt(t, replacement, content, modTime)
 
-	identity, err := statGeoFeed(path)
+	identity, statInfo, err := statGeoFeed(path)
 	if err != nil {
 		t.Fatalf("statGeoFeed() error = %v", err)
 	}
-	_, err = loadGeoFeedFileWithFinalStat(
+	_, err = loadGeoFeedFileWithFileOps(
 		path,
 		identity,
+		statInfo,
 		1,
+		os.Open,
 		func(string) (os.FileInfo, error) { return os.Stat(replacement) },
 	)
 	if err == nil || !strings.Contains(err.Error(), "changed while loading") {
 		t.Fatalf("same-metadata replacement error = %v, want changed-while-loading error", err)
+	}
+}
+
+func TestLoadGeoFeedFileRejectsSameMetadataReplacementBeforeOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "geofeed.csv")
+	replacement := filepath.Join(dir, "replacement.csv")
+	modTime := time.Unix(1_700_000_000, 0)
+	content := "10.0.0.0/8,na,US,Same metadata\n"
+	writeGeoFeedAt(t, path, content, modTime)
+	writeGeoFeedAt(t, replacement, content, modTime)
+
+	identity, statInfo, err := statGeoFeed(path)
+	if err != nil {
+		t.Fatalf("statGeoFeed() error = %v", err)
+	}
+	_, err = loadGeoFeedFileWithFileOps(
+		path,
+		identity,
+		statInfo,
+		1,
+		func(string) (*os.File, error) { return os.Open(replacement) },
+		os.Stat,
+	)
+	if err == nil || !strings.Contains(err.Error(), "changed before loading") {
+		t.Fatalf("same-metadata replacement error = %v, want changed-before-loading error", err)
 	}
 }
 
