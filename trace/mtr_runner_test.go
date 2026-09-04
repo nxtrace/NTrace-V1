@@ -435,19 +435,15 @@ func newTestICMPEngine(timeout time.Duration) *mtrICMPEngine {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
-	engine := &mtrICMPEngine{
-		config:   Config{Timeout: timeout},
-		notifyCh: make(chan struct{}, 1),
-		sentAt:   make(map[int]mtrProbeMeta),
-		replied:  make(map[int]*mtrProbeReply),
-	}
-	engine.knownFinalTTL.Store(-1)
-	engine.roundFinalTTL.Store(-1)
+	engine := newMTRICMPEngineState(Config{Timeout: timeout}, 4, net.IPv4zero)
+	engine.notifyCh = make(chan struct{}, 1)
+	engine.sentAt = make(map[int]mtrProbeMeta)
+	engine.replied = make(map[int]*mtrProbeReply)
 	return engine
 }
 
-func TestNewTestICMPEngineInitialFinalTTL(t *testing.T) {
-	engine := newTestICMPEngine(time.Second)
+func TestNewMTRICMPEngineStateInitialFinalTTL(t *testing.T) {
+	engine := newMTRICMPEngineState(Config{Timeout: time.Second}, 4, net.IPv4zero)
 	if got := engine.knownFinalTTL.Load(); got != -1 {
 		t.Fatalf("knownFinalTTL = %d, want -1", got)
 	}

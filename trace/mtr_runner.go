@@ -338,6 +338,10 @@ func newMTRICMPEngine(config Config) (*mtrICMPEngine, error) {
 		return nil, fmt.Errorf("cannot determine local IP for MTR ICMP")
 	}
 
+	return newMTRICMPEngineState(config, ipVer, srcIP), nil
+}
+
+func newMTRICMPEngineState(config Config, ipVer int, srcIP net.IP) *mtrICMPEngine {
 	engine := &mtrICMPEngine{
 		config: config,
 		ipVer:  ipVer,
@@ -346,7 +350,7 @@ func newMTRICMPEngine(config Config) (*mtrICMPEngine, error) {
 	}
 	engine.knownFinalTTL.Store(-1)
 	engine.roundFinalTTL.Store(-1)
-	return engine, nil
+	return engine
 }
 
 func newMTREchoID() int {
