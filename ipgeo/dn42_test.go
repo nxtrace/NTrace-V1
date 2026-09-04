@@ -1,13 +1,16 @@
 package ipgeo
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	dn42data "github.com/nxtrace/NTrace-core/dn42"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +69,32 @@ func TestDN42SourceSessionPinsAndRefreshesIndex(t *testing.T) {
 	assertDN42GeoResult(t, GetSource("DN42"), "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
 }
 
+func TestDN42SourceDescriptorSessionPinsSourceAndGeneration(t *testing.T) {
+	geofeedPath := configureDN42GeoFeed(t, dn42GeoFeedA)
+	session := GetSourceDescriptorSessionWithGeoDNS(" dn42 ", "")
+	require.NotNil(t, session.Current)
+	require.NotNil(t, session.Refresh)
+
+	first := session.Current()
+	assert.Equal(t, SourceNamespaceDN42, first.Namespace)
+	assert.Equal(t, SourceBackendDN42GeoFeed, first.Backend)
+	assert.True(t, first.HasGeneration)
+	require.NotZero(t, first.Generation)
+	assertDN42GeoResult(t, first.Source, "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
+
+	writeDN42GeoFeed(t, geofeedPath, dn42GeoFeedB)
+	stillFirst := session.Current()
+	assert.Equal(t, first.Generation, stillFirst.Generation)
+	assertDN42GeoResult(t, stillFirst.Source, "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
+
+	session.Refresh()
+	second := session.Current()
+	assert.Greater(t, second.Generation, first.Generation)
+	assert.True(t, second.HasGeneration)
+	assertDN42GeoResult(t, second.Source, "China", "Taiwan", "Taipei", "AS650001", "Owner version B")
+	assertDN42GeoResult(t, first.Source, "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
+}
+
 func TestDN42CountryAreaContracts(t *testing.T) {
 	configureDN42GeoFeed(t, "192.0.2.1/32,hk,HK,Hong Kong\n"+
 		"192.0.2.2/32,tw,TW,Taipei\n"+
@@ -102,6 +131,112 @@ func TestDN42SourceSessionFailedRefreshKeepsSnapshot(t *testing.T) {
 	writeDN42GeoFeed(t, geofeedPath, dn42GeoFeedB)
 	session.Refresh()
 	assertDN42GeoResult(t, session.Source, "China", "Taiwan", "Taipei", "AS650001", "Owner version B")
+}
+
+func TestDN42SourceDescriptorRefreshUsesValidSnapshotReturnedWithError(t *testing.T) {
+	geofeedPath := configureDN42GeoFeed(t, dn42GeoFeedA)
+	firstIndex, err := dn42data.LoadGeoFeedIndex()
+	require.NoError(t, err)
+
+	writeDN42GeoFeed(t, geofeedPath, dn42GeoFeedB)
+	secondIndex, err := dn42data.LoadGeoFeedIndex()
+	require.NoError(t, err)
+	require.Greater(t, secondIndex.Generation(), firstIndex.Generation())
+
+	var calls atomic.Int32
+	wantErr := errors.New("reload failed")
+	session := newDN42SourceDescriptorSessionWithLoader("", false, func() (*dn42data.GeoFeedIndex, error) {
+		switch calls.Add(1) {
+		case 1:
+			return firstIndex, nil
+		case 2:
+			return secondIndex, wantErr
+		default:
+			return secondIndex, nil
+		}
+	})
+
+	before := session.Current()
+	session.Refresh()
+	afterRefresh := session.Current()
+	assert.Greater(t, afterRefresh.Generation, before.Generation)
+	assert.Equal(t, secondIndex.Generation(), afterRefresh.Generation)
+	assertDN42GeoResult(t, afterRefresh.Source, "China", "Taiwan", "Taipei", "AS650001", "Owner version B")
+}
+
+func TestDN42SourceDescriptorNilRefreshKeepsDescriptor(t *testing.T) {
+	configureDN42GeoFeed(t, dn42GeoFeedA)
+	index, err := dn42data.LoadGeoFeedIndex()
+	require.NoError(t, err)
+
+	var calls atomic.Int32
+	session := newDN42SourceDescriptorSessionWithLoader("", false, func() (*dn42data.GeoFeedIndex, error) {
+		if calls.Add(1) == 1 {
+			return index, nil
+		}
+		return nil, errors.New("no valid snapshot")
+	})
+
+	before := session.Current()
+	session.Refresh()
+	after := session.Current()
+	assert.Equal(t, before.Generation, after.Generation)
+	assertDN42GeoResult(t, after.Source, "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
+}
+
+func TestDN42SourceDescriptorInitialLoadUsesValidSnapshotReturnedWithError(t *testing.T) {
+	configureDN42GeoFeed(t, dn42GeoFeedA)
+	index, err := dn42data.LoadGeoFeedIndex()
+	require.NoError(t, err)
+
+	session := newDN42SourceDescriptorSessionWithLoader("", false, func() (*dn42data.GeoFeedIndex, error) {
+		return index, errors.New("current file is invalid")
+	})
+	descriptor := session.Current()
+	assert.True(t, descriptor.HasGeneration)
+	assert.Equal(t, index.Generation(), descriptor.Generation)
+	assertDN42GeoResult(t, descriptor.Source, "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
+}
+
+func TestDN42SourceDescriptorConcurrentRefreshCannotPublishOlderGeneration(t *testing.T) {
+	geofeedPath := configureDN42GeoFeed(t, dn42GeoFeedA)
+	firstIndex, err := dn42data.LoadGeoFeedIndex()
+	require.NoError(t, err)
+
+	writeDN42GeoFeed(t, geofeedPath, dn42GeoFeedB)
+	secondIndex, err := dn42data.LoadGeoFeedIndex()
+	require.NoError(t, err)
+	require.Greater(t, secondIndex.Generation(), firstIndex.Generation())
+
+	olderRefreshEntered := make(chan struct{})
+	releaseOlderRefresh := make(chan struct{})
+	var calls atomic.Int32
+	session := newDN42SourceDescriptorSessionWithLoader("", false, func() (*dn42data.GeoFeedIndex, error) {
+		switch calls.Add(1) {
+		case 1:
+			return firstIndex, errors.New("initial reload failed")
+		case 2:
+			close(olderRefreshEntered)
+			<-releaseOlderRefresh
+			return firstIndex, errors.New("older reload failed")
+		default:
+			return secondIndex, errors.New("newer reload failed")
+		}
+	})
+
+	olderDone := make(chan struct{})
+	go func() {
+		defer close(olderDone)
+		session.Refresh()
+	}()
+	<-olderRefreshEntered
+	session.Refresh()
+	close(releaseOlderRefresh)
+	<-olderDone
+
+	current := session.Current()
+	assert.Equal(t, secondIndex.Generation(), current.Generation)
+	assertDN42GeoResult(t, current.Source, "China", "Taiwan", "Taipei", "AS650001", "Owner version B")
 }
 
 func TestDN42SourceSessionConcurrentRefresh(t *testing.T) {
