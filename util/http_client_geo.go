@@ -71,9 +71,12 @@ func (p *geoHTTPTransportPool) transportFor(policy GeoDNSPolicy) *http.Transport
 }
 
 // NewGeoHTTPClient returns an independently configurable client whose Transport
-// captures the current Geo DNS policy.
+// follows the active Geo DNS policy when a connection is dialed.
 func NewGeoHTTPClient(timeout time.Duration) *http.Client {
-	return NewGeoHTTPClientWithPolicy(timeout, CurrentGeoDNSPolicy())
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: newGeoHTTPTransportForCurrentPolicy(timeout),
+	}
 }
 
 // NewGeoHTTPClientWithPolicy returns an independently configurable client for policy.
@@ -110,11 +113,31 @@ func newGeoHTTPTransport(policy GeoDNSPolicy) *http.Transport {
 	return newGeoHTTPTransportWithLookup(policy, LookupHostForGeoWithPolicy)
 }
 
-func newGeoHTTPTransportWithLookup(policy GeoDNSPolicy, lookup geoHostLookupFunc) *http.Transport {
-	transport := &http.Transport{}
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
-		transport = base.Clone()
+func newGeoHTTPTransportForCurrentPolicy(timeout time.Duration) *http.Transport {
+	transport := cloneDefaultGeoHTTPTransport()
+	dialer := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: 30 * time.Second,
 	}
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return dialer.DialContext(ctx, network, addr)
+		}
+		ips, err := LookupHostForGeo(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("geo DNS returned no IPs for host %q", host)
+		}
+		return dialGeoAddresses(ctx, network, port, ips, dialer.DialContext)
+	}
+	return transport
+}
+
+func newGeoHTTPTransportWithLookup(policy GeoDNSPolicy, lookup geoHostLookupFunc) *http.Transport {
+	transport := cloneDefaultGeoHTTPTransport()
 	if transport.MaxIdleConnsPerHost == 0 {
 		transport.MaxIdleConnsPerHost = geoHTTPDefaultMaxIdleConnsPerHost
 	}
@@ -136,6 +159,13 @@ func newGeoHTTPTransportWithLookup(policy GeoDNSPolicy, lookup geoHostLookupFunc
 		return dialGeoAddresses(ctx, network, port, ips, dialer.DialContext)
 	}
 	return transport
+}
+
+func cloneDefaultGeoHTTPTransport() *http.Transport {
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		return base.Clone()
+	}
+	return &http.Transport{}
 }
 
 func dialGeoAddresses(ctx context.Context, network, port string, ips []net.IP, dial geoDialContextFunc) (net.Conn, error) {

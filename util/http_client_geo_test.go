@@ -68,6 +68,44 @@ func TestNewGeoHTTPClientTransportRemainsIsolated(t *testing.T) {
 	}
 }
 
+func TestNewGeoHTTPClientUsesPolicyAtDialTime(t *testing.T) {
+	previousPolicy := CurrentGeoDNSPolicy()
+	previousOverride := getGeoResolverOverride()
+	t.Cleanup(func() {
+		setGeoDNSPolicy(previousPolicy)
+		setGeoResolverOverride(previousOverride)
+	})
+
+	lookupErr := errors.New("blocked test resolver")
+	setGeoResolverOverride(&net.Resolver{
+		PreferGo: true,
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, lookupErr
+		},
+	})
+	setGeoDNSPolicy(NewGeoDNSPolicy("cloudflare", false))
+	client := NewGeoHTTPClient(time.Second)
+	t.Cleanup(client.CloseIdleConnections)
+
+	setGeoDNSPolicy(NewGeoDNSPolicy("", true))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split test server address: %v", err)
+	}
+	resp, err := client.Get("http://" + net.JoinHostPort("localhost", port))
+	if err != nil {
+		t.Fatalf("request with policy changed after client creation: %v", err)
+	}
+	defer resp.Body.Close()
+	if body, err := io.ReadAll(resp.Body); err != nil || string(body) != "ok" {
+		t.Fatalf("response body = %q, err = %v, want ok", body, err)
+	}
+}
+
 func TestNewSharedGeoHTTPClientSharesTransportByPolicy(t *testing.T) {
 	defaultPolicy := NewGeoDNSPolicy("", true)
 	first := NewSharedGeoHTTPClientWithPolicy(500*time.Millisecond, defaultPolicy)
