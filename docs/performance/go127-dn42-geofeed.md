@@ -23,7 +23,7 @@ bits 的合同，因此选用 prefix map。
 | --- | --- |
 | parent | `d2e27a66fbc13a4056d7cc4bf1d6c6da30164511` |
 | production benchmark head | `9ee2d1c53d6022a0d9990a38d184d9a38c371251` |
-| final code head | `c844e49e09e29cec3e9789ac2c223e92adcb08bc` |
+| reviewed implementation/artifact head | `2e914d891d8a0b594041066a9e9797446d531355` |
 | 主机 | Apple M5，10 核，32 GB 内存，AC 供电 |
 | 系统 | macOS 26.6.2，darwin/arm64 |
 | 工具链 | Go 1.27.1，`GOEXPERIMENT=nojsonv2` |
@@ -114,7 +114,7 @@ CPU 93.06% 累积于 `GeoFeedIndex.Lookup`，主要为 family lookup 和 map acc
 
 ### Darwin arm64，未压缩
 
-| Flavor | parent | head | 变化 |
+| Flavor | parent | implementation head | 变化 |
 | --- | ---: | ---: | ---: |
 | nexttrace | 30,027,362 B | 30,043,938 B | +16,576 B / +0.0552% |
 | nexttrace-tiny | 10,950,674 B | 10,983,794 B | +33,120 B / +0.3024% |
@@ -122,11 +122,11 @@ CPU 93.06% 累积于 `GeoFeedIndex.Lookup`，主要为 family lookup 和 map acc
 
 ### Linux arm64，未压缩 / UPX `-9`
 
-| Flavor | parent | head | 未压缩变化 | UPX 变化 |
+| Flavor | parent | implementation head | 未压缩变化 | UPX 变化 |
 | --- | ---: | ---: | ---: | ---: |
-| nexttrace | 29,687,968 / 9,693,824 B | 29,753,504 / 9,705,776 B | +0.2207% | +0.1233% |
-| nexttrace-tiny | 10,879,136 / 4,074,364 B | 10,879,136 / 4,090,588 B | 0.0000% | +0.3982% |
-| ntr | 10,879,136 / 4,074,220 B | 10,879,136 / 4,090,568 B | 0.0000% | +0.4013% |
+| nexttrace | 29,687,968 / 9,693,824 B | 29,753,504 / 9,705,552 B | +0.2207% | +0.1210% |
+| nexttrace-tiny | 10,879,136 / 4,074,364 B | 10,879,136 / 4,090,140 B | 0.0000% | +0.3872% |
+| ntr | 10,879,136 / 4,074,220 B | 10,879,136 / 4,089,876 B | 0.0000% | +0.3843% |
 
 ## 验证
 
@@ -139,11 +139,14 @@ CPU 93.06% 累积于 `GeoFeedIndex.Lookup`，主要为 family lookup 和 map acc
 - CLI、REST/WS、service/MCP、FastTrace、nali、MTU 的 DN42 source 固定与保留地址查询。
 - MTR legacy/per-hop reset 刷新、旧 generation 取消及结果隔离。
 
-final code head 已通过默认 JSON 与 `nojsonv2` 完整测试、全仓 race、build、vet、
-golangci-lint、full/tiny/ntr、Web 前端 Node 测试、module verify/tidy diff、安装脚本
-smoke，以及 Linux、Windows、Darwin 现有构建矩阵。Darwin amd64/arm64 release-style
-产物的 `LC_BUILD_VERSION` 均为 `minos 13.0`。相同 `nojsonv2` 完整测试的墙钟耗时
-为 parent 33.69 秒、final code head 25.52 秒，两侧均通过。
+reviewed implementation/artifact head 已通过默认 JSON 与 `nojsonv2` 完整测试、全仓
+race、build、vet、golangci-lint、full/tiny/ntr、Web 前端 Node 测试、module
+verify/tidy diff、安装脚本 smoke，以及 Linux、Windows、Darwin 现有构建矩阵。
+Darwin amd64/arm64 release-style 产物的 `LC_BUILD_VERSION` 均为 `minos 13.0`。
+相同 `nojsonv2` 完整测试的成对墙钟记录为 parent 33.69 秒、实现头 25.52 秒，两侧
+均通过；review 修复后的实现头另以热构建缓存复核为 17.60 秒，不用于成对比较。
+紧随其后的证据提交只修改本 Markdown 文件，不改变 Go 源码或构建输入；PR exact-head
+CI 仍重新生成 benchmark、profile、测试耗时和三 flavor artifact 后才允许合并。
 
 ## 平台风险与回退
 
