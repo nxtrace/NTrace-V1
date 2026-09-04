@@ -1,6 +1,7 @@
 package ipgeo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,9 +11,15 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/nxtrace/NTrace-core/config"
 	"github.com/nxtrace/NTrace-core/util"
+)
+
+const (
+	ipdbOneDefaultTimeout = 3 * time.Second
+	ipdbOneTokenTTL       = 30 * time.Second
 )
 
 // LangMap shows language mapping for IPDB.One API
@@ -66,41 +73,70 @@ func (c *IPDBOneTokenCache) SetToken(token string, expiresIn time.Duration) {
 
 // IPDBOneClient handles communication with IPDB.One API
 type IPDBOneClient struct {
-	config     *IPDBOneConfig
-	tokenCache *IPDBOneTokenCache
-	tokenInit  *sync.Once
-	httpClient *http.Client
+	config          *IPDBOneConfig
+	tokenCache      *IPDBOneTokenCache
+	tokenGroup      *singleflight.Group
+	geoDNSPolicy    util.GeoDNSPolicy
+	tokenHTTPClient *http.Client
+	httpClient      *http.Client
+}
+
+type ipdbOneTokenFlightDeadlineError struct {
+	err      error
+	deadline time.Time
+}
+
+func (e *ipdbOneTokenFlightDeadlineError) Error() string {
+	return e.err.Error()
+}
+
+func (e *ipdbOneTokenFlightDeadlineError) Unwrap() error {
+	return e.err
 }
 
 // NewIPDBOneClient creates a new client for IPDB.One with default configuration
 func NewIPDBOneClient() *IPDBOneClient {
+	policy := util.CurrentGeoDNSPolicy()
+	httpClient := util.NewSharedGeoHTTPClientWithPolicy(ipdbOneDefaultTimeout, policy)
 	return &IPDBOneClient{
-		config:     GetDefaultConfig(),
-		tokenCache: &IPDBOneTokenCache{},
-		tokenInit:  &sync.Once{},
-		httpClient: util.NewGeoHTTPClient(3 * time.Second),
+		config:          GetDefaultConfig(),
+		tokenCache:      &IPDBOneTokenCache{},
+		tokenGroup:      &singleflight.Group{},
+		geoDNSPolicy:    policy,
+		tokenHTTPClient: util.NewSharedGeoHTTPClientWithPolicy(0, policy),
+		httpClient:      httpClient,
 	}
 }
 
 func (c *IPDBOneClient) cloneWithTimeout(timeout time.Duration) *IPDBOneClient {
-	if c == nil || timeout <= 0 {
+	if c == nil {
 		return c
 	}
+	policy := util.CurrentGeoDNSPolicy()
+	if timeout <= 0 {
+		timeout = c.httpClient.Timeout
+	}
+	tokenHTTPClient := c.tokenHTTPClient
+	if policy != c.geoDNSPolicy {
+		tokenHTTPClient = util.NewSharedGeoHTTPClientWithPolicy(0, policy)
+	}
 	return &IPDBOneClient{
-		config:     c.config,
-		tokenCache: c.tokenCache,
-		tokenInit:  c.tokenInit,
-		httpClient: util.NewGeoHTTPClient(timeout),
+		config:          c.config,
+		tokenCache:      c.tokenCache,
+		tokenGroup:      c.tokenGroup,
+		geoDNSPolicy:    policy,
+		tokenHTTPClient: tokenHTTPClient,
+		httpClient:      util.NewSharedGeoHTTPClientWithPolicy(timeout, policy),
 	}
 }
 
 // fetchToken requests a new authentication token from the API
-func (c *IPDBOneClient) fetchToken() error {
+func (c *IPDBOneClient) fetchToken(ctx context.Context) (string, error) {
 	authURL := c.config.BaseURL + "/auth/requestToken/query"
 
-	req, err := http.NewRequest("GET", authURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -108,65 +144,106 @@ func (c *IPDBOneClient) fetchToken() error {
 	req.Header.Set("x-api-id", c.config.ApiID)
 	req.Header.Set("x-api-key", c.config.ApiKey)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.tokenHTTPClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	statusCode := gjson.Get(string(body), "code").Int()
 	statusMessage := gjson.Get(string(body), "message").String()
 
 	if statusCode != 200 {
-		return errors.New("failed to authenticate: " + statusMessage)
+		return "", errors.New("failed to authenticate: " + statusMessage)
 	}
 
 	token := gjson.Get(string(body), "data.token").String()
 	if token == "" {
-		return errors.New("authentication failed: empty token received")
+		return "", errors.New("authentication failed: empty token received")
 	}
 
 	// Cache token with a 30-second expiration
-	c.tokenCache.SetToken(token, 30*time.Second)
-	return nil
+	c.tokenCache.SetToken(token, ipdbOneTokenTTL)
+	return token, nil
 }
 
 // ensureToken makes sure a valid token is available, fetching a new one if needed
-func (c *IPDBOneClient) ensureToken() error {
-	var initErr error
-
+func (c *IPDBOneClient) ensureToken(ctx context.Context) (string, error) {
 	// Ensure API credentials are set
 	if c.config.ApiID == "" || c.config.ApiKey == "" {
-		return errors.New("api id or api key is not set")
+		return "", errors.New("api id or api key is not set")
 	}
 
-	// Initialize token the first time this is called
-	c.tokenInit.Do(func() {
-		initErr = c.fetchToken()
-	})
-
-	if initErr != nil {
-		return initErr
+	if token := c.tokenCache.GetToken(); token != "" {
+		return token, nil
 	}
 
-	// If token expired or not available, get a new one
-	if c.tokenCache.GetToken() == "" {
-		return c.fetchToken()
-	}
+	for {
+		resultCh := c.tokenGroup.DoChan("token", func() (any, error) {
+			fetchCtx, cancel := c.tokenFlightContext(ctx)
+			defer cancel()
+			token, err := c.fetchTokenIfNeeded(fetchCtx)
+			if err != nil && errors.Is(fetchCtx.Err(), context.DeadlineExceeded) {
+				deadline, _ := fetchCtx.Deadline()
+				return "", &ipdbOneTokenFlightDeadlineError{err: err, deadline: deadline}
+			}
+			return token, err
+		})
 
-	return nil
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case result := <-resultCh:
+			if result.Err != nil {
+				if c.shouldRetryTokenFlight(ctx, result.Err) {
+					continue
+				}
+				return "", result.Err
+			}
+			return result.Val.(string), nil
+		}
+	}
+}
+
+func (c *IPDBOneClient) fetchTokenIfNeeded(ctx context.Context) (string, error) {
+	if token := c.tokenCache.GetToken(); token != "" {
+		return token, nil
+	}
+	return c.fetchToken(ctx)
+}
+
+func (c *IPDBOneClient) tokenFlightContext(waiter context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := waiter.Deadline(); ok {
+		return context.WithDeadline(context.WithoutCancel(waiter), deadline)
+	}
+	return context.WithTimeout(context.WithoutCancel(waiter), ipdbOneDefaultTimeout)
+}
+
+func (c *IPDBOneClient) shouldRetryTokenFlight(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var flightErr *ipdbOneTokenFlightDeadlineError
+	if !errors.As(err, &flightErr) {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && deadline.After(flightErr.deadline)
 }
 
 // LookupIP queries the IP information from IPDB.One
 func (c *IPDBOneClient) LookupIP(ip string, lang string) (*IPGeoData, error) {
+	ctx, cancel := c.timeoutContext()
+	defer cancel()
 
 	// Ensure we have a valid token
-	if err := c.ensureToken(); err != nil {
+	token, err := c.ensureToken(ctx)
+	if err != nil {
 		return &IPGeoData{}, fmt.Errorf("ipdbone auth: %w", err)
 	}
 
@@ -179,14 +256,14 @@ func (c *IPDBOneClient) LookupIP(ip string, lang string) (*IPGeoData, error) {
 	// Query the IP information
 	queryURL := c.config.BaseURL + "/query/" + ip + "?lang=" + langCode
 
-	req, err := http.NewRequest("GET", queryURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, queryURL, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "NextTrace/"+config.Version)
-	req.Header.Set("Authorization", "Bearer "+c.tokenCache.GetToken())
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -205,6 +282,13 @@ func (c *IPDBOneClient) LookupIP(ip string, lang string) (*IPGeoData, error) {
 	}
 
 	return parseIPDBOneResponse(ip, body)
+}
+
+func (c *IPDBOneClient) timeoutContext() (context.Context, context.CancelFunc) {
+	if timeout := c.httpClient.Timeout; timeout > 0 {
+		return context.WithTimeout(context.Background(), timeout)
+	}
+	return context.WithCancel(context.Background())
 }
 
 // parseIPDBOneResponse converts the API response to an IPGeoData struct
@@ -269,9 +353,6 @@ var defaultClient = NewIPDBOneClient()
 
 // IPDBOne looks up IP information from IPDB.One (maintains backward compatibility)
 func IPDBOne(ip string, timeout time.Duration, lang string, _ bool) (*IPGeoData, error) {
-	client := defaultClient
-	if timeout > 0 {
-		client = defaultClient.cloneWithTimeout(timeout)
-	}
+	client := defaultClient.cloneWithTimeout(timeout)
 	return client.LookupIP(ip, lang)
 }
