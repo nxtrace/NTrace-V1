@@ -2,6 +2,9 @@
 
 set -Eeuo pipefail
 
+export GOTOOLCHAIN=go1.27.1
+export GOEXPERIMENT=nojsonv2
+
 # -------- Config --------
 # Usage: .cross_compile.sh [full|tiny|ntr|all] [debug]
 #   full  — build nexttrace (Full, includes WebUI + Globalping + MTR)
@@ -33,6 +36,7 @@ case "${FLAVOR_ARG}" in
 esac
 
 TARGET_DIR="dist"
+DARWIN_MIN_VERSION="13.0"
 PLATFORMS="linux/386 linux/amd64 linux/arm64 linux/mips linux/mips64 linux/mipsle linux/mips64le linux/loong64 windows/amd64 windows/arm64 openbsd/amd64 openbsd/arm64 freebsd/amd64 freebsd/arm64"
 UPX_BIN="${UPX_BIN:-$(command -v upx 2>/dev/null || true)}"
 UPX_FLAGS="${UPX_FLAGS:--9}"
@@ -80,8 +84,13 @@ build_one() {
     tags_flag=(-tags "${tags}")
   fi
 
+  local ldflags="${LD_BASE}"
+  if [[ "${goos}" == "darwin" ]]; then
+    ldflags="${ldflags} -macos=${DARWIN_MIN_VERSION}"
+  fi
+
   echo "build => ${target}  (tags: ${tags:-none})"
-  env "$@" go build "${GO_BUILD_FLAGS[@]}" "${tags_flag[@]}" -o "${target}" -ldflags "${LD_BASE}"
+  env "$@" go build "${GO_BUILD_FLAGS[@]}" "${tags_flag[@]}" -o "${target}" -ldflags "${ldflags}"
   compress_with_upx "${target}" "${goos}" "${goarch}" "${target_arm}" "quiet"
 }
 
@@ -187,8 +196,8 @@ if [[ "$(uname)" == "Darwin" ]]; then
     fi
 
     # 仅提供 SDK/架构/最低系统版本；-lpcap 交由源码中的 #cgo LDFLAGS 处理，避免重复
-    export CGO_CFLAGS="-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=11.0"
-    export CGO_LDFLAGS="-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=11.0"
+    export CGO_CFLAGS="-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=${DARWIN_MIN_VERSION}"
+    export CGO_LDFLAGS="-isysroot ${SDKROOT} ${ARCH_FLAG} -mmacosx-version-min=${DARWIN_MIN_VERSION}"
 
     for SPEC in "${FLAVOR_SPECS[@]}"; do
       BIN="${SPEC%%:*}"
