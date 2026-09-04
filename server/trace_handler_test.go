@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,16 +88,34 @@ func TestResolveTraceDataProviderCanonicalizesEnvironmentOverride(t *testing.T) 
 }
 
 func TestResolveTraceDataProviderAppliesDN42EnvironmentOverride(t *testing.T) {
-	t.Chdir(t.TempDir())
 	isolateServerNextTraceAPIV4Token(t, "")
 	oldEnvDataProvider := util.EnvDataProvider
-	defer func() { util.EnvDataProvider = oldEnvDataProvider }()
+	oldInitDN42Config := initDN42Config
+	t.Cleanup(func() {
+		util.EnvDataProvider = oldEnvDataProvider
+		initDN42Config = oldInitDN42Config
+	})
+	var initCalls atomic.Int32
+	initDN42Config = sync.OnceFunc(func() { initCalls.Add(1) })
 	util.EnvDataProvider = "dn42"
 
-	req := traceRequest{DataProvider: ipgeo.NextTraceAPIProvider}
-	got, needsV3 := resolveTraceDataProvider(&req)
-	if got != "DN42" || needsV3 || !req.DN42 || !req.DisableMaptrace {
-		t.Fatalf("resolveTraceDataProvider() = (%q, %v, DN42=%v, disableMaptrace=%v)", got, needsV3, req.DN42, req.DisableMaptrace)
+	var invalidResults atomic.Int32
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			req := traceRequest{DataProvider: ipgeo.NextTraceAPIProvider}
+			got, needsV3 := resolveTraceDataProvider(&req)
+			if got != "DN42" || needsV3 || !req.DN42 || !req.DisableMaptrace {
+				invalidResults.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if got := initCalls.Load(); got != 1 {
+		t.Fatalf("DN42 config initialization calls = %d, want 1", got)
+	}
+	if got := invalidResults.Load(); got != 0 {
+		t.Fatalf("invalid concurrent DN42 resolutions = %d, want 0", got)
 	}
 }
 

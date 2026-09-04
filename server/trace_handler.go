@@ -27,6 +27,7 @@ import (
 
 var traceMu = &service.RuntimeMu
 var nextTraceAPIV3ConnMu sync.Mutex
+var initDN42Config = sync.OnceFunc(config.InitConfig)
 var ensureNextTraceAPIV3ConnectionFn = ensureNextTraceAPIV3Connection
 var traceMapURLFn = tracemap.GetMapUrlWithContext
 var traceDomainLookupFn = util.DomainLookUpWithContext
@@ -195,7 +196,7 @@ func resolveTraceDataProvider(req *traceRequest) (string, bool) {
 	}
 	if strings.EqualFold(dataProvider, "DN42") {
 		req.DN42 = true
-		config.InitConfig()
+		initDN42Config()
 		req.DisableMaptrace = true
 		dataProvider = "DN42"
 	}
