@@ -147,6 +147,17 @@ func TestNewGeoHTTPTransportClonesDefaultTransportSettings(t *testing.T) {
 	}
 }
 
+func TestNewGeoHTTPTransportExpandsImplicitIdlePoolForSharedUse(t *testing.T) {
+	original := http.DefaultTransport
+	defer func() { http.DefaultTransport = original }()
+	http.DefaultTransport = &http.Transport{MaxIdleConnsPerHost: 0}
+
+	transport := newGeoHTTPTransport(NewGeoDNSPolicy("", true))
+	if transport.MaxIdleConnsPerHost != geoHTTPDefaultMaxIdleConnsPerHost {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want %d", transport.MaxIdleConnsPerHost, geoHTTPDefaultMaxIdleConnsPerHost)
+	}
+}
+
 func TestGeoHTTPTransportUsesProxyEnvironmentInFreshProcess(t *testing.T) {
 	const helperEnv = "NEXTTRACE_GEO_PROXY_HELPER"
 	if os.Getenv(helperEnv) == "1" {
@@ -244,6 +255,57 @@ func TestNewSharedGeoHTTPClientReusesConnectionsAcrossClientWrappers(t *testing.
 
 	if got := newConnections.Load(); got > 3 {
 		t.Fatalf("new connections = %d, want at most 3 for 100 sequential requests", got)
+	}
+}
+
+func TestNewSharedGeoHTTPClientReusesConnectionsAcrossConcurrentWrappers(t *testing.T) {
+	var newConnections atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "geo")
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConnections.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	policy := NewGeoDNSPolicy("concurrent-reuse", true)
+	clients := make([]*http.Client, 4)
+	for i := range clients {
+		clients[i] = NewSharedGeoHTTPClientWithPolicy(2*time.Second, policy)
+	}
+	defer clients[0].CloseIdleConnections()
+
+	for round := 0; round < 100; round++ {
+		var wg sync.WaitGroup
+		errCh := make(chan error, len(clients))
+		for _, client := range clients {
+			wg.Go(func() {
+				resp, err := client.Get(server.URL)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				_, readErr := io.Copy(io.Discard, resp.Body)
+				closeErr := resp.Body.Close()
+				if readErr != nil {
+					errCh <- readErr
+				} else if closeErr != nil {
+					errCh <- closeErr
+				}
+			})
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+
+	if got := newConnections.Load(); got > 8 {
+		t.Fatalf("new connections = %d, want at most 8 for 400 concurrent requests", got)
 	}
 }
 

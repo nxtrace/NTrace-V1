@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const geoHTTPTransportPoolMaxSize = 32
+const (
+	geoHTTPTransportPoolMaxSize       = 32
+	geoHTTPDefaultMaxIdleConnsPerHost = 32
+)
 
 var (
 	defaultGeoHTTPPolicy    = NewGeoDNSPolicy("", true)
@@ -111,6 +114,9 @@ func newGeoHTTPTransportWithLookup(policy GeoDNSPolicy, lookup geoHostLookupFunc
 	transport := &http.Transport{}
 	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
 		transport = base.Clone()
+	}
+	if transport.MaxIdleConnsPerHost == 0 {
+		transport.MaxIdleConnsPerHost = geoHTTPDefaultMaxIdleConnsPerHost
 	}
 
 	policy = NewGeoDNSPolicy(policy.Resolver(), policy.Fallback())
