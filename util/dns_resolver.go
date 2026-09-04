@@ -17,22 +17,44 @@ import (
 // ──────────────────────────────────────────────────
 
 var (
-	geoDotServer string        // 当前 dot-server 选项（如 "dnssb"）
-	geoFallback  bool   = true // DoT 失败时是否回退系统 DNS
-	geoMu        sync.RWMutex
-	geoApplyMu   sync.Mutex
-	geoScopeMu   sync.Mutex
-	geoScopeDot  string
-	geoScopePrev struct {
-		dotServer string
-		fallback  bool
-	}
-	geoScopeDepth int
+	geoDotServer   string        // 当前 dot-server 选项（如 "dnssb"）
+	geoFallback    bool   = true // DoT 失败时是否回退系统 DNS
+	geoMu          sync.RWMutex
+	geoApplyMu     sync.Mutex
+	geoScopeMu     sync.Mutex
+	geoScopePolicy GeoDNSPolicy
+	geoScopePrev   GeoDNSPolicy
+	geoScopeDepth  int
 
 	// geoResolverOverride 允许测试注入自定义 resolver（仅测试用）。
 	// 非 nil 时 LookupHostForGeo 的 DoT 阶段使用该 resolver 替代 ResolverForDot 的结果。
 	geoResolverOverride *net.Resolver
 )
+
+// GeoDNSPolicy is an immutable, comparable Geo DNS configuration.
+// Use NewGeoDNSPolicy so resolver names are normalized before comparison or caching.
+type GeoDNSPolicy struct {
+	resolver string
+	fallback bool
+}
+
+// NewGeoDNSPolicy creates a normalized Geo DNS policy.
+func NewGeoDNSPolicy(resolver string, fallback bool) GeoDNSPolicy {
+	return GeoDNSPolicy{
+		resolver: normalizeGeoDNSResolver(resolver),
+		fallback: fallback,
+	}
+}
+
+// Resolver returns the normalized DoT resolver name.
+func (p GeoDNSPolicy) Resolver() string {
+	return p.resolver
+}
+
+// Fallback reports whether a failed DoT lookup falls back to the system resolver.
+func (p GeoDNSPolicy) Fallback() bool {
+	return p.fallback
+}
 
 func setGeoResolverOverride(resolver *net.Resolver) {
 	geoMu.Lock()
@@ -56,9 +78,7 @@ func SetGeoDNSResolver(dotServer string) {
 
 // CurrentGeoDNSResolver 返回当前生效的 Geo DNS resolver 名称（已规范化）。
 func CurrentGeoDNSResolver() string {
-	geoMu.RLock()
-	defer geoMu.RUnlock()
-	return geoDotServer
+	return CurrentGeoDNSPolicy().Resolver()
 }
 
 func normalizeGeoDNSResolver(dotServer string) string {
@@ -72,6 +92,21 @@ func SetGeoDNSFallback(enabled bool) {
 	geoFallback = enabled
 }
 
+// CurrentGeoDNSPolicy returns one consistent snapshot of the active Geo DNS policy.
+func CurrentGeoDNSPolicy() GeoDNSPolicy {
+	geoMu.RLock()
+	defer geoMu.RUnlock()
+	return NewGeoDNSPolicy(geoDotServer, geoFallback)
+}
+
+func setGeoDNSPolicy(policy GeoDNSPolicy) {
+	policy = NewGeoDNSPolicy(policy.Resolver(), policy.Fallback())
+	geoMu.Lock()
+	geoDotServer = policy.Resolver()
+	geoFallback = policy.Fallback()
+	geoMu.Unlock()
+}
+
 // WithGeoDNSResolver 在 callback 生命周期内临时切换 Geo DNS resolver。
 // 该辅助会串行化不同 resolver 的切换与恢复，并允许相同 resolver 作用域安全嵌套。
 func WithGeoDNSResolver[T any](dotServer string, callback func() (T, error)) (T, error) {
@@ -80,12 +115,9 @@ func WithGeoDNSResolver[T any](dotServer string, callback func() (T, error)) (T,
 		return zero, nil
 	}
 	dotServer = normalizeGeoDNSResolver(dotServer)
-	if dotServer == "" {
-		return callback()
-	}
 
 	geoApplyMu.Lock()
-	if geoScopeDepth > 0 && geoScopeDot == dotServer {
+	if geoScopeDepth > 0 && geoScopePolicy.Resolver() == dotServer {
 		geoScopeDepth++
 		geoApplyMu.Unlock()
 		defer releaseGeoDNSResolverScope()
@@ -94,12 +126,12 @@ func WithGeoDNSResolver[T any](dotServer string, callback func() (T, error)) (T,
 	geoApplyMu.Unlock()
 
 	geoScopeMu.Lock()
-	prevDotServer, prevFallback := getGeoDNSConfig()
-	SetGeoDNSResolver(dotServer)
+	previous := CurrentGeoDNSPolicy()
+	policy := NewGeoDNSPolicy(dotServer, previous.Fallback())
+	setGeoDNSPolicy(policy)
 	geoApplyMu.Lock()
-	geoScopeDot = dotServer
-	geoScopePrev.dotServer = prevDotServer
-	geoScopePrev.fallback = prevFallback
+	geoScopePolicy = policy
+	geoScopePrev = previous
 	geoScopeDepth = 1
 	geoApplyMu.Unlock()
 	defer releaseGeoDNSResolverScope()
@@ -119,23 +151,19 @@ func releaseGeoDNSResolverScope() {
 		return
 	}
 
-	prevDotServer := geoScopePrev.dotServer
-	prevFallback := geoScopePrev.fallback
-	geoScopeDot = ""
-	geoScopePrev.dotServer = ""
-	geoScopePrev.fallback = true
+	previous := geoScopePrev
+	geoScopePolicy = GeoDNSPolicy{}
+	geoScopePrev = GeoDNSPolicy{}
 	geoApplyMu.Unlock()
 
-	SetGeoDNSResolver(prevDotServer)
-	SetGeoDNSFallback(prevFallback)
+	setGeoDNSPolicy(previous)
 	geoScopeMu.Unlock()
 }
 
 // getGeoDNSConfig 返回当前快照；并发安全。
 func getGeoDNSConfig() (dotServer string, fallback bool) {
-	geoMu.RLock()
-	defer geoMu.RUnlock()
-	return geoDotServer, geoFallback
+	policy := CurrentGeoDNSPolicy()
+	return policy.Resolver(), policy.Fallback()
 }
 
 // ResolverForDot 根据 dotServer 名字返回对应的 *net.Resolver。
@@ -164,15 +192,20 @@ func ResolverForDot(dotServer string) *net.Resolver {
 //  3. DoT 失败且 fallback=true 时，回退系统 DNS。
 //  4. 全部失败才返回 error。
 func LookupHostForGeo(ctx context.Context, host string) ([]net.IP, error) {
+	return LookupHostForGeoWithPolicy(ctx, host, CurrentGeoDNSPolicy())
+}
+
+// LookupHostForGeoWithPolicy resolves host with one immutable Geo DNS policy.
+func LookupHostForGeoWithPolicy(ctx context.Context, host string, policy GeoDNSPolicy) ([]net.IP, error) {
 	// ── 1. IP 字面量短路 ──
 	if ip := net.ParseIP(host); ip != nil {
 		return []net.IP{ip}, nil
 	}
 
-	dotServer, fallback := getGeoDNSConfig()
+	policy = NewGeoDNSPolicy(policy.Resolver(), policy.Fallback())
 
 	// ── 2. DoT 解析 ──
-	r := ResolverForDot(dotServer)
+	r := ResolverForDot(policy.Resolver())
 	if override := getGeoResolverOverride(); override != nil {
 		r = override
 	}
@@ -182,7 +215,7 @@ func LookupHostForGeo(ctx context.Context, host string) ([]net.IP, error) {
 			return ips, nil
 		}
 		// DoT 失败，决定是否 fallback
-		if !fallback {
+		if !policy.Fallback() {
 			if err != nil {
 				return nil, err
 			}

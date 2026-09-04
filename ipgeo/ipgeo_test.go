@@ -1,10 +1,12 @@
 package ipgeo
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -93,6 +95,7 @@ func TestGetSourceUsesNextTraceAPIV4WhenTokenConfigured(t *testing.T) {
 }
 
 func TestDeprecatedNextTraceAPIWrappers(t *testing.T) {
+	isolateNextTraceAPIV4ProxyState(t)
 	isolateNextTraceAPIV4TokenFiles(t)
 	t.Setenv(util.EnvNextTraceAPIV4TokenKey, "")
 	assert.Equal(
@@ -111,11 +114,9 @@ func TestDeprecatedNextTraceAPIWrappers(t *testing.T) {
 	assert.EqualError(t, gotErr, wantErr.Error())
 
 	oldEndpoint := nextTraceAPIV4GeoEndpoint
-	oldFactory := nextTraceAPIV4HTTPClientFactory
 	t.Cleanup(func() {
 		nextTraceAPIV4GeoEndpoint = oldEndpoint
-		nextTraceAPIV4HTTPClientFactory = oldFactory
-		resetNextTraceAPIV4ClientCache()
+		resetNextTraceAPIV4TransportCache()
 	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -123,12 +124,7 @@ func TestDeprecatedNextTraceAPIWrappers(t *testing.T) {
 	}))
 	defer srv.Close()
 	nextTraceAPIV4GeoEndpoint = srv.URL
-	nextTraceAPIV4HTTPClientFactory = func(_ string, timeout time.Duration) *http.Client {
-		client := srv.Client()
-		client.Timeout = timeout
-		return client
-	}
-	resetNextTraceAPIV4ClientCache()
+	resetNextTraceAPIV4TransportCache()
 
 	wantV4, err := NextTraceAPIV4GeoIP("198.51.100.1", time.Second, "en", false)
 	require.NoError(t, err)
@@ -159,4 +155,90 @@ func TestDisableGeoIP(t *testing.T) {
 	res, err := disableGeoIP("1.1.1.1", time.Second, "en", false)
 	require.NoError(t, err)
 	assert.Equal(t, &IPGeoData{}, res)
+}
+
+func TestGetSourceWithGeoDNSEmptyResolverUsesIsolatedScope(t *testing.T) {
+	util.SetGeoDNSResolver("google")
+	util.SetGeoDNSFallback(false)
+	defer func() {
+		util.SetGeoDNSResolver("")
+		util.SetGeoDNSFallback(true)
+	}()
+
+	dotEntered := make(chan struct{})
+	releaseDot := make(chan struct{})
+	dotDone := make(chan struct{})
+	go func() {
+		defer close(dotDone)
+		_, _ = util.WithGeoDNSResolver("cloudflare", func() (struct{}, error) {
+			close(dotEntered)
+			<-releaseDot
+			return struct{}{}, nil
+		})
+	}()
+	<-dotEntered
+
+	sourceStarted := make(chan struct{})
+	sourceDone := make(chan error, 1)
+	go observeEmptyGeoSourceScope(GetSourceWithGeoDNS("disable-geoip", ""), sourceStarted, sourceDone)
+	<-sourceStarted
+
+	blocked, completed, earlyErr := waitForGeoSourceScopeBlock(t, sourceDone)
+	if completed {
+		close(releaseDot)
+		<-dotDone
+		t.Fatalf("empty-resolver source bypassed active scope: %v", earlyErr)
+	}
+	if !blocked {
+		close(releaseDot)
+		<-dotDone
+		t.Fatal("empty-resolver source never reached the active scope lock")
+	}
+
+	close(releaseDot)
+	<-dotDone
+	select {
+	case err := <-sourceDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("empty-resolver source did not resume after active scope exited")
+	}
+}
+
+//go:noinline
+func observeEmptyGeoSourceScope(source Source, started chan<- struct{}, result chan<- error) {
+	close(started)
+	_, err := source("1.1.1.1", time.Second, "en", false)
+	result <- err
+}
+
+func waitForGeoSourceScopeBlock(t *testing.T, result <-chan error) (blocked bool, completed bool, err error) {
+	t.Helper()
+	const maxStackDumpSize = 16 << 20
+	deadline := time.Now().Add(2 * time.Second)
+	stack := make([]byte, 1<<20)
+	for time.Now().Before(deadline) {
+		select {
+		case err = <-result:
+			return false, true, err
+		default:
+		}
+		n := runtime.Stack(stack, true)
+		for n == len(stack) {
+			if len(stack) >= maxStackDumpSize {
+				t.Errorf("goroutine stack dump exceeded %d bytes", maxStackDumpSize)
+				return false, false, err
+			}
+			stack = make([]byte, min(len(stack)*2, maxStackDumpSize))
+			n = runtime.Stack(stack, true)
+		}
+		for _, goroutine := range bytes.Split(stack[:n], []byte("\n\n")) {
+			if bytes.Contains(goroutine, []byte("observeEmptyGeoSourceScope")) &&
+				bytes.Contains(goroutine, []byte("[sync.Mutex.Lock")) {
+				return true, false, nil
+			}
+		}
+		runtime.Gosched()
+	}
+	return false, false, nil
 }

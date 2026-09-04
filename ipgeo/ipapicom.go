@@ -17,11 +17,12 @@ import (
 
 func IPApiCom(ip string, timeout time.Duration, _ string, _ bool) (*IPGeoData, error) {
 	url := token.BaseOrDefault("http://ip-api.com/json/") + ip + "?fields=status,message,country,regionName,city,isp,district,as,lat,lon"
-	client := util.NewGeoHTTPClient(timeout)
-	req, err := http.NewRequest("GET", url, nil)
+	client := util.NewSharedGeoHTTPClient(timeout)
+	req, cancel, err := newGeoRequest(http.MethodGet, url, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("ip-api.com: failed to create request: %w", err)
 	}
+	defer cancel()
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:100.0) Gecko/20100101 Firefox/100.0")
 	content, err := client.Do(req)
 	if err != nil {
