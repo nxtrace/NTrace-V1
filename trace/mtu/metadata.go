@@ -49,8 +49,9 @@ func shouldFetchHopMetadata(cfg Config, hop Hop) bool {
 
 func startMTUPTRLookup(ctx context.Context, ipStr string) <-chan []string {
 	ch := make(chan []string, 1)
+	lookupAddr := mtuLookupAddr
 	go func() {
-		ptrs, err := mtuLookupAddr(ctx, ipStr)
+		ptrs, err := lookupAddr(ctx, ipStr)
 		if err != nil {
 			ch <- nil
 			return
