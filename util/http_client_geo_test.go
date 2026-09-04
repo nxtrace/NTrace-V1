@@ -100,9 +100,10 @@ func TestNewGeoHTTPClientUsesPolicyAtDialTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request with policy changed after client creation: %v", err)
 	}
-	defer resp.Body.Close()
-	if body, err := io.ReadAll(resp.Body); err != nil || string(body) != "ok" {
-		t.Fatalf("response body = %q, err = %v, want ok", body, err)
+	body, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil || closeErr != nil || string(body) != "ok" {
+		t.Fatalf("response body = %q, read error = %v, close error = %v, want ok", body, readErr, closeErr)
 	}
 }
 
@@ -228,7 +229,8 @@ func TestGeoHTTPTransportUsesProxyEnvironmentInFreshProcess(t *testing.T) {
 		t.Fatalf("test executable: %v", err)
 	}
 	cmd := exec.Command(executable, "-test.run=^TestGeoHTTPTransportUsesProxyEnvironmentInFreshProcess$")
-	cmd.Env = geoProxyHelperEnvironment(os.Environ(), helperEnv, proxy.URL)
+	helperBase := append(os.Environ(), "REQUEST_METHOD=GET")
+	cmd.Env = geoProxyHelperEnvironment(helperBase, helperEnv, proxy.URL)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("proxy helper failed: %v\n%s", err, output)
 	}
@@ -236,15 +238,16 @@ func TestGeoHTTPTransportUsesProxyEnvironmentInFreshProcess(t *testing.T) {
 
 func geoProxyHelperEnvironment(base []string, helperEnv, proxyURL string) []string {
 	overridden := map[string]string{
-		helperEnv:     "1",
-		"HTTP_PROXY":  proxyURL,
-		"HTTPS_PROXY": "",
-		"ALL_PROXY":   "",
-		"NO_PROXY":    "",
-		"http_proxy":  "",
-		"https_proxy": "",
-		"all_proxy":   "",
-		"no_proxy":    "",
+		helperEnv:        "1",
+		"HTTP_PROXY":     proxyURL,
+		"HTTPS_PROXY":    "",
+		"ALL_PROXY":      "",
+		"NO_PROXY":       "",
+		"http_proxy":     "",
+		"https_proxy":    "",
+		"all_proxy":      "",
+		"no_proxy":       "",
+		"REQUEST_METHOD": "",
 	}
 	env := make([]string, 0, len(base)+len(overridden))
 	for _, entry := range base {
@@ -447,7 +450,11 @@ func TestDialGeoAddressesPreservesDNSOrder(t *testing.T) {
 	}
 	var attempts []string
 	clientConn, serverConn := net.Pipe()
-	defer serverConn.Close()
+	defer func() {
+		if err := serverConn.Close(); err != nil {
+			t.Errorf("close server connection: %v", err)
+		}
+	}()
 	dial := func(_ context.Context, _ string, addr string) (net.Conn, error) {
 		attempts = append(attempts, addr)
 		if len(attempts) == len(ips) {
