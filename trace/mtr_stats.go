@@ -1,16 +1,13 @@
 package trace
 
 import (
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
 )
-
-// ---------------------------------------------------------------------------
-// MTR 聚合统计模型（公共层，CLI 和 Server 均可使用）
-// ---------------------------------------------------------------------------
 
 // MTRHopStat 表示 MTR 输出中一行统计数据。
 type MTRHopStat struct {
@@ -36,39 +33,78 @@ type MTRSnapshot struct {
 	Stats     []MTRHopStat `json:"stats"`
 }
 
-// ---------------------------------------------------------------------------
-// 内部累加器
-// ---------------------------------------------------------------------------
+type mtrHopIdentityKind uint8
+
+const (
+	mtrHopUnknown mtrHopIdentityKind = iota
+	mtrHopIP
+	mtrHopHost
+	mtrHopFallback
+)
+
+// mtrHopIdentity contains only comparable fields. Unmapped addresses make
+// ordinary and IPv4-mapped observations share one row.
+type mtrHopIdentity struct {
+	kind    mtrHopIdentityKind
+	addr    netip.Addr
+	network string
+	value   string
+}
 
 type mtrHopAccum struct {
-	ttl      int
-	key      string
-	host     string
-	ip       string
-	sent     int
-	received int
-	sum      float64
-	sumSq    float64 // Σ(rtt²)，用于在线方差
-	last     float64
-	best     float64
-	worst    float64
-	geo      *ipgeo.IPGeoData
-	order    int
-	mplsSet  map[string]struct{}
+	identity   mtrHopIdentity
+	host       string
+	ip         string
+	sent       int
+	received   int
+	sum        float64
+	sumSq      float64 // Σ(rtt²)，用于在线方差
+	last       float64
+	best       float64
+	worst      float64
+	geo        *ipgeo.IPGeoData
+	order      uint64
+	mplsSet    map[string]struct{}
+	seenUpdate uint64
+	geoUpdate  uint64
+}
+
+// mtrTTLBucket keeps rows in first-observation order. index points into rows,
+// so growing the slice never invalidates an identity lookup.
+type mtrTTLBucket struct {
+	rows    []mtrHopAccum
+	index   map[mtrHopIdentity]int
+	version uint64
+}
+
+// Snapshots belong to an aggregator rather than a potentially shared bucket,
+// allowing cloned aggregators to snapshot concurrently without shared writes.
+type mtrBucketSnapshot struct {
+	bucket  *mtrTTLBucket
+	version uint64
+	rows    []MTRHopStat
 }
 
 // MTRAggregator 跨轮次聚合 hop 统计。线程安全。
 type MTRAggregator struct {
-	mu        sync.Mutex
-	stats     map[int]map[string]*mtrHopAccum // [ttl][key]
-	nextOrder int
+	mu sync.Mutex
+
+	buckets         []*mtrTTLBucket // index = TTL - 1
+	owned           []bool          // false means copy before mutation
+	bucketSnapshots []mtrBucketSnapshot
+
+	nextOrder uint64
+	updateSeq uint64
+	version   uint64
+
+	snapshotVersion uint64
+	snapshotValid   bool
+	snapshot        []MTRHopStat
 }
 
 // NewMTRAggregator 创建新的聚合器。
 func NewMTRAggregator() *MTRAggregator {
-	return &MTRAggregator{
-		stats: make(map[int]map[string]*mtrHopAccum),
-	}
+	return &MTRAggregator{}
 }
 
 // Update 接收一轮 traceroute 的 Result 并更新统计，返回当前快照。
@@ -81,17 +117,24 @@ func (agg *MTRAggregator) Update(res *Result, queries int) []MTRHopStat {
 	}
 
 	_ = queries
-
+	agg.updateSeq++
+	mutated := false
 	for idx, attempts := range res.Hops {
 		if len(attempts) == 0 {
 			continue
 		}
+
 		ttl := idx + 1
-		accMap := agg.accMapForTTLLocked(ttl)
-		for key, group := range groupMTRHopAttempts(attempts) {
-			agg.mergeGroupedHopLocked(ttl, accMap, key, group)
+		bucket := agg.writableBucketLocked(ttl)
+		for _, attempt := range attempts {
+			agg.includeAttemptLocked(bucket, attempt)
 		}
-		mergeUnknownIntoSingleKnown(accMap)
+		mergeUnknownIntoSingleKnown(bucket)
+		agg.markBucketDirtyLocked(ttl, bucket)
+		mutated = true
+	}
+	if mutated {
+		agg.markDirtyLocked()
 	}
 
 	return agg.snapshotLocked()
@@ -101,27 +144,55 @@ func (agg *MTRAggregator) Update(res *Result, queries int) []MTRHopStat {
 func (agg *MTRAggregator) Reset() {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
-	agg.stats = make(map[int]map[string]*mtrHopAccum)
+
+	clear(agg.buckets)
+	agg.buckets = agg.buckets[:0]
+	clear(agg.owned)
+	agg.owned = agg.owned[:0]
+	clear(agg.bucketSnapshots)
+	agg.bucketSnapshots = agg.bucketSnapshots[:0]
 	agg.nextOrder = 0
+	agg.updateSeq = 0
+	agg.markDirtyLocked()
 }
 
 // ClearHop 删除指定 TTL 上的所有聚合数据。
-// 用于 per-hop 调度器中 knownFinalTTL 下调时，擦除旧 finalTTL 的过期统计，
-// 避免 ghost row，同时不会把旧 final 的 Snt 合并到新 final（防止 Snt 膨胀）。
 func (agg *MTRAggregator) ClearHop(ttl int) {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
-	delete(agg.stats, ttl)
+
+	slot := ttl - 1
+	if slot < 0 || slot >= len(agg.buckets) || agg.buckets[slot] == nil {
+		return
+	}
+	agg.buckets[slot] = nil
+	agg.owned[slot] = false
+	agg.bucketSnapshots[slot] = mtrBucketSnapshot{}
+	agg.trimTrailingSlotsLocked()
+	agg.markDirtyLocked()
 }
 
 // ClearAbove removes statistics beyond a confirmed sticky destination edge.
 func (agg *MTRAggregator) ClearAbove(ttl int) {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
-	for hop := range agg.stats {
-		if hop > ttl {
-			delete(agg.stats, hop)
+
+	start := max(ttl, 0)
+	if start >= len(agg.buckets) {
+		return
+	}
+	changed := false
+	for slot := start; slot < len(agg.buckets); slot++ {
+		if agg.buckets[slot] != nil {
+			changed = true
 		}
+		agg.buckets[slot] = nil
+		agg.owned[slot] = false
+		agg.bucketSnapshots[slot] = mtrBucketSnapshot{}
+	}
+	agg.trimTrailingSlotsLocked()
+	if changed {
+		agg.markDirtyLocked()
 	}
 }
 
@@ -136,61 +207,86 @@ func filterMTRStatsAtPathEnd(stats []MTRHopStat, ttl int) []MTRHopStat {
 }
 
 // MigrateStats 将 fromTTL 上所有累加器迁移合并到 toTTL，然后删除 fromTTL。
-// 用于 knownFinalTTL 下调时把旧 finalTTL 上已入账的 dst-ip 统计搬到新 finalTTL。
-// maxPerHop > 0 时，合并后对每个累加器的 sent/received 做上限裁剪，
-// 保证 Snt 不超过预算。
 func (agg *MTRAggregator) MigrateStats(fromTTL, toTTL, maxPerHop int) {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
 
-	fromMap := agg.stats[fromTTL]
-	if len(fromMap) == 0 {
+	if fromTTL <= 0 || toTTL <= 0 || fromTTL == toTTL {
+		return
+	}
+	fromSlot := fromTTL - 1
+	if fromSlot >= len(agg.buckets) || agg.buckets[fromSlot] == nil {
 		return
 	}
 
-	toMap := agg.accMapForTTLLocked(toTTL)
+	agg.ensureSlotLocked(toTTL)
+	toSlot := toTTL - 1
+	from := agg.buckets[fromSlot]
+	if agg.buckets[toSlot] == nil {
+		agg.buckets[toSlot] = from
+		agg.owned[toSlot] = agg.owned[fromSlot]
+		agg.buckets[fromSlot] = nil
+		agg.owned[fromSlot] = false
+		agg.bucketSnapshots[fromSlot] = mtrBucketSnapshot{}
+		agg.bucketSnapshots[toSlot] = mtrBucketSnapshot{}
 
-	for key, src := range fromMap {
-		dst := toMap[key]
-		if dst == nil {
-			src.ttl = toTTL
-			toMap[key] = src
-			continue
+		if maxPerHop > 0 {
+			to := agg.writableBucketLocked(toTTL)
+			for i := range to.rows {
+				capMTRHopAccum(&to.rows[i], maxPerHop)
+			}
+			agg.markBucketDirtyLocked(toTTL, to)
 		}
-		mergeMTRHopAccum(dst, src)
+	} else {
+		to := agg.writableBucketLocked(toTTL)
+		for i := range from.rows {
+			src := &from.rows[i]
+			if dstIndex, ok := to.index[src.identity]; ok {
+				mergeMTRHopAccum(&to.rows[dstIndex], src)
+				continue
+			}
+			to.index[src.identity] = len(to.rows)
+			to.rows = append(to.rows, cloneMTRHopAccum(*src))
+		}
+		sort.SliceStable(to.rows, func(i, j int) bool {
+			return to.rows[i].order < to.rows[j].order
+		})
+		rebuildMTRBucketIndex(to)
+		for i := range to.rows {
+			capMTRHopAccum(&to.rows[i], maxPerHop)
+		}
+		agg.markBucketDirtyLocked(toTTL, to)
+
+		agg.buckets[fromSlot] = nil
+		agg.owned[fromSlot] = false
+		agg.bucketSnapshots[fromSlot] = mtrBucketSnapshot{}
 	}
 
-	for _, acc := range toMap {
-		capMTRHopAccum(acc, maxPerHop)
-	}
-
-	delete(agg.stats, fromTTL)
+	agg.trimTrailingSlotsLocked()
+	agg.markDirtyLocked()
 }
 
-// Clone 返回深拷贝的聚合器，用于流式预览（不影响原始数据）。
+// Clone returns a copy-on-write aggregator for streaming previews. Only a TTL
+// changed through the clone gets a private bucket.
 func (agg *MTRAggregator) Clone() *MTRAggregator {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
 
 	c := &MTRAggregator{
-		stats:     make(map[int]map[string]*mtrHopAccum, len(agg.stats)),
-		nextOrder: agg.nextOrder,
+		buckets:         append([]*mtrTTLBucket(nil), agg.buckets...),
+		owned:           make([]bool, len(agg.buckets)),
+		bucketSnapshots: append([]mtrBucketSnapshot(nil), agg.bucketSnapshots...),
+		nextOrder:       agg.nextOrder,
+		updateSeq:       agg.updateSeq,
+		version:         agg.version,
+		snapshotVersion: agg.snapshotVersion,
+		snapshotValid:   agg.snapshotValid,
+		snapshot:        agg.snapshot,
 	}
-	for ttl, accMap := range agg.stats {
-		cMap := make(map[string]*mtrHopAccum, len(accMap))
-		for key, acc := range accMap {
-			dup := *acc // 浅拷贝
-			dup.mplsSet = make(map[string]struct{}, len(acc.mplsSet))
-			for k := range acc.mplsSet {
-				dup.mplsSet[k] = struct{}{}
-			}
-			if acc.geo != nil {
-				geoCopy := *acc.geo
-				dup.geo = &geoCopy
-			}
-			cMap[key] = &dup
+	for slot, bucket := range agg.buckets {
+		if bucket != nil {
+			agg.owned[slot] = false
 		}
-		c.stats[ttl] = cMap
 	}
 	return c
 }
@@ -202,8 +298,7 @@ func (agg *MTRAggregator) Snapshot() []MTRHopStat {
 	return agg.snapshotLocked()
 }
 
-// PatchMetadataByIP updates existing rows for the given IP with late-arriving
-// host/geo data without affecting sent/received/RTT statistics.
+// PatchMetadataByIP updates existing rows without changing statistics or row order.
 func (agg *MTRAggregator) PatchMetadataByIP(ip, host string, geo *ipgeo.IPGeoData) bool {
 	agg.mu.Lock()
 	defer agg.mu.Unlock()
@@ -213,104 +308,73 @@ func (agg *MTRAggregator) PatchMetadataByIP(ip, host string, geo *ipgeo.IPGeoDat
 	if ip == "" || (host == "" && geo == nil) {
 		return false
 	}
+	targetAddr, hasTargetAddr := parseMTRAddr(ip)
 
 	changed := false
-	for _, accMap := range agg.stats {
-		for _, acc := range accMap {
-			if strings.TrimSpace(acc.ip) != ip {
+	var geoCopy *ipgeo.IPGeoData
+	for slot, readBucket := range agg.buckets {
+		if !mtrBucketNeedsMetadataPatch(readBucket, ip, targetAddr, hasTargetAddr, host, geo) {
+			continue
+		}
+		bucket := agg.writableBucketLocked(slot + 1)
+		bucketChanged := false
+		for i := range bucket.rows {
+			acc := &bucket.rows[i]
+			if !mtrAccumMatchesIP(acc, ip, targetAddr, hasTargetAddr) {
 				continue
 			}
 			if host != "" && acc.host == "" {
 				acc.host = host
-				changed = true
+				bucketChanged = true
 			}
 			if geo != nil && acc.geo == nil {
-				geoCopy := *geo
-				acc.geo = &geoCopy
-				changed = true
+				if geoCopy == nil {
+					geoCopy = cloneMTRGeo(geo)
+				}
+				acc.geo = geoCopy
+				bucketChanged = true
 			}
 		}
+		if bucketChanged {
+			agg.markBucketDirtyLocked(slot+1, bucket)
+			changed = true
+		}
+	}
+	if changed {
+		agg.markDirtyLocked()
 	}
 	return changed
 }
 
 func (agg *MTRAggregator) snapshotLocked() []MTRHopStat {
-	// 收集 TTL 列表并排序
-	ttls := make([]int, 0, len(agg.stats))
-	for ttl := range agg.stats {
-		ttls = append(ttls, ttl)
-	}
-	sort.Ints(ttls)
-
-	var rows []MTRHopStat
-	for _, ttl := range ttls {
-		accMap := agg.stats[ttl]
-		if len(accMap) == 0 {
-			continue
-		}
-
-		// 按 order 稳定排序
-		accs := make([]*mtrHopAccum, 0, len(accMap))
-		for _, acc := range accMap {
-			accs = append(accs, acc)
-		}
-		sort.SliceStable(accs, func(i, j int) bool {
-			if accs[i].order == accs[j].order {
-				return accs[i].ip < accs[j].ip
+	if !agg.snapshotValid || agg.snapshotVersion != agg.version {
+		rowCount := 0
+		for _, bucket := range agg.buckets {
+			if bucket != nil {
+				rowCount += len(bucket.rows)
 			}
-			return accs[i].order < accs[j].order
-		})
-
-		for _, acc := range accs {
-			rows = append(rows, buildMTRHopStat(acc))
 		}
-	}
-	return rows
-}
-
-// mtrUnknownKey 是 timeout / 无地址 hop 的聚合键。
-const mtrUnknownKey = "unknown"
-
-func mtrHopKey(ip, host string) string {
-	ip = strings.TrimSpace(ip)
-	host = strings.TrimSpace(host)
-	if ip != "" {
-		return "ip:" + ip
-	}
-	if host != "" {
-		return "host:" + strings.ToLower(host)
-	}
-	return mtrUnknownKey
-}
-
-// mergeUnknownIntoSingleKnown 在同一 TTL 的 accMap 中，
-// 如果恰好只有 1 条非 unknown 路径，则将 unknown 累加器归并到该路径，
-// 避免同一跳同时出现 "(waiting for reply)" 和真实 IP 两行。
-//
-// 多路径场景（非 unknown ≥ 2 或 == 0）不归并，防止误归因。
-func mergeUnknownIntoSingleKnown(accMap map[string]*mtrHopAccum) {
-	unk, ok := accMap[mtrUnknownKey]
-	if !ok {
-		return
-	}
-
-	// 收集非 unknown 累加器
-	var known *mtrHopAccum
-	knownCount := 0
-	for k, acc := range accMap {
-		if k == mtrUnknownKey {
-			continue
+		var rows []MTRHopStat
+		if rowCount > 0 {
+			rows = make([]MTRHopStat, 0, rowCount)
 		}
-		known = acc
-		knownCount++
-		if knownCount > 1 {
-			break // 多路径，不归并
+		for slot, bucket := range agg.buckets {
+			if bucket == nil || len(bucket.rows) == 0 {
+				continue
+			}
+			cached := &agg.bucketSnapshots[slot]
+			if cached.bucket != bucket || cached.version != bucket.version {
+				bucketRows := make([]MTRHopStat, len(bucket.rows))
+				for i := range bucket.rows {
+					bucketRows[i] = buildMTRHopStat(&bucket.rows[i], slot+1)
+				}
+				*cached = mtrBucketSnapshot{bucket: bucket, version: bucket.version, rows: bucketRows}
+			}
+			rows = append(rows, cached.rows...)
 		}
+		agg.snapshot = rows
+		agg.snapshotVersion = agg.version
+		agg.snapshotValid = true
 	}
-	if knownCount != 1 || known == nil {
-		return
-	}
-
-	mergeMTRHopAccum(known, unk)
-	delete(accMap, mtrUnknownKey)
+	return cloneMTRStats(agg.snapshot)
 }
