@@ -3,7 +3,7 @@ package latency
 import (
 	"context"
 	"math"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 )
@@ -131,7 +131,7 @@ func Compute(samples []float64) Stats {
 	}
 
 	sorted := append([]float64(nil), samples...)
-	sort.Float64s(sorted)
+	slices.Sort(sorted)
 	minV := sorted[0]
 	maxV := sorted[n-1]
 

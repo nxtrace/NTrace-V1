@@ -17,6 +17,29 @@ import (
 	"github.com/nxtrace/NTrace-core/util"
 )
 
+func TestFormatHostPort(t *testing.T) {
+	tests := []struct {
+		name string
+		addr string
+		port string
+		want string
+	}{
+		{name: "IPv4", addr: " 192.0.2.1 ", port: "443", want: "192.0.2.1:443"},
+		{name: "IPv6", addr: "2001:db8::1", port: "443", want: "[2001:db8::1]:443"},
+		{name: "bracketed IPv6", addr: "[2001:db8::1]", port: "443", want: "[2001:db8::1]:443"},
+		{name: "IPv6 zone", addr: "fe80::1%en0", port: "443", want: "[fe80::1%en0]:443"},
+		{name: "empty host", addr: "", port: "443", want: ":443"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatHostPort(tt.addr, tt.port); got != tt.want {
+				t.Fatalf("formatHostPort(%q, %q) = %q, want %q", tt.addr, tt.port, got, tt.want)
+			}
+		})
+	}
+}
+
 func newStartedTestWsConn() *WsConn {
 	return newStartedTestWsConnWithContext(context.Background())
 }

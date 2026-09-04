@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,7 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -302,16 +303,7 @@ func discoverCandidates(ctx context.Context, cfg *speedconfig.Config, p provider
 		seen[key] = true
 		out.Candidates = append(out.Candidates, buildCandidate(ctx, cfg, p, host, key, "dns"))
 	}
-	sort.SliceStable(out.Candidates, func(i, j int) bool {
-		li, lj := out.Candidates[i], out.Candidates[j]
-		if li.Status == "ok" && lj.Status != "ok" {
-			return true
-		}
-		if li.Status != "ok" && lj.Status == "ok" {
-			return false
-		}
-		return li.RTTMs < lj.RTTMs
-	})
+	sortCandidates(out.Candidates)
 	for _, cand := range out.Candidates {
 		if cand.Status == "ok" {
 			out.Selected = cand
@@ -326,6 +318,18 @@ func discoverCandidates(ctx context.Context, cfg *speedconfig.Config, p provider
 		})
 	}
 	return out, nil
+}
+
+func sortCandidates(candidates []candidate) {
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		if a.Status == "ok" && b.Status != "ok" {
+			return -1
+		}
+		if a.Status != "ok" && b.Status == "ok" {
+			return 1
+		}
+		return cmp.Compare(a.RTTMs, b.RTTMs)
+	})
 }
 
 func buildCandidate(ctx context.Context, cfg *speedconfig.Config, p provider.Provider, host, ip, source string) candidate {
