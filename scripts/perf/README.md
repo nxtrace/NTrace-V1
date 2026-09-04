@@ -5,18 +5,21 @@ settings. The scripts default to `GOMAXPROCS=10`, ten samples, one second per
 sample, and store raw results below the ignored `.cache/perf` directory.
 
 ```sh
-scripts/perf/run_benchmarks.sh base
-scripts/perf/run_benchmarks.sh head
+GOEXPERIMENT=nojsonv2 scripts/perf/run_benchmarks.sh base
+GOEXPERIMENT=nojsonv2 scripts/perf/run_benchmarks.sh head
 scripts/perf/compare_benchmarks.sh .cache/perf/base.bench.txt .cache/perf/head.bench.txt
-scripts/perf/measure_binaries.sh head
+GOEXPERIMENT=nojsonv2 scripts/perf/measure_binaries.sh head
 ```
+
+These commands select the release JSON runtime explicitly. Set
+`GOEXPERIMENT=` instead when measuring the Go 1.27 default JSON runtime.
 
 If a result crosses a merge threshold without a statistically clear result,
 repeat both sides with `BENCH_COUNT=20`. Generate CPU and heap profiles for a
 single representative benchmark with:
 
 ```sh
-scripts/perf/profile_benchmark.sh ./trace BenchmarkMTRAggregatorSnapshot64TTL4Paths profile-name
+GOEXPERIMENT=nojsonv2 scripts/perf/profile_benchmark.sh ./trace BenchmarkMTRAggregatorSnapshot64TTL4Paths profile-name
 ```
 
 Record `go version`, `go env GOEXPERIMENT`, the exact commit IDs, machine,

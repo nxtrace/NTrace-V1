@@ -114,11 +114,13 @@ jobs:
             echo "note=Linux measurements are cross-reference evidence only; no performance threshold is enforced."
           } | tee "${evidence_dir}/selection.txt"
 
-          echo "head_sha=${HEAD_SHA}" >> "${GITHUB_OUTPUT}"
-          echo "reference_sha=${reference_sha}" >> "${GITHUB_OUTPUT}"
-          echo "reference_kind=${reference_kind}" >> "${GITHUB_OUTPUT}"
-          echo "reference_go_version=${reference_go_version}" >> "${GITHUB_OUTPUT}"
-          echo "reference_toolchain=${reference_toolchain}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "head_sha=${HEAD_SHA}"
+            echo "reference_sha=${reference_sha}"
+            echo "reference_kind=${reference_kind}"
+            echo "reference_go_version=${reference_go_version}"
+            echo "reference_toolchain=${reference_toolchain}"
+          } >> "${GITHUB_OUTPUT}"
 
           git switch --detach "${reference_sha}"
           if [[ "$(git rev-parse HEAD)" != "${reference_sha}" ]]; then
