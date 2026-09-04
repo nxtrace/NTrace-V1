@@ -13,13 +13,10 @@ import (
 	"github.com/nxtrace/NTrace-core/wshandle"
 )
 
-/***
- * 原理介绍 By Leo
- * WebSocket 一共开启了一个发送和一个接收协程，在 New 了一个连接的实例对象后，不给予关闭，持续化连接
- * 当有新的IP请求时，一直在等待IP数据的发送协程接收到从 nexttrace_api_v3.go 的 sendNextTraceAPIV3IPRequest 函数发来的IP数据，向服务端发送数据
- * 由于实际使用时有大量并发，但是 ws 在同一时刻每次有且只能处理一次发送一条数据，所以必须给 ws 连接上互斥锁，保证每次只有一个协程访问
- * 运作模型可以理解为一个 Node 一直在等待数据，当获得一个新的任务后，转交给下一个协程，不再关注这个 Node 的下一步处理过程，并且回到空闲状态继续等待新的任务
-***/
+// NextTrace API v3 uses the process-wide WsConn supervisor for serialized
+// writes and generation-bound request delivery. A receiver is owned by each
+// MsgReceiveCh identity so replacing the global connection cannot create two
+// consumers for the same stream or move an old response onto a new stream.
 
 // IPPool IP 查询池 map - ip - ip channel
 type IPPool struct {
@@ -32,50 +29,79 @@ var IPPools = IPPool{
 }
 
 var getNextTraceAPIV3WSConn = wshandle.GetWsConn
+var sendNextTraceAPIV3IPRequestFn = sendNextTraceAPIV3IPRequest
+var requestNextTraceAPIV3IPFn = requestNextTraceAPIV3IP
 
 func sendNextTraceAPIV3IPRequest(ctx context.Context, wsConn *wshandle.WsConn, ip string) bool {
 	if wsConn == nil {
 		return false
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if ctx.Err() != nil {
-		return false
-	}
-	select {
-	case wsConn.MsgSendCh <- ip:
-		return true
-	case <-ctx.Done():
-		return false
+	return wsConn.SendMessage(ctx, ip) == nil
+}
+
+func requestNextTraceAPIV3IP(ctx context.Context, wsConn *wshandle.WsConn, ip string) (string, error) {
+	return wsConn.RequestMessage(ctx, ip)
+}
+
+type nextTraceAPIV3Receiver struct {
+	done chan struct{}
+}
+
+type nextTraceAPIV3ReceiverOwner struct {
+	mu        sync.Mutex
+	receivers map[<-chan string]*nextTraceAPIV3Receiver
+}
+
+func newNextTraceAPIV3ReceiverOwner() *nextTraceAPIV3ReceiverOwner {
+	return &nextTraceAPIV3ReceiverOwner{
+		receivers: make(map[<-chan string]*nextTraceAPIV3Receiver),
 	}
 }
 
-func receiveNextTraceAPIV3Responses() {
-	for {
-		// 获得连接实例
-		wsConn := getNextTraceAPIV3WSConn()
-		if wsConn == nil {
-			return
-		}
-		if !receiveNextTraceAPIV3Conn(wsConn) {
-			return
-		}
+func (o *nextTraceAPIV3ReceiverOwner) ensure(wsConn *wshandle.WsConn) *nextTraceAPIV3Receiver {
+	if wsConn == nil || wsConn.MsgReceiveCh == nil {
+		return nil
 	}
+	receiveCh := (<-chan string)(wsConn.MsgReceiveCh)
+
+	o.mu.Lock()
+	if receiver := o.receivers[receiveCh]; receiver != nil {
+		o.mu.Unlock()
+		return receiver
+	}
+	receiver := &nextTraceAPIV3Receiver{done: make(chan struct{})}
+	o.receivers[receiveCh] = receiver
+	o.mu.Unlock()
+
+	go o.consume(receiveCh, receiver)
+	return receiver
 }
 
-func receiveNextTraceAPIV3Conn(wsConn *wshandle.WsConn) bool {
-	// 防止多协程抢夺一个ws连接，导致死锁，当一个协程获得ws的控制权后上锁
-	wsConn.ConnMux.Lock()
-	// 函数退出时解锁，给其他协程使用
-	defer wsConn.ConnMux.Unlock()
-	for data := range wsConn.MsgReceiveCh {
+func (o *nextTraceAPIV3ReceiverOwner) consume(
+	receiveCh <-chan string,
+	receiver *nextTraceAPIV3Receiver,
+) {
+	for data := range receiveCh {
 		dispatchNextTraceAPIV3Message(data)
 	}
-	return getNextTraceAPIV3WSConn() != wsConn
+
+	o.mu.Lock()
+	if o.receivers[receiveCh] == receiver {
+		delete(o.receivers, receiveCh)
+	}
+	o.mu.Unlock()
+	close(receiver.done)
 }
 
+var nextTraceAPIV3Receivers = newNextTraceAPIV3ReceiverOwner()
+
 func dispatchNextTraceAPIV3Message(data string) {
+	ip, geo := parseNextTraceAPIV3Message(data)
+	ch := nextTraceAPIV3ResponseChannel(ip)
+	deliverGeo(ch, geo)
+}
+
+func parseNextTraceAPIV3Message(data string) (string, IPGeoData) {
 	// json解析 -> data
 	res := gjson.Parse(data)
 	// 根据返回的IP信息，发送给对应等待回复的IP通道上
@@ -109,8 +135,10 @@ func dispatchNextTraceAPIV3Message(data string) {
 		Prefix:    res.Get("prefix").String(),
 		Router:    m,
 	}
+	return ip, geo
+}
 
-	// Safely load (or lazily create) the channel for this IP before sending
+func nextTraceAPIV3ResponseChannel(ip string) chan IPGeoData {
 	IPPools.poolMux.RLock()
 	ch, ok := IPPools.pool[ip]
 	IPPools.poolMux.RUnlock()
@@ -122,7 +150,7 @@ func dispatchNextTraceAPIV3Message(data string) {
 		ch = IPPools.pool[ip]
 		IPPools.poolMux.Unlock()
 	}
-	deliverGeo(ch, geo)
+	return ch
 }
 
 func deliverGeo(ch chan IPGeoData, geo IPGeoData) {
@@ -141,44 +169,6 @@ func deliverGeo(ch chan IPGeoData, geo IPGeoData) {
 	}
 }
 
-// 当前的实现中，每次调用 receiveNextTraceAPIV3Responses() 都会锁定 WebSocket 连接
-// 当前为单例模式，只启动一个 NextTrace API v3 接收协程
-
-var (
-	nextTraceAPIV3ReceiveMu      sync.Mutex
-	nextTraceAPIV3ReceiveRunning bool
-	nextTraceAPIV3ReceiveRestart bool
-)
-
-func startNextTraceAPIV3Receiver() {
-	nextTraceAPIV3ReceiveMu.Lock()
-	if nextTraceAPIV3ReceiveRunning {
-		nextTraceAPIV3ReceiveRestart = true
-		nextTraceAPIV3ReceiveMu.Unlock()
-		return
-	}
-	nextTraceAPIV3ReceiveRunning = true
-	nextTraceAPIV3ReceiveRestart = false
-	nextTraceAPIV3ReceiveMu.Unlock()
-
-	go runNextTraceAPIV3ReceiveLoop()
-}
-
-func runNextTraceAPIV3ReceiveLoop() {
-	for {
-		receiveNextTraceAPIV3Responses()
-
-		nextTraceAPIV3ReceiveMu.Lock()
-		if !nextTraceAPIV3ReceiveRestart {
-			nextTraceAPIV3ReceiveRunning = false
-			nextTraceAPIV3ReceiveMu.Unlock()
-			return
-		}
-		nextTraceAPIV3ReceiveRestart = false
-		nextTraceAPIV3ReceiveMu.Unlock()
-	}
-}
-
 // NextTraceAPIV3GeoIP queries the NextTrace API v3 WebSocket service.
 func NextTraceAPIV3GeoIP(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
 	// TODO: 根据lang的值请求中文/英文API
@@ -186,20 +176,6 @@ func NextTraceAPIV3GeoIP(ip string, timeout time.Duration, lang string, maptrace
 	if timeout < 2*time.Second {
 		timeout = 2 * time.Second
 	}
-
-	// 确保对应 IP 的通道已存在（读锁快速路径 + 写锁惰性创建）
-	IPPools.poolMux.RLock()
-	ch, ok := IPPools.pool[ip]
-	IPPools.poolMux.RUnlock()
-	if !ok || ch == nil {
-		IPPools.poolMux.Lock()
-		if IPPools.pool[ip] == nil {
-			IPPools.pool[ip] = make(chan IPGeoData, 1)
-		}
-		ch = IPPools.pool[ip]
-		IPPools.poolMux.Unlock()
-	}
-	drainStaleGeo(ch)
 
 	wsConn := getNextTraceAPIV3WSConn()
 	if wsConn == nil {
@@ -215,13 +191,25 @@ func NextTraceAPIV3GeoIP(ip string, timeout time.Duration, lang string, maptrace
 		return &IPGeoData{}, err
 	}
 
-	// 发送请求
-	if !sendNextTraceAPIV3IPRequest(waitCtx, wsConn, ip) {
+	// Keep one consumer on the compatibility stream for unsolicited or legacy
+	// messages. Bound responses are delivered directly by the supervisor.
+	nextTraceAPIV3Receivers.ensure(wsConn)
+	response, err := requestNextTraceAPIV3IPFn(waitCtx, wsConn, ip)
+	if err == nil {
+		_, geo := parseNextTraceAPIV3Message(response)
+		return &geo, nil
+	}
+	if !errors.Is(err, wshandle.ErrRequestResponseUnsupported) {
 		return &IPGeoData{}, errors.New("TimeOut")
 	}
 
-	// 确保 NextTrace API v3 接收协程只启动一次
-	startNextTraceAPIV3Receiver()
+	// Compatibility WsConn values created as struct literals have no managed
+	// generation. Preserve their public-channel behavior for callers and tests.
+	ch := nextTraceAPIV3ResponseChannel(ip)
+	drainStaleGeo(ch)
+	if !sendNextTraceAPIV3IPRequestFn(waitCtx, wsConn, ip) {
+		return &IPGeoData{}, errors.New("TimeOut")
+	}
 
 	// 等待数据返回或超时
 	select {
