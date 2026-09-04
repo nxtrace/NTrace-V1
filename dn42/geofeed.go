@@ -54,7 +54,7 @@ func FindGeoFeedRow(ipStr string, rows []GeoFeedRow) (GeoFeedRow, bool) {
 	}
 
 	for _, row := range rows {
-		if row.IPNet != nil && row.IPNet.Contains(ip) {
+		if row.IPNet.Contains(ip) {
 			return row, true
 		}
 	}

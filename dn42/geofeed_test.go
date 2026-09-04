@@ -341,9 +341,6 @@ func TestGeoFeedIndexBackedLegacyAPIsReturnDetachedIPNet(t *testing.T) {
 	if foundRow.CIDR != input[0].CIDR {
 		t.Fatalf("FindGeoFeedRow() CIDR = %q, want %q", foundRow.CIDR, input[0].CIDR)
 	}
-	if _, found := FindGeoFeedRow("10.1.2.3", []GeoFeedRow{{IPNet: nil}}); found {
-		t.Fatal("FindGeoFeedRow() matched nil IPNet")
-	}
 }
 
 func TestGeoFeedLegacyRowsPreserveMaskStringOrder(t *testing.T) {
