@@ -52,7 +52,7 @@ type mtrSchedulerRuntime struct {
 	maxInFlightHop       int
 	states               []mtrHopState
 	generation           uint64
-	knownFinalTTL        int32
+	knownFinalTTL        atomic.Int32
 	pathTracker          *mtrPathTracker
 	inFlight             int
 	resultCh             chan mtrCompletedProbe
@@ -151,7 +151,6 @@ func newMTRSchedulerRuntime(
 		maxConsecErrs:        maxConsecErrs,
 		maxInFlightHop:       maxInFlightHop,
 		states:               make([]mtrHopState, maxHops+1),
-		knownFinalTTL:        -1,
 		resultCh:             make(chan mtrCompletedProbe, parallelism*2),
 		metadataCh:           make(chan mtrMetadataResult, parallelism*2),
 		metadataGeoSlots:     make(chan struct{}, mtrAsyncMetadataGeoConcurrency),
@@ -164,6 +163,7 @@ func newMTRSchedulerRuntime(
 		metadataGeoRetryAt:   make(map[string]time.Time),
 		metadataHostRetryAt:  make(map[string]time.Time),
 	}
+	rt.knownFinalTTL.Store(-1)
 	rt.pathTracker = newMTRPathTracker(cfg.MaxPerHop > 0, maxHops, cfg.OnPathEnd)
 	return rt, nil
 }
@@ -206,7 +206,7 @@ func (rt *mtrSchedulerRuntime) run() error {
 }
 
 func (rt *mtrSchedulerRuntime) effectiveMax() int {
-	kf := atomic.LoadInt32(&rt.knownFinalTTL)
+	kf := rt.knownFinalTTL.Load()
 	if kf > 0 && int(kf) < rt.maxHops {
 		return int(kf)
 	}
@@ -705,7 +705,7 @@ func (rt *mtrSchedulerRuntime) observeProbeResponse(ttl int, response *MTRProbeR
 	if pathEnd != nil {
 		boundary = pathEnd.Hop
 	}
-	atomic.StoreInt32(&rt.knownFinalTTL, int32(boundary))
+	rt.knownFinalTTL.Store(int32(boundary))
 	for hop := rt.beginHop; hop <= rt.maxHops; hop++ {
 		rt.states[hop].disabled = boundary > 0 && hop > boundary
 	}
@@ -820,7 +820,7 @@ func (rt *mtrSchedulerRuntime) handleReset() {
 	clear(rt.metadataHostAttempts)
 	clear(rt.metadataGeoRetryAt)
 	clear(rt.metadataHostRetryAt)
-	atomic.StoreInt32(&rt.knownFinalTTL, -1)
+	rt.knownFinalTTL.Store(-1)
 	rt.pathTracker.reset()
 	rt.agg.Reset()
 	_ = rt.prober.Reset()

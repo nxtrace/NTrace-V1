@@ -10,6 +10,20 @@ import (
 	"github.com/nxtrace/NTrace-core/ipgeo"
 )
 
+func TestClearCachesRemovesAllEntries(t *testing.T) {
+	geoCache.Store("198.51.100.1", &ipgeo.IPGeoData{IP: "198.51.100.1"})
+	geoCache.Store("2001:db8::1", &ipgeo.IPGeoData{IP: "2001:db8::1"})
+
+	ClearCaches()
+
+	if _, ok := geoCache.Load("198.51.100.1"); ok {
+		t.Fatal("IPv4 cache entry remained after ClearCaches")
+	}
+	if _, ok := geoCache.Load("2001:db8::1"); ok {
+		t.Fatal("IPv6 cache entry remained after ClearCaches")
+	}
+}
+
 func TestLookupIPGeoCachesResults(t *testing.T) {
 	ClearCaches()
 	t.Cleanup(ClearCaches)

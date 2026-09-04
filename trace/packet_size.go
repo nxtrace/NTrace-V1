@@ -2,7 +2,7 @@ package trace
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 
 	"github.com/nxtrace/NTrace-core/util"
@@ -83,7 +83,7 @@ func resolveProbePayloadSize(method Method, dstIP net.IP, maxPayloadSize int, ra
 	if !randomPerProbe || maxPayloadSize <= minPayload {
 		return maxPayloadSize
 	}
-	return minPayload + rand.Intn(maxPayloadSize-minPayload+1)
+	return minPayload + rand.IntN(maxPayloadSize-minPayload+1)
 }
 
 func packetSizeFamilyLabel(dstIP net.IP) string {

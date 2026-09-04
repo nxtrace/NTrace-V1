@@ -87,6 +87,9 @@ func TestScheduler_ResultBuildersUseBoundedHopCount(t *testing.T) {
 			if rt.maxHops != test.want {
 				t.Fatalf("rt.maxHops = %d, want %d", rt.maxHops, test.want)
 			}
+			if got := rt.knownFinalTTL.Load(); got != -1 {
+				t.Fatalf("knownFinalTTL = %d, want -1", got)
+			}
 
 			if got := len(rt.timeoutProbeResult(test.want).Hops); got != test.want {
 				t.Fatalf("timeoutProbeResult hop len = %d, want %d", got, test.want)

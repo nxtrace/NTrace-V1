@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -589,12 +590,7 @@ func GetPowProvider() string {
 }
 
 func StringInSlice(val string, list []string) bool {
-	for _, v := range list {
-		if v == val {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, val)
 }
 
 func HideIPPart(ip string) string {

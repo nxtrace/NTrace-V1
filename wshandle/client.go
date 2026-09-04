@@ -23,10 +23,7 @@ import (
 func formatHostPort(addr, port string) string {
 	clean := strings.TrimSpace(addr)
 	clean = strings.Trim(clean, "[]")
-	if strings.Contains(clean, ":") {
-		return "[" + clean + "]:" + port
-	}
-	return clean + ":" + port
+	return net.JoinHostPort(clean, port)
 }
 
 type wsWriteJob struct {

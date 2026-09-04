@@ -18,13 +18,13 @@ import (
 type mtrUI struct {
 	isTTY       bool
 	oldState    *term.State // raw mode 之前的终端状态
-	paused      int32       // 0=running, 1=paused（atomic）
-	restartReq  int32       // 1=请求重置统计（atomic）
-	displayMode int32       // 显示模式 0-4（atomic）
-	nameMode    int32       // Host 基础显示 0=PTR/IP, 1=IP only（atomic）
-	disableMPLS int32       // 0=显示 MPLS, 1=隐藏 MPLS（atomic）
-	historyMode int32       // 0=classic, 1=history（atomic）
-	chartMode   int32       // history chart mode 0-2（atomic）
+	paused      atomic.Bool
+	restartReq  atomic.Bool
+	displayMode atomic.Int32 // 显示模式 0-4
+	nameMode    atomic.Int32 // Host 基础显示 0=PTR/IP, 1=IP only
+	disableMPLS atomic.Bool
+	historyMode atomic.Bool
+	chartMode   atomic.Int32 // history chart mode 0-2
 	cancel      context.CancelFunc
 }
 
@@ -32,11 +32,12 @@ type mtrUI struct {
 // initialDisplayMode 设置 TUI 初始显示模式 (0-4)。
 // stdin 和 stdout 都必须是终端才会启用交互式 TUI。
 func newMTRUI(cancel context.CancelFunc, initialDisplayMode int) *mtrUI {
-	return &mtrUI{
-		isTTY:       term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())),
-		cancel:      cancel,
-		displayMode: int32(initialDisplayMode),
+	ui := &mtrUI{
+		isTTY:  term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())),
+		cancel: cancel,
 	}
+	ui.displayMode.Store(int32(initialDisplayMode))
+	return ui
 }
 
 // IsTTY 返回 stdin 和 stdout 是否都是终端。
@@ -56,15 +57,15 @@ func CheckTTY(fds ...int) bool {
 
 // IsPaused 返回当前是否处于暂停状态（供 MTROptions.IsPaused 使用）。
 func (u *mtrUI) IsPaused() bool {
-	return atomic.LoadInt32(&u.paused) == 1
+	return u.paused.Load()
 }
 
 // CycleDisplayMode 循环切换显示模式 (0 → 1 → 2 → 3 → 4 → 0)。
 func (u *mtrUI) CycleDisplayMode() {
 	for {
-		old := atomic.LoadInt32(&u.displayMode)
+		old := u.displayMode.Load()
 		next := (old + 1) % 5
-		if atomic.CompareAndSwapInt32(&u.displayMode, old, next) {
+		if u.displayMode.CompareAndSwap(old, next) {
 			return
 		}
 	}
@@ -72,15 +73,14 @@ func (u *mtrUI) CycleDisplayMode() {
 
 // CurrentDisplayMode 返回当前显示模式 (0-4)。
 func (u *mtrUI) CurrentDisplayMode() int {
-	return int(atomic.LoadInt32(&u.displayMode))
+	return int(u.displayMode.Load())
 }
 
 // ToggleHistoryMode 在 classic 和 history TUI 之间切换。
 func (u *mtrUI) ToggleHistoryMode() {
 	for {
-		old := atomic.LoadInt32(&u.historyMode)
-		next := int32(1) - old
-		if atomic.CompareAndSwapInt32(&u.historyMode, old, next) {
+		old := u.historyMode.Load()
+		if u.historyMode.CompareAndSwap(old, !old) {
 			return
 		}
 	}
@@ -88,7 +88,7 @@ func (u *mtrUI) ToggleHistoryMode() {
 
 // IsHistoryMode 返回当前是否显示 history TUI。
 func (u *mtrUI) IsHistoryMode() bool {
-	return atomic.LoadInt32(&u.historyMode) != 0
+	return u.historyMode.Load()
 }
 
 // CycleHistoryChartMode 仅在 history TUI 下循环切换图表模式。
@@ -97,9 +97,9 @@ func (u *mtrUI) CycleHistoryChartMode() {
 		return
 	}
 	for {
-		old := atomic.LoadInt32(&u.chartMode)
+		old := u.chartMode.Load()
 		next := (old + 1) % 3
-		if atomic.CompareAndSwapInt32(&u.chartMode, old, next) {
+		if u.chartMode.CompareAndSwap(old, next) {
 			return
 		}
 	}
@@ -107,15 +107,15 @@ func (u *mtrUI) CycleHistoryChartMode() {
 
 // CurrentHistoryChartMode 返回 history 图表模式。
 func (u *mtrUI) CurrentHistoryChartMode() int {
-	return int(atomic.LoadInt32(&u.chartMode))
+	return int(u.chartMode.Load())
 }
 
 // ToggleNameMode 在 PTR/IP (0) 和 IP only (1) 之间切换。
 func (u *mtrUI) ToggleNameMode() int32 {
 	for {
-		old := atomic.LoadInt32(&u.nameMode)
+		old := u.nameMode.Load()
 		next := int32(1) - old // 0→1, 1→0
-		if atomic.CompareAndSwapInt32(&u.nameMode, old, next) {
+		if u.nameMode.CompareAndSwap(old, next) {
 			return next
 		}
 	}
@@ -123,15 +123,14 @@ func (u *mtrUI) ToggleNameMode() int32 {
 
 // CurrentNameMode 返回当前 Host 基础显示模式 (0=PTR/IP, 1=IP only)。
 func (u *mtrUI) CurrentNameMode() int {
-	return int(atomic.LoadInt32(&u.nameMode))
+	return int(u.nameMode.Load())
 }
 
 // ToggleMPLS 在显示 MPLS (0) 和隐藏 MPLS (1) 之间切换。
 func (u *mtrUI) ToggleMPLS() {
 	for {
-		old := atomic.LoadInt32(&u.disableMPLS)
-		next := int32(1) - old // 0→1, 1→0
-		if atomic.CompareAndSwapInt32(&u.disableMPLS, old, next) {
+		old := u.disableMPLS.Load()
+		if u.disableMPLS.CompareAndSwap(old, !old) {
 			return
 		}
 	}
@@ -139,7 +138,7 @@ func (u *mtrUI) ToggleMPLS() {
 
 // IsMPLSDisabled 返回当前是否隐藏 MPLS 显示。
 func (u *mtrUI) IsMPLSDisabled() bool {
-	return atomic.LoadInt32(&u.disableMPLS) != 0
+	return u.disableMPLS.Load()
 }
 
 // ---------------------------------------------------------------------------
@@ -410,11 +409,11 @@ func (u *mtrUI) ReadKeysLoop(ctx context.Context) {
 				}
 				return
 			case mtrActionPause:
-				atomic.StoreInt32(&u.paused, 1)
+				u.paused.Store(true)
 			case mtrActionResume:
-				atomic.StoreInt32(&u.paused, 0)
+				u.paused.Store(false)
 			case mtrActionRestart:
-				atomic.StoreInt32(&u.restartReq, 1)
+				u.restartReq.Store(true)
 			case mtrActionDisplayMode:
 				u.CycleDisplayMode()
 			case mtrActionNameToggle:
@@ -433,7 +432,7 @@ func (u *mtrUI) ReadKeysLoop(ctx context.Context) {
 // ConsumeRestartRequest 原子读取并清除重置请求标志。
 // 返回 true 表示请求了重置统计。
 func (u *mtrUI) ConsumeRestartRequest() bool {
-	return atomic.SwapInt32(&u.restartReq, 0) == 1
+	return u.restartReq.Swap(false)
 }
 
 // ParseMTRKey 将单字节解析为操作名称（用于测试）。
