@@ -1235,23 +1235,16 @@ func lookupGeoSourceWithContext(ctx context.Context, cacheKey string, fn func() 
 }
 
 func lookupGeoSourceDirectWithContext(ctx context.Context, fn func() (any, error)) (any, error) {
-	type result struct {
-		value any
-		err   error
+	// Source callbacks must honor their timeout argument. Running fn in a detached
+	// goroutine cannot stop a blocked callback and adds overhead to in-memory sources.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-
-	resultCh := make(chan result, 1)
-	go func() {
-		value, err := fn()
-		resultCh <- result{value: value, err: err}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case result := <-resultCh:
-		return result.value, result.err
+	value, err := fn()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
 	}
+	return value, err
 }
 
 func lookupGeoWithRetry(c Config, cacheKey, query string, dn42 bool) (*ipgeo.IPGeoData, error) {

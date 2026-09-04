@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
@@ -235,42 +236,61 @@ func TestLookupGeoWithRetryDN42BypassesSingleflight(t *testing.T) {
 	}
 }
 
-func TestLookupGeoWithRetryDN42HonorsContextCancellation(t *testing.T) {
-	ClearCaches()
-	t.Cleanup(ClearCaches)
+func TestLookupGeoWithRetryDN42ReturnsCancellationAfterSourceFinishes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ClearCaches()
+		t.Cleanup(ClearCaches)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	started := make(chan struct{})
-	release := make(chan struct{})
-	defer close(release)
+		ctx, cancel := context.WithCancel(t.Context())
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := lookupGeoWithRetry(Config{
-			Context: ctx,
-			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
-				close(started)
-				<-release
-				return &ipgeo.IPGeoData{Asnumber: "DN42"}, nil
-			},
-			NumMeasurements: 1,
-		}, "172.20.0.3", "172.20.0.3", true)
-		done <- err
-	}()
+		done := make(chan error, 1)
+		go func() {
+			_, err := lookupGeoWithRetry(Config{
+				Context: ctx,
+				IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+					close(started)
+					<-release
+					return &ipgeo.IPGeoData{Asnumber: "DN42"}, nil
+				},
+				NumMeasurements: 1,
+			}, "172.20.0.3", "172.20.0.3", true)
+			done <- err
+		}()
 
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("DN42 source lookup did not start")
-	}
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
+		<-started
+		cancel()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("lookupGeoWithRetry() returned %v before the source finished", err)
+		default:
+		}
+
+		releaseOnce.Do(func() { close(release) })
+		synctest.Wait()
+		if err := <-done; !errors.Is(err, context.Canceled) {
 			t.Fatalf("lookupGeoWithRetry() error = %v, want context.Canceled", err)
 		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("DN42 lookup did not return after context cancellation")
+	})
+}
+
+func TestLookupGeoSourceDirectWithContextDoesNotAllocate(t *testing.T) {
+	ctx := context.Background()
+	want := &ipgeo.IPGeoData{Asnumber: "DN42"}
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, err := lookupGeoSourceDirectWithContext(ctx, func() (any, error) {
+			return want, nil
+		})
+		if err != nil || got != want {
+			panic("unexpected direct geo lookup result")
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("lookupGeoSourceDirectWithContext() allocations = %v, want 0", allocs)
 	}
 }
 
