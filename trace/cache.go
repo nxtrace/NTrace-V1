@@ -86,7 +86,7 @@ func (cache *geoCacheRuntime) lookup(
 	language string,
 	maptrace bool,
 ) (*ipgeo.IPGeoData, error) {
-	return cache.lookupContext(nil, descriptor, query, timeout, language, maptrace)
+	return cache.lookupContext(context.Background(), descriptor, query, timeout, language, maptrace)
 }
 
 func (cache *geoCacheRuntime) lookupContext(
