@@ -18,7 +18,12 @@ import (
 )
 
 func newStartedTestWsConn() *WsConn {
+	return newStartedTestWsConnWithContext(context.Background())
+}
+
+func newStartedTestWsConnWithContext(ctx context.Context) *WsConn {
 	c := newWsConn(nil, make(chan os.Signal, 1))
+	c.baseCtx = ctx
 	c.setDoneChan(make(chan struct{}))
 	c.setConnectionState(false, false)
 	c.startLoop(c.keepAlive)
@@ -140,8 +145,7 @@ func TestReplaceGlobalWsConnDoesNotRewriteBaseContext(t *testing.T) {
 	replacementCtx, replacementCancel := context.WithCancel(context.Background())
 	defer replacementCancel()
 
-	newConn := newStartedTestWsConn()
-	newConn.baseCtx = originalCtx
+	newConn := newStartedTestWsConnWithContext(originalCtx)
 
 	got := replaceGlobalWsConn(newConn, replacementCtx)
 	defer got.Close()
