@@ -68,20 +68,17 @@ func (o *nextTraceAPIV3ReceiverOwner) ensure(wsConn *wshandle.WsConn) *nextTrace
 	o.receivers[receiveCh] = receiver
 	o.mu.Unlock()
 
-	go o.consume(wsConn, receiveCh, receiver)
+	go o.consume(receiveCh, receiver)
 	return receiver
 }
 
 func (o *nextTraceAPIV3ReceiverOwner) consume(
-	wsConn *wshandle.WsConn,
 	receiveCh <-chan string,
 	receiver *nextTraceAPIV3Receiver,
 ) {
-	wsConn.ConnMux.Lock()
 	for data := range receiveCh {
 		dispatchNextTraceAPIV3Message(data)
 	}
-	wsConn.ConnMux.Unlock()
 
 	o.mu.Lock()
 	if o.receivers[receiveCh] == receiver {

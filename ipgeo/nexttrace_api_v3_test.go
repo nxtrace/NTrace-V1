@@ -95,6 +95,10 @@ func TestNextTraceAPIV3ReceiverOwnerKeepsOldAndNewChannelsDuringHandoff(t *testi
 
 	oldReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`
 	assertNextTraceAPIV3ASN(t, oldResult, "13335")
+	if !oldConn.ConnMux.TryLock() {
+		t.Fatal("receiver holds compatibility ConnMux while waiting for messages")
+	}
+	oldConn.ConnMux.Unlock()
 
 	close(oldReceiveCh)
 	waitForNextTraceAPIV3ReceiverDone(t, oldReceiver)
