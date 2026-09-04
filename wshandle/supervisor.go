@@ -82,9 +82,10 @@ type wsWriteResult struct {
 }
 
 type wsSubmission struct {
-	ctx context.Context
-	msg string
-	ack chan error
+	ctx   context.Context
+	msg   string
+	ack   chan error
+	reply chan<- string
 }
 
 type wsRequestCancel struct {
@@ -541,10 +542,16 @@ func (c *WsConn) managedWriteLoop() {
 						result.err = errMissingWriteConn
 					} else {
 						_ = job.wire.SetWriteDeadline(time.Now().Add(wsClientWriteTimeout))
+						if job.progress != nil {
+							job.progress.began.Store(true)
+						}
 						if job.awaitReply && contextErr(job.requestCtx) != nil {
 							result.err = errRequestCanceled
 						} else {
 							result.err = job.wire.WriteMessage(job.msgType, job.data)
+							if result.err == nil && job.progress != nil {
+								job.progress.succeeded.Store(true)
+							}
 						}
 					}
 				}
@@ -576,16 +583,17 @@ func (c *WsConn) handleReadEvent(state *wsSupervisorState, event wsReadEvent, re
 		state.pingOutstanding = false
 		return
 	}
-	c.completePendingResponse(state, event.generation, event.data)
-	*receiveQueue = append(*receiveQueue, string(event.data))
+	if !c.completePendingResponse(state, event.generation, event.data) {
+		*receiveQueue = append(*receiveQueue, string(event.data))
+	}
 }
 
-func (c *WsConn) completePendingResponse(state *wsSupervisorState, generation uint64, data []byte) {
+func (c *WsConn) completePendingResponse(state *wsSupervisorState, generation uint64, data []byte) bool {
 	var response struct {
 		IP string `json:"ip"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil || response.IP == "" {
-		return
+		return false
 	}
 
 	var oldestID uint64
@@ -598,12 +606,14 @@ func (c *WsConn) completePendingResponse(state *wsSupervisorState, generation ui
 		}
 	}
 	if oldestID != 0 {
-		c.finishPendingRequest(state, oldestID)
+		job, _ := c.finishPendingRequest(state, oldestID)
+		return deliverBoundResponse(job, string(data))
 	}
+	return false
 }
 
 func (c *WsConn) handlePublicWrite(state *wsSupervisorState, msg string) {
-	if err := c.registerRequest(state, msg, nil, false); err != nil {
+	if err := c.registerRequest(state, msg, nil, false, nil); err != nil {
 		c.trySendReceiveMessage(apiServerErrorMessage(msg))
 		if errors.Is(err, errWriteQueueFull) {
 			c.endGeneration(state, err, true)
@@ -616,7 +626,7 @@ func (c *WsConn) handleSubmission(state *wsSupervisorState, submission wsSubmiss
 		submission.ack <- err
 		return
 	}
-	err := c.registerRequest(state, submission.msg, submission.ctx, true)
+	err := c.registerRequest(state, submission.msg, submission.ctx, true, submission.reply)
 	if errors.Is(err, errWriteQueueFull) {
 		c.endGeneration(state, err, true)
 	}
@@ -628,6 +638,7 @@ func (c *WsConn) registerRequest(
 	msg string,
 	requestCtx context.Context,
 	awaitReply bool,
+	reply chan<- string,
 ) error {
 	if awaitReply {
 		if err := contextErr(requestCtx); err != nil {
@@ -636,6 +647,9 @@ func (c *WsConn) registerRequest(
 	}
 	if c.rootCtx.Err() != nil || state.generation == nil || state.interrupting {
 		return errConnClosed
+	}
+	if len(state.pending) >= wsClientWriteQueueSize {
+		return errWriteQueueFull
 	}
 	state.nextJobID++
 	job := wsWriteJob{
@@ -649,6 +663,8 @@ func (c *WsConn) registerRequest(
 		requestIP:  msg,
 		requestCtx: requestCtx,
 		awaitReply: awaitReply,
+		progress:   &wsWriteProgress{},
+		reply:      reply,
 	}
 	if !c.enqueueManagedWrite(job) {
 		return errWriteQueueFull
@@ -658,6 +674,17 @@ func (c *WsConn) registerRequest(
 	}
 	state.pending[job.id] = job
 	return nil
+}
+
+func deliverBoundResponse(job wsWriteJob, response string) bool {
+	if job.reply == nil {
+		return false
+	}
+	select {
+	case job.reply <- response:
+	default:
+	}
+	return true
 }
 
 func (c *WsConn) watchRequestContext(job *wsWriteJob) {
@@ -677,7 +704,11 @@ func (c *WsConn) handleRequestCancel(state *wsSupervisorState, canceled wsReques
 	if !ok || job.generation != canceled.generation {
 		return
 	}
-	c.finishPendingRequest(state, canceled.jobID)
+	job, _ = c.finishPendingRequest(state, canceled.jobID)
+	if job.awaitReply && job.progress != nil && job.progress.began.Load() &&
+		state.generation != nil && state.generation.id == canceled.generation {
+		c.endGeneration(state, errRequestCanceled, true)
+	}
 }
 
 func (c *WsConn) finishPendingRequest(state *wsSupervisorState, jobID uint64) (wsWriteJob, bool) {
@@ -731,6 +762,56 @@ func (c *WsConn) SendMessage(ctx context.Context, msg string) error {
 	}
 }
 
+// RequestMessage submits msg to the current managed websocket generation and
+// returns only the response matched to that request. Compatibility WsConn
+// values created as struct literals continue to use SendMessage and the public
+// receive channel instead.
+func (c *WsConn) RequestMessage(ctx context.Context, msg string) (string, error) {
+	if c == nil {
+		return "", errConnClosed
+	}
+	ctx = normalizeContext(ctx)
+	if err := contextErr(ctx); err != nil {
+		return "", err
+	}
+	if !c.managed {
+		return "", ErrRequestResponseUnsupported
+	}
+
+	reply := make(chan string, 1)
+	submission := wsSubmission{
+		ctx:   ctx,
+		msg:   msg,
+		ack:   make(chan error, 1),
+		reply: reply,
+	}
+	select {
+	case c.submitCh <- submission:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-c.rootCtx.Done():
+		return "", errConnClosed
+	}
+
+	select {
+	case err := <-submission.ack:
+		if err != nil {
+			return "", err
+		}
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-c.rootCtx.Done():
+		return "", errConnClosed
+	}
+
+	select {
+	case response := <-reply:
+		return response, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
 func (c *WsConn) enqueueManagedWrite(job wsWriteJob) bool {
 	select {
 	case c.managedWriteCh <- job:
@@ -753,15 +834,15 @@ func (c *WsConn) handleWriteResult(state *wsSupervisorState, result wsWriteResul
 			return
 		}
 		if result.err == nil {
-			if pending && !pendingJob.awaitReply {
-				c.finishPendingRequest(state, job.id)
-			}
 			return
 		}
 		if pending {
-			c.finishPendingRequest(state, job.id)
+			pendingJob, _ = c.finishPendingRequest(state, job.id)
 			if contextErr(pendingJob.requestCtx) == nil {
-				c.trySendReceiveMessage(apiServerErrorMessage(pendingJob.requestIP))
+				failure := apiServerErrorMessage(pendingJob.requestIP)
+				if !deliverBoundResponse(pendingJob, failure) {
+					c.trySendReceiveMessage(failure)
+				}
 			}
 		}
 		if state.generation != nil && job.generation == state.generation.id {
@@ -872,8 +953,14 @@ func (c *WsConn) failPendingGeneration(state *wsSupervisorState, generation uint
 			continue
 		}
 		c.finishPendingRequest(state, id)
+		if !job.awaitReply && job.progress != nil && job.progress.succeeded.Load() {
+			continue
+		}
 		if contextErr(job.requestCtx) == nil {
-			c.trySendReceiveMessage(apiServerErrorMessage(job.requestIP))
+			failure := apiServerErrorMessage(job.requestIP)
+			if !deliverBoundResponse(job, failure) {
+				c.trySendReceiveMessage(failure)
+			}
 		}
 	}
 }

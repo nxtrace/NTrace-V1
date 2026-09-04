@@ -661,6 +661,269 @@ func TestManagedSendMessageDoesNotReplayAcceptedOldGenerationWrite(t *testing.T)
 	})
 }
 
+func TestManagedRequestMessageIgnoresQueuedPreviousGenerationResponse(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dialer := newSupervisorTestDialer()
+		firstWire := newSupervisorTestWire()
+		secondWire := newSupervisorTestWire()
+		dialer.results <- supervisorTestDialResult{wire: firstWire}
+		dialer.results <- supervisorTestDialResult{wire: secondWire}
+		defer installSupervisorTestDialer(dialer)()
+
+		conn := newSupervisorTestConn(context.Background())
+		defer conn.Close()
+		synctest.Wait()
+		_ = supervisorDialCallCount(dialer)
+
+		for i := 0; i < cap(conn.MsgReceiveCh); i++ {
+			conn.MsgReceiveCh <- fmt.Sprintf("queued-%d", i)
+		}
+
+		const request = "203.0.113.40"
+		const oldResponse = `{"ip":"203.0.113.40","asnumber":"OLD"}`
+		if err := conn.SendMessage(context.Background(), request); err != nil {
+			t.Fatalf("SendMessage() error = %v", err)
+		}
+		synctest.Wait()
+		requireSupervisorWrite(t, firstWire, websocket.TextMessage, request)
+		firstWire.reads <- supervisorTestRead{data: oldResponse}
+		synctest.Wait()
+
+		firstWire.reads <- supervisorTestRead{err: errors.New("replace generation")}
+		synctest.Wait()
+		time.Sleep(wsClientReconnectDelay)
+		synctest.Wait()
+		if got := supervisorDialCallCount(dialer); got != 1 {
+			t.Fatalf("reconnect dial calls = %d, want 1", got)
+		}
+
+		type requestResult struct {
+			response string
+			err      error
+		}
+		done := make(chan requestResult, 1)
+		go func() {
+			response, err := conn.RequestMessage(context.Background(), request)
+			done <- requestResult{response: response, err: err}
+		}()
+		synctest.Wait()
+		requireSupervisorWrite(t, secondWire, websocket.TextMessage, request)
+
+		<-conn.MsgReceiveCh
+		synctest.Wait()
+		sawOldResponse := false
+		for i := 0; i < cap(conn.MsgReceiveCh); i++ {
+			if got := <-conn.MsgReceiveCh; got == oldResponse {
+				sawOldResponse = true
+			}
+		}
+		if !sawOldResponse {
+			t.Fatal("previous-generation response was not released from the public queue")
+		}
+		select {
+		case got := <-done:
+			t.Fatalf("previous-generation response completed current request: %+v", got)
+		default:
+		}
+
+		const currentResponse = `{"ip":"203.0.113.40","asnumber":"CURRENT"}`
+		secondWire.reads <- supervisorTestRead{data: currentResponse}
+		synctest.Wait()
+		got := <-done
+		if got.err != nil || got.response != currentResponse {
+			t.Fatalf("RequestMessage() = (%q, %v), want (%q, nil)", got.response, got.err, currentResponse)
+		}
+		requireNoSupervisorReceive(t, conn)
+	})
+}
+
+func TestManagedRequestMessageDoesNotConsumeLegacySameIPResponse(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dialer := newSupervisorTestDialer()
+		wire := newSupervisorTestWire()
+		dialer.results <- supervisorTestDialResult{wire: wire}
+		defer installSupervisorTestDialer(dialer)()
+
+		conn := newSupervisorTestConn(context.Background())
+		defer conn.Close()
+		synctest.Wait()
+		_ = supervisorDialCallCount(dialer)
+
+		const request = "203.0.113.44"
+		conn.MsgSendCh <- request
+		synctest.Wait()
+		requireSupervisorWrite(t, wire, websocket.TextMessage, request)
+
+		type requestResult struct {
+			response string
+			err      error
+		}
+		done := make(chan requestResult, 1)
+		go func() {
+			response, err := conn.RequestMessage(context.Background(), request)
+			done <- requestResult{response: response, err: err}
+		}()
+		synctest.Wait()
+		requireSupervisorWrite(t, wire, websocket.TextMessage, request)
+
+		const legacyResponse = `{"ip":"203.0.113.44","asnumber":"LEGACY"}`
+		wire.reads <- supervisorTestRead{data: legacyResponse}
+		synctest.Wait()
+		requireSupervisorReceive(t, conn, legacyResponse)
+		select {
+		case got := <-done:
+			t.Fatalf("legacy response completed bound request: %+v", got)
+		default:
+		}
+
+		const boundResponse = `{"ip":"203.0.113.44","asnumber":"BOUND"}`
+		wire.reads <- supervisorTestRead{data: boundResponse}
+		synctest.Wait()
+		got := <-done
+		if got.err != nil || got.response != boundResponse {
+			t.Fatalf("RequestMessage() = (%q, %v), want (%q, nil)", got.response, got.err, boundResponse)
+		}
+		requireNoSupervisorReceive(t, conn)
+	})
+}
+
+func TestManagedRequestMessageGenerationFailureReturnsBoundAPIError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dialer := newSupervisorTestDialer()
+		wire := newSupervisorTestWire()
+		dialer.results <- supervisorTestDialResult{wire: wire}
+		defer installSupervisorTestDialer(dialer)()
+
+		conn := newSupervisorTestConn(context.Background())
+		defer conn.Close()
+		synctest.Wait()
+		_ = supervisorDialCallCount(dialer)
+
+		const request = "203.0.113.41"
+		done := make(chan struct {
+			response string
+			err      error
+		}, 1)
+		go func() {
+			response, err := conn.RequestMessage(context.Background(), request)
+			done <- struct {
+				response string
+				err      error
+			}{response: response, err: err}
+		}()
+		synctest.Wait()
+		requireSupervisorWrite(t, wire, websocket.TextMessage, request)
+
+		wire.reads <- supervisorTestRead{err: errors.New("request generation failed")}
+		synctest.Wait()
+		got := <-done
+		want := apiServerErrorMessage(request)
+		if got.err != nil || got.response != want {
+			t.Fatalf("RequestMessage() = (%q, %v), want (%q, nil)", got.response, got.err, want)
+		}
+		requireNoSupervisorReceive(t, conn)
+	})
+}
+
+func TestManagedRequestMessageCancellationRotatesGeneration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dialer := newSupervisorTestDialer()
+		firstWire := newSupervisorTestWire()
+		secondWire := newSupervisorTestWire()
+		dialer.results <- supervisorTestDialResult{wire: firstWire}
+		dialer.results <- supervisorTestDialResult{wire: secondWire}
+		defer installSupervisorTestDialer(dialer)()
+
+		conn := newSupervisorTestConn(context.Background())
+		defer conn.Close()
+		synctest.Wait()
+		_ = supervisorDialCallCount(dialer)
+
+		const request = "203.0.113.42"
+		requestCtx, cancelRequest := context.WithCancel(context.Background())
+		firstDone := make(chan error, 1)
+		go func() {
+			_, err := conn.RequestMessage(requestCtx, request)
+			firstDone <- err
+		}()
+		synctest.Wait()
+		requireSupervisorWrite(t, firstWire, websocket.TextMessage, request)
+
+		const peerRequest = "203.0.113.43"
+		peerDone := make(chan struct {
+			response string
+			err      error
+		}, 1)
+		go func() {
+			response, err := conn.RequestMessage(context.Background(), peerRequest)
+			peerDone <- struct {
+				response string
+				err      error
+			}{response: response, err: err}
+		}()
+		synctest.Wait()
+		requireSupervisorWrite(t, firstWire, websocket.TextMessage, peerRequest)
+
+		cancelRequest()
+		synctest.Wait()
+		if err := <-firstDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled RequestMessage() error = %v, want %v", err, context.Canceled)
+		}
+		peerResult := <-peerDone
+		peerFailure := apiServerErrorMessage(peerRequest)
+		if peerResult.err != nil || peerResult.response != peerFailure {
+			t.Fatalf(
+				"peer RequestMessage() = (%q, %v), want (%q, nil)",
+				peerResult.response,
+				peerResult.err,
+				peerFailure,
+			)
+		}
+		requireNoSupervisorReceive(t, conn)
+		if !firstWire.isClosed() || conn.IsConnected() {
+			t.Fatal("canceling a bound request did not retire its generation")
+		}
+
+		time.Sleep(wsClientReconnectDelay)
+		synctest.Wait()
+		if got := supervisorDialCallCount(dialer); got != 1 {
+			t.Fatalf("reconnect dial calls = %d, want 1", got)
+		}
+
+		type requestResult struct {
+			response string
+			err      error
+		}
+		secondDone := make(chan requestResult, 1)
+		go func() {
+			response, err := conn.RequestMessage(context.Background(), request)
+			secondDone <- requestResult{response: response, err: err}
+		}()
+		synctest.Wait()
+		requireSupervisorWrite(t, secondWire, websocket.TextMessage, request)
+
+		conn.readEvents <- wsReadEvent{
+			generation: 1,
+			data:       []byte(`{"ip":"203.0.113.42","asnumber":"STALE"}`),
+		}
+		synctest.Wait()
+		select {
+		case got := <-secondDone:
+			t.Fatalf("canceled generation response completed replacement request: %+v", got)
+		default:
+		}
+
+		const currentResponse = `{"ip":"203.0.113.42","asnumber":"CURRENT"}`
+		secondWire.reads <- supervisorTestRead{data: currentResponse}
+		synctest.Wait()
+		got := <-secondDone
+		if got.err != nil || got.response != currentResponse {
+			t.Fatalf("replacement RequestMessage() = (%q, %v), want (%q, nil)", got.response, got.err, currentResponse)
+		}
+		requireNoSupervisorReceive(t, conn)
+	})
+}
+
 func TestManagedCloseDeliversAcceptedPendingFailureBeforeClosingReceive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dialer := newSupervisorTestDialer()
@@ -748,7 +1011,7 @@ func TestManagedSendMessageWrittenBeforeResponseFailsOnceOnGenerationEnd(t *test
 	})
 }
 
-func TestManagedSendMessageContextCancelClearsPendingSilently(t *testing.T) {
+func TestManagedSendMessageContextCancelRetiresWrittenGenerationSilently(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dialer := newSupervisorTestDialer()
 		wire := newSupervisorTestWire()
@@ -770,10 +1033,9 @@ func TestManagedSendMessageContextCancelClearsPendingSilently(t *testing.T) {
 		cancelRequest()
 		synctest.Wait()
 		requireNoSupervisorReceive(t, conn)
-
-		wire.reads <- supervisorTestRead{err: errors.New("connection ended after request cancellation")}
-		synctest.Wait()
-		requireNoSupervisorReceive(t, conn)
+		if !wire.isClosed() || conn.IsConnected() {
+			t.Fatal("canceling a written SendMessage did not retire its generation")
+		}
 	})
 }
 
@@ -835,6 +1097,51 @@ func TestManagedLegacyWriteSuccessDoesNotAwaitResponse(t *testing.T) {
 		wire.reads <- supervisorTestRead{err: errors.New("connection ended after legacy write")}
 		synctest.Wait()
 		requireNoSupervisorReceive(t, conn)
+	})
+}
+
+func TestLegacyGenerationCleanupObservesWriterSuccessBeforeWriteResult(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rootCtx, cancelRoot := context.WithCancel(context.Background())
+		wire := newSupervisorTestWire()
+		conn := &WsConn{
+			MsgReceiveCh:   make(chan string, 1),
+			closeCh:        make(chan struct{}),
+			rootCtx:        rootCtx,
+			managedWriteCh: make(chan wsWriteJob, 1),
+			writeResults:   make(chan wsWriteResult, 1),
+		}
+		conn.workerWG.Add(1)
+		go conn.managedWriteLoop()
+
+		progress := &wsWriteProgress{}
+		job := wsWriteJob{
+			id:         1,
+			generation: 1,
+			wire:       wire,
+			kind:       wsWriteRequest,
+			msgType:    websocket.TextMessage,
+			data:       []byte("203.0.113.45"),
+			requestIP:  "203.0.113.45",
+			progress:   progress,
+		}
+		conn.managedWriteCh <- job
+		synctest.Wait()
+		requireSupervisorWrite(t, wire, websocket.TextMessage, job.requestIP)
+		if !progress.succeeded.Load() || len(conn.writeResults) != 1 {
+			t.Fatal("writer success was not published before its queued result")
+		}
+
+		state := wsSupervisorState{pending: map[uint64]wsWriteJob{job.id: job}}
+		conn.failPendingGeneration(&state, job.generation)
+		if len(state.pending) != 0 {
+			t.Fatal("successful legacy marker remained pending after generation cleanup")
+		}
+		requireNoSupervisorReceive(t, conn)
+
+		cancelRoot()
+		synctest.Wait()
+		conn.workerWG.Wait()
 	})
 }
 
@@ -970,6 +1277,26 @@ func TestCompletePendingResponseUsesOldestMatchingRequest(t *testing.T) {
 		if _, ok := state.pending[id]; !ok {
 			t.Fatalf("pending request %d was completed unexpectedly", id)
 		}
+	}
+}
+
+func TestRegisterRequestBoundsPendingMarkers(t *testing.T) {
+	pending := make(map[uint64]wsWriteJob, wsClientWriteQueueSize)
+	for id := uint64(1); id <= wsClientWriteQueueSize; id++ {
+		pending[id] = wsWriteJob{id: id, generation: 1}
+	}
+	state := wsSupervisorState{
+		generation: &wsGeneration{id: 1},
+		pending:    pending,
+	}
+	conn := &WsConn{rootCtx: context.Background()}
+
+	err := conn.registerRequest(&state, "192.0.2.100", nil, false, nil)
+	if !errors.Is(err, errWriteQueueFull) {
+		t.Fatalf("registerRequest() error = %v, want %v", err, errWriteQueueFull)
+	}
+	if got := len(state.pending); got != wsClientWriteQueueSize {
+		t.Fatalf("pending markers = %d, want %d", got, wsClientWriteQueueSize)
 	}
 }
 

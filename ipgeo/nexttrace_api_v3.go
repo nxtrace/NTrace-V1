@@ -30,12 +30,17 @@ var IPPools = IPPool{
 
 var getNextTraceAPIV3WSConn = wshandle.GetWsConn
 var sendNextTraceAPIV3IPRequestFn = sendNextTraceAPIV3IPRequest
+var requestNextTraceAPIV3IPFn = requestNextTraceAPIV3IP
 
 func sendNextTraceAPIV3IPRequest(ctx context.Context, wsConn *wshandle.WsConn, ip string) bool {
 	if wsConn == nil {
 		return false
 	}
 	return wsConn.SendMessage(ctx, ip) == nil
+}
+
+func requestNextTraceAPIV3IP(ctx context.Context, wsConn *wshandle.WsConn, ip string) (string, error) {
+	return wsConn.RequestMessage(ctx, ip)
 }
 
 type nextTraceAPIV3Receiver struct {
@@ -91,6 +96,12 @@ func (o *nextTraceAPIV3ReceiverOwner) consume(
 var nextTraceAPIV3Receivers = newNextTraceAPIV3ReceiverOwner()
 
 func dispatchNextTraceAPIV3Message(data string) {
+	ip, geo := parseNextTraceAPIV3Message(data)
+	ch := nextTraceAPIV3ResponseChannel(ip)
+	deliverGeo(ch, geo)
+}
+
+func parseNextTraceAPIV3Message(data string) (string, IPGeoData) {
 	// json解析 -> data
 	res := gjson.Parse(data)
 	// 根据返回的IP信息，发送给对应等待回复的IP通道上
@@ -124,8 +135,10 @@ func dispatchNextTraceAPIV3Message(data string) {
 		Prefix:    res.Get("prefix").String(),
 		Router:    m,
 	}
+	return ip, geo
+}
 
-	// Safely load (or lazily create) the channel for this IP before sending
+func nextTraceAPIV3ResponseChannel(ip string) chan IPGeoData {
 	IPPools.poolMux.RLock()
 	ch, ok := IPPools.pool[ip]
 	IPPools.poolMux.RUnlock()
@@ -137,7 +150,7 @@ func dispatchNextTraceAPIV3Message(data string) {
 		ch = IPPools.pool[ip]
 		IPPools.poolMux.Unlock()
 	}
-	deliverGeo(ch, geo)
+	return ch
 }
 
 func deliverGeo(ch chan IPGeoData, geo IPGeoData) {
@@ -164,20 +177,6 @@ func NextTraceAPIV3GeoIP(ip string, timeout time.Duration, lang string, maptrace
 		timeout = 2 * time.Second
 	}
 
-	// 确保对应 IP 的通道已存在（读锁快速路径 + 写锁惰性创建）
-	IPPools.poolMux.RLock()
-	ch, ok := IPPools.pool[ip]
-	IPPools.poolMux.RUnlock()
-	if !ok || ch == nil {
-		IPPools.poolMux.Lock()
-		if IPPools.pool[ip] == nil {
-			IPPools.pool[ip] = make(chan IPGeoData, 1)
-		}
-		ch = IPPools.pool[ip]
-		IPPools.poolMux.Unlock()
-	}
-	drainStaleGeo(ch)
-
 	wsConn := getNextTraceAPIV3WSConn()
 	if wsConn == nil {
 		return &IPGeoData{}, errors.New("TimeOut")
@@ -192,12 +191,22 @@ func NextTraceAPIV3GeoIP(ip string, timeout time.Duration, lang string, maptrace
 		return &IPGeoData{}, err
 	}
 
-	// Bind the response consumer to the same connection selected above. A
-	// concurrent global replacement must not move this request to another
-	// connection between readiness, send, and response dispatch.
+	// Keep one consumer on the compatibility stream for unsolicited or legacy
+	// messages. Bound responses are delivered directly by the supervisor.
 	nextTraceAPIV3Receivers.ensure(wsConn)
+	response, err := requestNextTraceAPIV3IPFn(waitCtx, wsConn, ip)
+	if err == nil {
+		_, geo := parseNextTraceAPIV3Message(response)
+		return &geo, nil
+	}
+	if !errors.Is(err, wshandle.ErrRequestResponseUnsupported) {
+		return &IPGeoData{}, errors.New("TimeOut")
+	}
 
-	// 发送请求
+	// Compatibility WsConn values created as struct literals have no managed
+	// generation. Preserve their public-channel behavior for callers and tests.
+	ch := nextTraceAPIV3ResponseChannel(ip)
+	drainStaleGeo(ch)
 	if !sendNextTraceAPIV3IPRequestFn(waitCtx, wsConn, ip) {
 		return &IPGeoData{}, errors.New("TimeOut")
 	}

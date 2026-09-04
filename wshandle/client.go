@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,7 +36,14 @@ type wsWriteJob struct {
 	requestCtx context.Context
 	stopCancel func() bool
 	awaitReply bool
+	progress   *wsWriteProgress
+	reply      chan<- string
 	pongSerial uint64
+}
+
+type wsWriteProgress struct {
+	began     atomic.Bool
+	succeeded atomic.Bool
 }
 
 const (
@@ -159,6 +167,10 @@ func (c *WsConn) closeDoneLocked() {
 		c.notifyStateLocked()
 	}
 }
+
+// ErrRequestResponseUnsupported reports that a compatibility WsConn has no
+// supervisor capable of binding a response to its request generation.
+var ErrRequestResponseUnsupported = errors.New("wshandle: request-bound responses require a managed connection")
 
 var (
 	errWriteQueueFull = errors.New("wshandle: write queue full")

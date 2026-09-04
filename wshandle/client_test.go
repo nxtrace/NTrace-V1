@@ -685,6 +685,28 @@ func TestLiteralWsConnSendMessageFallback(t *testing.T) {
 	}
 }
 
+func TestLiteralWsConnRequestMessageIsUnsupportedWithoutSideEffects(t *testing.T) {
+	conn := &WsConn{
+		MsgSendCh:    make(chan string, 1),
+		MsgReceiveCh: make(chan string, 1),
+	}
+
+	response, err := conn.RequestMessage(context.Background(), "192.0.2.23")
+	if !errors.Is(err, ErrRequestResponseUnsupported) || response != "" {
+		t.Fatalf("RequestMessage() = (%q, %v), want empty unsupported result", response, err)
+	}
+	select {
+	case sent := <-conn.MsgSendCh:
+		t.Fatalf("unsupported RequestMessage() sent %q", sent)
+	default:
+	}
+	select {
+	case received := <-conn.MsgReceiveCh:
+		t.Fatalf("unsupported RequestMessage() received %q", received)
+	default:
+	}
+}
+
 func TestZeroValueWsConnSendMessageHonorsContext(t *testing.T) {
 	var conn WsConn
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)

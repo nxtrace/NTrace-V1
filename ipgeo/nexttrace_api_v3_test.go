@@ -189,6 +189,106 @@ func TestNextTraceAPIV3GeoIPBindsReceiverAndSendToSelectedConnection(t *testing.
 	}
 }
 
+func TestNextTraceAPIV3GeoIPIgnoresOldConnectionResponseAfterBoundSubmit(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	oldConn := &wshandle.WsConn{MsgReceiveCh: make(chan string, 1)}
+	newConn := &wshandle.WsConn{MsgReceiveCh: make(chan string, 1)}
+	newConn.SetConnected(true)
+	responseCh := make(chan IPGeoData, 1)
+	restoreGlobals := replaceNextTraceAPIV3Globals(
+		owner,
+		func() *wshandle.WsConn { return newConn },
+		map[string]chan IPGeoData{"1.1.1.1": responseCh},
+	)
+	oldReceiver := owner.ensure(oldConn)
+	if oldReceiver == nil {
+		t.Fatal("old connection receiver = nil")
+	}
+
+	oldRequestFn := requestNextTraceAPIV3IPFn
+	oldSendFn := sendNextTraceAPIV3IPRequestFn
+	var fallbackSendCalled atomic.Bool
+	submitted := make(chan struct{})
+	boundResponse := make(chan string, 1)
+	requestNextTraceAPIV3IPFn = func(ctx context.Context, conn *wshandle.WsConn, ip string) (string, error) {
+		if conn != newConn || ip != "1.1.1.1" {
+			t.Errorf("bound request = (%p, %q), want (%p, 1.1.1.1)", conn, ip, newConn)
+		}
+		close(submitted)
+		select {
+		case response := <-boundResponse:
+			return response, nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	sendNextTraceAPIV3IPRequestFn = func(context.Context, *wshandle.WsConn, string) bool {
+		fallbackSendCalled.Store(true)
+		return false
+	}
+	defer func() {
+		requestNextTraceAPIV3IPFn = oldRequestFn
+		sendNextTraceAPIV3IPRequestFn = oldSendFn
+		close(oldConn.MsgReceiveCh)
+		waitForNextTraceAPIV3ReceiverDone(t, oldReceiver)
+		newReceiver := nextTraceAPIV3ReceiverFor(owner, newConn.MsgReceiveCh)
+		close(newConn.MsgReceiveCh)
+		if newReceiver != nil {
+			waitForNextTraceAPIV3ReceiverDone(t, newReceiver)
+		}
+		restoreGlobals()
+	}()
+
+	type result struct {
+		geo *IPGeoData
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		geo, err := NextTraceAPIV3GeoIP("1.1.1.1", 2*time.Second, "en", false)
+		done <- result{geo: geo, err: err}
+	}()
+
+	select {
+	case <-submitted:
+	case <-time.After(time.Second):
+		t.Fatal("new connection request was not submitted")
+	}
+
+	oldConn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"OLD"}`
+	var oldGeo IPGeoData
+	select {
+	case oldGeo = <-responseCh:
+		if oldGeo.Asnumber != "OLD" {
+			t.Fatalf("old response ASN = %q, want OLD", oldGeo.Asnumber)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("old connection response did not reach the compatibility pool")
+	}
+	responseCh <- oldGeo
+	select {
+	case got := <-done:
+		t.Fatalf("old connection response completed bound request: %+v", got)
+	default:
+	}
+
+	boundResponse <- `{"ip":"1.1.1.1","asnumber":"NEW"}`
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("NextTraceAPIV3GeoIP() error = %v", got.err)
+		}
+		if got.geo == nil || got.geo.Asnumber != "NEW" {
+			t.Fatalf("NextTraceAPIV3GeoIP() geo = %+v, want ASN NEW", got.geo)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bound response did not complete the new connection request")
+	}
+	if fallbackSendCalled.Load() {
+		t.Fatal("managed request fell back to the generationless send path")
+	}
+}
+
 func TestNextTraceAPIV3GeoIPRejectsSelectedConnectionClosedBeforeSubmit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		owner := newNextTraceAPIV3ReceiverOwner()

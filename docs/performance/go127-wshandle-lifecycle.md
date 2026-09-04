@@ -10,8 +10,9 @@
   `stateChanged`，删除 20/50 ms polling。
 - 保持 54 秒文本 ping。只有当前 generation 的字面量 `pong` 清零计数；连续两个完整
   响应窗口没有 pong 时结束该 generation，并按既有 200 ms/1 s 节奏重连。
-- managed `SendMessage` 在提交时绑定 generation。旧 generation 的请求不会在新连接
-  重放；仍在等待业务响应的请求只通过既有 `API Server Error` JSON 路径失败一次。
+- managed `SendMessage` 在提交时绑定 generation；新增的 `RequestMessage` 还将响应绑定到
+  具体 request。旧 generation 的请求不会在新连接重放；仍在等待业务响应的请求只通过
+  既有 `API Server Error` JSON 路径失败一次。
 - NextTrace API v3 按 `MsgReceiveCh` identity 保持单 receiver owner。连接替换期间旧、新
   stream 可分别收尾，同一 stream 不会出现两个消费者。
 
@@ -57,12 +58,25 @@ supervisor 串行处理 dial、read、write、request cancel、heartbeat、inter
 generation context 结束时先隔离旧 reader/writer，再安排既有固定节奏的重连。可取消 timer
 替代轮询；root cancel 负责最终关闭，并等待已登记 worker 与 request cancel callback 退出。
 
-`NextTraceAPIV3GeoIP` 先选择同一个 `WsConn`，等待其连通并确保该 stream 的唯一 receiver，
-再通过 `SendMessage(ctx, ip)` 提交。request 与当时 generation 原子绑定；同 IP 并发请求按
-最早 pending job 匹配响应，取消、写失败、读失败和 generation 结束均由 supervisor 结算。
+`NextTraceAPIV3GeoIP` 先选择同一个 `WsConn`，等待其连通并确保该 stream 的唯一兼容
+receiver，再通过 `RequestMessage(ctx, ip)` 提交。request 与当时 generation 原子绑定，响应
+直接交给该 request，不再经过无 generation 的公开 channel/IP pool；同 IP 并发请求按最早
+pending job 匹配响应。取消会废弃当前 generation，写失败、读失败和 generation 结束均由
+supervisor 结算。旧结构体字面量仍回退到原公开 channel/IP pool 路径。
 
-receive backlog 固定最多 1024 项。消费变慢时 supervisor 暂停读取 reader event，而不是
-丢弃业务消息；root/generation cancel 仍能解除 reader 和 writer。
+legacy `MsgSendCh` 写成功后会保留同 generation/IP 的 FIFO marker：其响应仍进入公开
+channel，不会误配给之后的 bound request；若 generation 先结束，已成功写出的 marker 静默
+清理，不额外生成 API error。writer 在排队 write-result 前通过共享原子状态发布成功结果，
+因此断线与 write-result 的选择顺序不会制造伪失败。
+
+v3 wire 只返回 IP，没有 request ID。为避免已取消请求的迟到同 IP 响应命中后续请求，任一
+已开始 wire write 的 tracked request 取消时会轮换整个 generation；同 generation 其余
+pending request 通过既有 `API Server Error` 各失败一次。尚未开始写的取消仍静默跳过且不
+影响连接。该取舍优先保证不返回错误 Geo 数据。
+
+receive backlog 和 pending request/legacy marker 均固定最多 1024 项。消费变慢时 supervisor
+暂停读取 reader event，而不是丢弃业务消息；上限触发既有 generation 回收，root/generation
+cancel 仍能解除 reader 和 writer。
 
 ## Benchmark
 
@@ -112,7 +126,9 @@ Go 1.27.1、`nojsonv2`，Darwin 不执行 UPX。
 - 首次连接、200 ms/1 s retry、parent cancel、interrupt、读写失败和幂等 shutdown；
 - 54 秒 ping、两个完整缺失 pong 窗口、字面量/非字面量/stale-generation pong；
 - generation 替换唤醒、旧 write 不重放、API error 单次投递及响应/写结果竞态；
-- request context 取消、已排队取消不写 wire、cancel callback 全部 join；
+- 同 IP 旧 generation 响应与全局连接 handoff 不会完成新 request；
+- legacy channel 与 bound request 混用时，同 IP 响应仍按提交顺序隔离；
+- request context 取消并轮换 generation、已排队取消不写 wire、cancel callback 全部 join；
 - 1024 项 receive backlog 的无丢失、顺序与慢消费者关闭；
 - 同 stream 单 receiver、连接 handoff、旧/新 stream 隔离及 v3 总 timeout 预算；
 - 同步/异步 token cache、FastIP 日志和 dev-mode panic 兼容行为。
@@ -125,9 +141,11 @@ source head 16.74 秒，峰值 RSS 分别约 445 MB、447 MB；只记录完成�
 
 ## 平台风险与回退
 
-主要风险是 generation 边界、响应先于 write result、慢消费者 backpressure 和关闭期间的
-cancel callback 交错。所有连接状态只由 supervisor 写入，wire I/O 仍各自单 owner；race
-与 synctest 覆盖上述交错。Darwin 最低版本保持 macOS 13.0，没有新增平台 API。
+主要风险是 generation 边界、响应先于 write result、慢消费者 backpressure、关闭期间的
+cancel callback 交错，以及单个 bound request 取消会使同 generation 的其他 pending request
+失败一次。所有连接状态只由 supervisor 写入，wire I/O 仍各自单 owner；race 与 synctest
+覆盖上述交错。Darwin 最低版本保持 macOS 13.0，没有新增平台 API。
 
 如需回退，可撤销生命周期实现、合同测试和证据提交。没有配置、JSON、协议、持久数据或
-导出 API 迁移。原始 benchmark、profile 和二进制不入库，由 CI artifact 保存。
+既有导出 API 迁移；`RequestMessage` 与 unsupported sentinel 都是增量接口。原始 benchmark、
+profile 和二进制不入库，由 CI artifact 保存。
