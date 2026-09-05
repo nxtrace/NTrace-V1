@@ -27,6 +27,11 @@ type MTRRawOptions struct {
 	MaxPerHop int
 	// RunRound optionally overrides the traceroute call for each round.
 	// It is mainly for callers that need per-round locking or global-state setup.
+	// The callback must observe cfg.Context, including during blocking I/O or lock
+	// acquisition, and return promptly after cancellation. Before returning it
+	// must release its per-round resources and stop any workers it started.
+	// RunMTRRaw waits for this cleanup even when canceled; it cannot forcibly
+	// terminate a callback that ignores the supplied session context.
 	// Legacy round-based mode only.
 	RunRound func(method Method, cfg Config) (*Result, error)
 	// OnPathEnd is called when the semantic path edge changes. nil reopens it.
