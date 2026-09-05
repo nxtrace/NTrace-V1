@@ -673,6 +673,29 @@ func TestMTRUI_ConsumeRestartRequest(t *testing.T) {
 	_ = ctx // suppress unused
 }
 
+func TestMTRUI_ReadKeysFromInjectedReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ui := &mtrUI{isTTY: true, cancel: cancel}
+
+	ui.readKeysLoop(ctx, bytes.NewReader([]byte{'p'}))
+	if !ui.IsPaused() {
+		t.Fatal("pause key did not set the paused state")
+	}
+
+	ui.readKeysLoop(ctx, bytes.NewReader([]byte{'r', ' '}))
+	if ui.IsPaused() {
+		t.Fatal("resume key did not clear the paused state")
+	}
+	if !ui.ConsumeRestartRequest() {
+		t.Fatal("restart key was not recorded")
+	}
+
+	ui.readKeysLoop(ctx, bytes.NewReader([]byte{'q'}))
+	if ctx.Err() == nil {
+		t.Fatal("quit key did not cancel the session")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 显示模式切换测试
 // ---------------------------------------------------------------------------

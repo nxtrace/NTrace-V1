@@ -2,6 +2,7 @@ package trace
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"time"
 
@@ -49,6 +50,7 @@ type mtrSchedulerConfig struct {
 	AsyncMetadata     bool
 	BaseConfig        Config // used for geo/RDNS lookup
 	OnPathEnd         func(*StopReason)
+	StartErrorPrefix  string
 
 	IsPaused         func() bool
 	IsResetRequested func() bool
@@ -89,8 +91,17 @@ func runMTRScheduler(
 	onSnapshot MTROnSnapshot,
 	onProbe func(result mtrProbeResult, iteration int, at time.Time),
 ) error {
-	defer prober.Close()
-	rt, err := newMTRSchedulerRuntime(ctx, prober, agg, cfg, onSnapshot, onProbe)
+	session := newMTRWorkerSession(ctx)
+	defer session.shutdown(func() { _ = prober.Close() })
+	if starter, ok := prober.(mtrSessionStarter); ok {
+		if err := starter.startMTRSession(session); err != nil {
+			if cfg.StartErrorPrefix != "" {
+				return fmt.Errorf("%s: %w", cfg.StartErrorPrefix, err)
+			}
+			return err
+		}
+	}
+	rt, err := newMTRSchedulerRuntimeWithSession(session, prober, agg, cfg, onSnapshot, onProbe)
 	if err != nil {
 		return err
 	}

@@ -291,6 +291,16 @@ jobs:
           PERF_RESULT_DIR: ${{ runner.temp }}/performance-evidence/head
         run: bash scripts/perf/profile_benchmark.sh ./trace BenchmarkMTRAggregatorSnapshot64TTL4Paths head-mtr
 
+      - name: Profile head MTR worker lifecycle
+        id: head_goroutine_profile
+        continue-on-error: true
+        shell: bash
+        env:
+          GOTOOLCHAIN: go1.27.1
+          MTR_GOROUTINE_ACTIVE_PROFILE: ${{ runner.temp }}/performance-evidence/head/head-mtr-workers-active.goroutine.pprof
+          MTR_GOROUTINE_LEAK_PROFILE: ${{ runner.temp }}/performance-evidence/head/head-mtr-workers-final.goroutine.pprof
+        run: go test -count=1 -run '^(TestMTRSchedulerJoinsSessionListener|TestMTRWorkerGoroutineProfileCarriesOwnerLabel)$' ./trace
+
       - name: Build head binaries
         id: head_build
         continue-on-error: true
@@ -366,6 +376,7 @@ jobs:
           HEAD_BENCH_OUTCOME: ${{ steps.head_bench.outcome }}
           HEAD_TESTS_OUTCOME: ${{ steps.head_tests.outcome }}
           HEAD_PROFILE_OUTCOME: ${{ steps.head_profile.outcome }}
+          HEAD_GOROUTINE_PROFILE_OUTCOME: ${{ steps.head_goroutine_profile.outcome }}
           HEAD_BUILD_OUTCOME: ${{ steps.head_build.outcome }}
           BENCHSTAT_OUTCOME: ${{ steps.benchstat.outcome }}
         run: |
@@ -393,6 +404,7 @@ jobs:
           require_success "head benchmark" "${HEAD_BENCH_OUTCOME}"
           require_success "head tests" "${HEAD_TESTS_OUTCOME}"
           require_success "head profile" "${HEAD_PROFILE_OUTCOME}"
+          require_success "head goroutine profile" "${HEAD_GOROUTINE_PROFILE_OUTCOME}"
           require_success "head binary build" "${HEAD_BUILD_OUTCOME}"
           require_success "benchstat" "${BENCHSTAT_OUTCOME}"
 
@@ -401,6 +413,8 @@ jobs:
           require_file "${evidence_dir}/head/tests.time.txt"
           require_file "${evidence_dir}/head/head-mtr.cpu.pprof"
           require_file "${evidence_dir}/head/head-mtr.heap.pprof"
+          require_file "${evidence_dir}/head/head-mtr-workers-active.goroutine.pprof"
+          require_file "${evidence_dir}/head/head-mtr-workers-final.goroutine.pprof"
           require_file "${evidence_dir}/head/sizes.tsv"
           require_file "${evidence_dir}/head/binaries/nexttrace"
           require_file "${evidence_dir}/head/binaries/nexttrace-tiny"

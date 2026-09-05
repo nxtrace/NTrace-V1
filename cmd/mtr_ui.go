@@ -385,6 +385,10 @@ func (u *mtrUI) ReadKeysLoop(ctx context.Context) {
 	if !u.isTTY {
 		return
 	}
+	u.readKeysLoop(ctx, os.Stdin)
+}
+
+func (u *mtrUI) readKeysLoop(ctx context.Context, input io.Reader) {
 	var parser mtrInputParser
 	buf := make([]byte, 64) // 批量读取，减少 syscall
 	for {
@@ -393,7 +397,7 @@ func (u *mtrUI) ReadKeysLoop(ctx context.Context) {
 			return
 		default:
 		}
-		n, err := os.Stdin.Read(buf)
+		n, err := input.Read(buf)
 		if err != nil || n == 0 {
 			if err == io.EOF {
 				return

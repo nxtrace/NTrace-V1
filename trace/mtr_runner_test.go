@@ -1119,7 +1119,7 @@ func TestMTRLoopPreviewFiltersProvisionalPathWithoutClearingHigherStats(t *testi
 
 	var snapshots [][]MTRHopStat
 	peeker := &mockPeekerProber{peekFn: func() *Result { return full }}
-	rt := newMTRLoopRuntime(context.Background(), peeker, Config{MaxHops: 3}, MTROptions{}, agg, func(_ int, stats []MTRHopStat) {
+	rt := newMTRLoopRuntime(newMTRWorkerSession(context.Background()), peeker, Config{MaxHops: 3}, MTROptions{}, agg, func(_ int, stats []MTRHopStat) {
 		snapshots = append(snapshots, stats)
 	}, false, fastBackoff)
 

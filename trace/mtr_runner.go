@@ -137,11 +137,6 @@ func runMTRPerHop(ctx context.Context, method Method, baseConfig Config, opts MT
 		if err != nil {
 			return fmt.Errorf("mtr: %w", err)
 		}
-		defer engine.close()
-		if err := engine.start(ctx); err != nil {
-			engine.close()
-			return fmt.Errorf("mtr: %w", err)
-		}
 		prober = engine
 	} else {
 		prober = &mtrFallbackTTLProber{method: method, config: baseConfig, asyncMetadata: opts.AsyncMetadata}
@@ -161,6 +156,7 @@ func runMTRPerHop(ctx context.Context, method Method, baseConfig Config, opts MT
 		IsPaused:         opts.IsPaused,
 		IsResetRequested: opts.IsResetRequested,
 		OnPathEnd:        opts.OnPathEnd,
+		StartErrorPrefix: "mtr",
 	}, onSnapshot, mtrProbeCallbackFromOptions(opts))
 }
 
@@ -207,11 +203,6 @@ func runMTRRoundBased(ctx context.Context, method Method, baseConfig Config, opt
 		if err != nil {
 			return fmt.Errorf("mtr: %w", err)
 		}
-		defer engine.close()
-		if err := engine.start(ctx); err != nil {
-			engine.close()
-			return fmt.Errorf("mtr: %w", err)
-		}
 		return mtrLoop(ctx, engine, baseConfig, opts, agg, onSnapshot, true, nil)
 	}
 
@@ -234,14 +225,21 @@ func mtrLoop(
 	fillGeo bool,
 	bo *mtrBackoffCfg,
 ) error {
-	defer prober.close()
-	rt := newMTRLoopRuntime(ctx, prober, config, opts, agg, onSnapshot, fillGeo, bo)
+	session := newMTRWorkerSession(ctx)
+	defer session.shutdown(prober.close)
+	if starter, ok := prober.(mtrSessionStarter); ok {
+		if err := starter.startMTRSession(session); err != nil {
+			return fmt.Errorf("mtr: %w", err)
+		}
+	}
+	rt := newMTRLoopRuntime(session, prober, config, opts, agg, onSnapshot, fillGeo, bo)
 	return rt.run()
 }
 
 // mtrFillGeoRDNS 并发查询 Result 中各 hop 的地理信息与反向 DNS。
 // fetchIPData 内部有 singleflight + geoCache，重复 IP 不会重复查询。
-func mtrFillGeoRDNS(res *Result, config Config) {
+func mtrFillGeoRDNS(workers *mtrWorkerSession, res *Result, config Config) {
+	config.Context = workers.ctx
 	var wg sync.WaitGroup
 	for idx := range res.Hops {
 		for j := range res.Hops[idx] {
@@ -250,11 +248,13 @@ func mtrFillGeoRDNS(res *Result, config Config) {
 				continue
 			}
 			h.Lang = config.Lang
-			wg.Add(1)
-			go func(hop *Hop) {
+			hop := h
+			worker := func() {
 				defer wg.Done()
 				_ = hop.fetchIPData(config)
-			}(h)
+			}
+			wg.Add(1)
+			workers.Go("mtr.metadata.sync", worker)
 		}
 	}
 	wg.Wait()
@@ -265,11 +265,13 @@ func mtrFillGeoRDNS(res *Result, config Config) {
 // ---------------------------------------------------------------------------
 
 type mtrICMPEngine struct {
-	config Config
-	spec   *internal.ICMPSpec
-	echoID int
-	srcIP  net.IP
-	ipVer  int
+	config  Config
+	spec    atomic.Pointer[internal.ICMPSpec]
+	specMu  sync.Mutex
+	echoID  atomic.Int32
+	srcIP   net.IP
+	ipVer   int
+	workers *mtrWorkerSession
 
 	// 单调递增序列号，避免跨轮 seq 冲突
 	seqCounter atomic.Uint32
@@ -345,9 +347,9 @@ func newMTRICMPEngineState(config Config, ipVer int, srcIP net.IP) *mtrICMPEngin
 	engine := &mtrICMPEngine{
 		config: config,
 		ipVer:  ipVer,
-		echoID: newMTREchoID(),
 		srcIP:  srcIP,
 	}
+	engine.echoID.Store(int32(newMTREchoID()))
 	engine.knownFinalTTL.Store(-1)
 	engine.roundFinalTTL.Store(-1)
 	return engine
@@ -357,11 +359,16 @@ func newMTREchoID() int {
 	return (rand.IntN(256) << 8) | (os.Getpid() & 0xFF)
 }
 
-// start 创建持久 ICMP 套接字及监听协程。ctx 生命周期控制整个引擎。
-func (e *mtrICMPEngine) start(ctx context.Context) error {
-	e.spec = internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, e.echoID, e.srcIP, e.config.DstIP)
-	applyICMPSourceDevice(e.spec, e.config.OSType, e.config.SourceDevice)
-	e.spec.InitICMP()
+// startMTRSession 创建持久 ICMP 套接字，并把 listener 交给会话统一等待。
+func (e *mtrICMPEngine) startMTRSession(workers *mtrWorkerSession) error {
+	e.specMu.Lock()
+	defer e.specMu.Unlock()
+	e.workers = workers
+	ctx := workers.ctx
+	spec := internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, int(e.echoID.Load()), e.srcIP, e.config.DstIP)
+	applyICMPSourceDevice(spec, e.config.OSType, e.config.SourceDevice)
+	spec.InitICMP()
+	e.spec.Store(spec)
 
 	e.notifyCh = make(chan struct{}, 1)
 	e.sentAt = make(map[int]mtrProbeMeta)
@@ -369,25 +376,18 @@ func (e *mtrICMPEngine) start(ctx context.Context) error {
 	e.probeNotify = make(map[int]chan struct{})
 
 	ready := make(chan struct{})
-	go e.spec.ListenICMP(ctx, ready, e.onICMP)
-
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		e.close()
-		return ctx.Err()
-	case <-time.After(5 * time.Second):
-		e.close()
-		return fmt.Errorf("ICMP listener startup timeout")
+	workers.Go("mtr.icmp-listener", func() { spec.ListenICMP(ctx, ready, e.onICMP) })
+	if err := waitMTRListenerReady(ctx, ready, "ICMP listener startup timeout"); err != nil {
+		return err
 	}
-	time.Sleep(100 * time.Millisecond)
-	return nil
+	return waitMTRTimer(ctx, 100*time.Millisecond)
 }
 
 func (e *mtrICMPEngine) close() {
-	if e.spec != nil {
-		e.spec.Close()
-		e.spec = nil
+	e.specMu.Lock()
+	defer e.specMu.Unlock()
+	if spec := e.spec.Swap(nil); spec != nil {
+		spec.Close()
 	}
 }
 
@@ -455,14 +455,19 @@ func seqWillWrap(seqCounter uint32, probeCount int) bool {
 // 新 listener 过滤新 echoID，旧 echoID 的迟到回包在协议层即被丢弃，
 // 从而彻底消除 seq 16 位回卷导致的跨轮误匹配。
 func (e *mtrICMPEngine) rotateEngine(ctx context.Context) error {
-	e.spec.Close()
+	e.specMu.Lock()
+	defer e.specMu.Unlock()
+	if spec := e.spec.Swap(nil); spec != nil {
+		spec.Close()
+	}
 
-	e.echoID = newMTREchoID()
+	e.echoID.Store(int32(newMTREchoID()))
 	e.seqCounter.Store(0)
 
-	e.spec = internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, e.echoID, e.srcIP, e.config.DstIP)
-	applyICMPSourceDevice(e.spec, e.config.OSType, e.config.SourceDevice)
-	e.spec.InitICMP()
+	spec := internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, int(e.echoID.Load()), e.srcIP, e.config.DstIP)
+	applyICMPSourceDevice(spec, e.config.OSType, e.config.SourceDevice)
+	spec.InitICMP()
+	e.spec.Store(spec)
 
 	e.mu.Lock()
 	// Notify any ProbeTTL waiters about rotation (they'll see no reply)
@@ -477,18 +482,35 @@ func (e *mtrICMPEngine) rotateEngine(ctx context.Context) error {
 	e.mu.Unlock()
 
 	ready := make(chan struct{})
-	go e.spec.ListenICMP(ctx, ready, e.onICMP)
+	if e.workers == nil {
+		return fmt.Errorf("ICMP listener has no MTR worker session")
+	}
+	e.workers.Go("mtr.icmp-listener", func() { spec.ListenICMP(ctx, ready, e.onICMP) })
+	return waitMTRListenerReady(ctx, ready, "ICMP listener restart timeout on echoID rotation")
+}
 
+func waitMTRListenerReady(ctx context.Context, ready <-chan struct{}, timeoutMessage string) error {
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	select {
 	case <-ready:
+		return nil
 	case <-ctx.Done():
-		e.close()
 		return ctx.Err()
-	case <-time.After(5 * time.Second):
-		e.close()
-		return fmt.Errorf("ICMP listener restart timeout on echoID rotation")
+	case <-timer.C:
+		return fmt.Errorf("%s", timeoutMessage)
 	}
-	return nil
+}
+
+func waitMTRTimer(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // onICMP 是 ListenICMP 的回调：将响应匹配到已发送的探针。
@@ -598,6 +620,10 @@ func (e *mtrICMPEngine) signalReplyReady() {
 
 // sendProbe 发送一个 ICMP echo（IPv4 或 IPv6），返回发送时间戳。
 func (e *mtrICMPEngine) sendProbe(ctx context.Context, ttl, seq int) (time.Time, error) {
+	spec := e.spec.Load()
+	if spec == nil {
+		return time.Time{}, fmt.Errorf("ICMP listener is closed")
+	}
 	payloadSize := resolveProbePayloadSize(ICMPTrace, e.config.DstIP, e.config.PktSize, e.config.RandomPacketSize)
 	payload := make([]byte, payloadSize)
 	if len(payload) >= 3 {
@@ -615,10 +641,10 @@ func (e *mtrICMPEngine) sendProbe(ctx context.Context, ttl, seq int) (time.Time,
 		}
 		icmpHdr := &layers.ICMPv4{
 			TypeCode: layers.CreateICMPv4TypeCode(layers.ICMPv4TypeEchoRequest, 0),
-			Id:       uint16(e.echoID),
+			Id:       uint16(e.echoID.Load()),
 			Seq:      uint16(seq),
 		}
-		return e.spec.SendICMP(ctx, ipHdr, icmpHdr, nil, payload)
+		return spec.SendICMP(ctx, ipHdr, icmpHdr, nil, payload)
 	}
 
 	// IPv6
@@ -637,10 +663,10 @@ func (e *mtrICMPEngine) sendProbe(ctx context.Context, ttl, seq int) (time.Time,
 		return time.Time{}, fmt.Errorf("SetNetworkLayerForChecksum: %w", err)
 	}
 	icmpEcho := &layers.ICMPv6Echo{
-		Identifier: uint16(e.echoID),
+		Identifier: uint16(e.echoID.Load()),
 		SeqNumber:  uint16(seq),
 	}
-	return e.spec.SendICMP(ctx, ipHdr, icmpHdr, icmpEcho, payload)
+	return spec.SendICMP(ctx, ipHdr, icmpHdr, icmpEcho, payload)
 }
 
 // probeRound 执行一轮持久探测：对每个 TTL 发送一个 ICMP echo，
@@ -795,21 +821,17 @@ func (e *mtrICMPEngine) sendProbeForTTL(ctx context.Context, ttl int, roundID ui
 }
 
 func (e *mtrICMPEngine) waitProbeInterval(ctx context.Context, delay time.Duration) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(delay):
-		return nil
-	}
+	return waitMTRTimer(ctx, delay)
 }
 
 func (e *mtrICMPEngine) waitForProbeReplies(ctx context.Context) {
-	deadline := time.After(e.probeResponseTimeout())
+	timer := time.NewTimer(e.probeResponseTimeout())
+	defer timer.Stop()
 	for e.hasPendingProbeReplies() {
 		select {
 		case <-ctx.Done():
 			return
-		case <-deadline:
+		case <-timer.C:
 			return
 		case <-e.notifyCh:
 		}
