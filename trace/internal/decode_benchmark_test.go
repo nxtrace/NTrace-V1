@@ -215,7 +215,10 @@ func BenchmarkPGOProtocolDecodeWorkload(b *testing.B) {
 		b.Fatal("IPv6 TCP workload fixture did not decode")
 	}
 
-	b.SetBytes(int64(len(icmp4Raw) + len(icmp6Raw) + len(udp4Raw) + len(udp6Raw)))
+	b.SetBytes(int64(
+		len(icmp4Raw) + len(icmp6Raw) + len(udp4Raw) + len(udp6Raw) +
+			len(tcp4Packet.Data()) + len(tcp6Packet.Data()),
+	))
 	b.ReportAllocs()
 	for b.Loop() {
 		decodeBenchmarkFinishSink, decodeBenchmarkSeqSink, decodeBenchmarkResponseSink, decodeBenchmarkOKSink = icmp4Spec.decodeICMPSocketMessage(icmp4Msg)

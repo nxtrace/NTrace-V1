@@ -81,7 +81,8 @@ Set `PERF_BINARY_DIR` to keep the exact binaries built by
 `measure_binaries.sh` for startup and RSS comparison:
 
 ```sh
-GOFLAGS=-pgo=off PERF_BINARY_DIR=.cache/perf/pgo-off-bin scripts/perf/measure_binaries.sh pgo-off
-GOFLAGS=-pgo=$PWD/.cache/perf/candidate.candidate.pgo \
+GOEXPERIMENT=nojsonv2 GOFLAGS=-pgo=off \
+  PERF_BINARY_DIR=.cache/perf/pgo-off-bin scripts/perf/measure_binaries.sh pgo-off
+GOEXPERIMENT=nojsonv2 GOFLAGS=-pgo=$PWD/.cache/perf/candidate.candidate.pgo \
   PERF_BINARY_DIR=.cache/perf/pgo-on-bin scripts/perf/measure_binaries.sh pgo-on
 ```

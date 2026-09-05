@@ -10,6 +10,9 @@ PROFILE_COMPONENT_TIME="${PROFILE_COMPONENT_TIME:-10s}"
 BENCH_GOMAXPROCS="${BENCH_GOMAXPROCS:-10}"
 PGO_SEED=20260905
 PGO_GOEXPERIMENT="${PGO_GOEXPERIMENT:-nojsonv2}"
+REQUIRED_GO_VERSION=go1.27.1
+
+export GOTOOLCHAIN="${REQUIRED_GO_VERSION}"
 
 if [[ "${RESULT_DIR}" != /* ]]; then
   RESULT_DIR="${CALLER_DIR}/${RESULT_DIR}"
@@ -19,12 +22,31 @@ mkdir -p "${RESULT_DIR}"
 export GOMAXPROCS="${BENCH_GOMAXPROCS}"
 export GOEXPERIMENT="${PGO_GOEXPERIMENT}"
 
+actual_go_version="$(go env GOVERSION)"
+if [[ "${actual_go_version}" != "${REQUIRED_GO_VERSION}" ]]; then
+  echo "error: ${REQUIRED_GO_VERSION} required, got ${actual_go_version}" >&2
+  exit 1
+fi
+
 if [[ -n "$(git -C "${ROOT_DIR}" status --porcelain)" ]]; then
   echo "error: commit the workload before generating its PGO profile" >&2
   exit 1
 fi
 
 profiles=()
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+    return
+  fi
+  echo "error: no SHA-256 utility found" >&2
+  return 1
+}
+
 profile_component() {
   local package="$1"
   local benchmark="$2"
@@ -75,7 +97,7 @@ manifest="${RESULT_DIR}/${RESULT_NAME}.profile.txt"
   printf 'profile_2=./trace:BenchmarkPGOTraceWorkload\n'
   printf 'profile_3=./server:BenchmarkPGOWebSocketJSONWorkload\n'
   printf 'candidate=%s\n' "${candidate}"
-  printf 'candidate_sha256=%s\n' "$(shasum -a 256 "${candidate}" | awk '{print $1}')"
+  printf 'candidate_sha256=%s\n' "$(sha256_file "${candidate}")"
 } >"${manifest}"
 
 cat "${manifest}"

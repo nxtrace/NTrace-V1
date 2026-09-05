@@ -104,14 +104,15 @@ func benchmarkWebSocketRequestPayload() []byte {
 func BenchmarkPGOWebSocketJSONWorkload(b *testing.B) {
 	envelope := benchmarkWebSocketEnvelope()
 	payload := benchmarkWebSocketRequestPayload()
-	if _, err := json.Marshal(envelope); err != nil {
+	encodedSample, err := json.Marshal(envelope)
+	if err != nil {
 		b.Fatalf("marshal sample envelope: %v", err)
 	}
 	var sample traceRequest
 	if err := json.Unmarshal(payload, &sample); err != nil {
 		b.Fatalf("unmarshal sample request: %v", err)
 	}
-	b.SetBytes(int64(len(payload)))
+	b.SetBytes(int64(len(payload) + len(encodedSample)))
 	b.ReportAllocs()
 
 	for b.Loop() {

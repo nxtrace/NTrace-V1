@@ -16,6 +16,9 @@ BENCH_COUNT="${BENCH_COUNT:-10}"
 BENCH_TIME="${BENCH_TIME:-1s}"
 BENCH_GOMAXPROCS="${BENCH_GOMAXPROCS:-10}"
 PGO_GOEXPERIMENT="${PGO_GOEXPERIMENT:-nojsonv2}"
+REQUIRED_GO_VERSION=go1.27.1
+
+export GOTOOLCHAIN="${REQUIRED_GO_VERSION}"
 
 if [[ "${RESULT_DIR}" != /* ]]; then
   RESULT_DIR="${CALLER_DIR}/${RESULT_DIR}"
@@ -31,6 +34,12 @@ fi
 mkdir -p "${RESULT_DIR}"
 export GOMAXPROCS="${BENCH_GOMAXPROCS}"
 export GOEXPERIMENT="${PGO_GOEXPERIMENT}"
+
+actual_go_version="$(go env GOVERSION)"
+if [[ "${actual_go_version}" != "${REQUIRED_GO_VERSION}" ]]; then
+  echo "error: ${REQUIRED_GO_VERSION} required, got ${actual_go_version}" >&2
+  exit 1
+fi
 
 run_group() {
   local group="$1"

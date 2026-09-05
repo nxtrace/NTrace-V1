@@ -70,10 +70,8 @@ func BenchmarkPGOTraceWorkload(b *testing.B) {
 		Prov: "测试", ProvEn: "Test", City: "基准", CityEn: "Benchmark",
 		Owner: "Example Network", Lat: 31.25, Lng: 121.5, Source: "fake-pgo-provider",
 	}
-	provider := CachedGeoSource(ipgeo.SourceDescriptor{
-		Source: func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
-			return geo, nil
-		},
+	provider := ipgeo.Source(func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
+		return geo, nil
 	})
 	prober := newPGOBenchmarkProber(geo)
 	agg := NewMTRAggregator()
