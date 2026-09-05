@@ -13,7 +13,56 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/nxtrace/NTrace-core/trace/internal"
 )
+
+func TestMTRICMPRotatedListenerSurvivesProbeGenerationReset(t *testing.T) {
+	conn, err := internal.ListenPacket("ip4:icmp", "127.0.0.1")
+	if err != nil {
+		t.Skipf("ICMP loopback socket unavailable: %v", err)
+	}
+	_ = conn.Close()
+
+	workers := newMTRWorkerSession(t.Context())
+	engine := newMTRICMPEngineState(Config{
+		DstIP:    net.IPv4(127, 0, 0, 1),
+		Timeout:  time.Second,
+		ICMPMode: 1,
+	}, 4, net.IPv4(127, 0, 0, 1))
+	defer workers.shutdown(engine.close)
+	if err := engine.startMTRSession(workers); err != nil {
+		t.Fatalf("start ICMP listener: %v", err)
+	}
+
+	probeCtx, cancelProbe := context.WithCancel(workers.ctx)
+	defer cancelProbe()
+	result, err := engine.ProbeTTL(probeCtx, 1)
+	if err != nil || !result.Success {
+		t.Skipf("ICMP loopback replies unavailable: result=%+v, error=%v", result, err)
+	}
+	engine.seqCounter.Store(0xFFFF)
+	result, err = engine.ProbeTTL(probeCtx, 1)
+	if err != nil || !result.Success {
+		t.Fatalf("probe after listener rotation = %+v, %v; want loopback reply", result, err)
+	}
+
+	cancelProbe()
+	if err := engine.Reset(); err != nil {
+		t.Fatalf("reset ICMP prober: %v", err)
+	}
+	// Continue probing while cancellation is processed; a single immediate reply
+	// could race with the canceled listener closing its socket.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for deadline := time.Now().Add(100 * time.Millisecond); time.Now().Before(deadline); {
+		<-ticker.C
+		result, err = engine.ProbeTTL(workers.ctx, 1)
+		if err != nil || !result.Success {
+			t.Fatalf("probe after generation reset = %+v, %v; want loopback reply", result, err)
+		}
+	}
+}
 
 func TestMTRSchedulerResetCancelsProbeGeneration(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

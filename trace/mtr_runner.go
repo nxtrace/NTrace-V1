@@ -485,7 +485,7 @@ func (e *mtrICMPEngine) rotateEngine(ctx context.Context) error {
 	if e.workers == nil {
 		return fmt.Errorf("ICMP listener has no MTR worker session")
 	}
-	e.workers.Go("mtr.icmp-listener", func() { spec.ListenICMP(ctx, ready, e.onICMP) })
+	e.workers.Go("mtr.icmp-listener", func() { spec.ListenICMP(e.workers.ctx, ready, e.onICMP) })
 	return waitMTRListenerReady(ctx, ready, "ICMP listener restart timeout on echoID rotation")
 }
 
@@ -612,8 +612,11 @@ func (e *mtrICMPEngine) updateRoundFinalTTL(ttl int32) {
 }
 
 func (e *mtrICMPEngine) signalReplyReady() {
+	e.mu.Lock()
+	notifyCh := e.notifyCh
+	e.mu.Unlock()
 	select {
-	case e.notifyCh <- struct{}{}:
+	case notifyCh <- struct{}{}:
 	default:
 	}
 }
