@@ -371,6 +371,41 @@ func TestMCPHandlerCallsEveryToolWithStructuredContent(t *testing.T) {
 	}
 }
 
+func TestMCPStructuredContentGolden(t *testing.T) {
+	session, cleanup := newTestMCPSession(t, newRecordingMCPService())
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	type contract struct {
+		Tool              string          `json:"tool"`
+		StructuredContent json.RawMessage `json:"structured_content"`
+	}
+	contracts := make([]contract, 0, 3)
+	for _, name := range []string{"nexttrace_traceroute", "nexttrace_mtr_report", "nexttrace_mtr_raw"} {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      name,
+			Arguments: map[string]any{"target": "example.com"},
+		})
+		if err != nil {
+			t.Fatalf("CallTool(%s): %v", name, err)
+		}
+		payload, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			t.Fatalf("marshal structuredContent for %s: %v", name, err)
+		}
+		contracts = append(contracts, contract{Tool: name, StructuredContent: payload})
+	}
+
+	got, err := json.MarshalIndent(contracts, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal MCP JSON contracts: %v", err)
+	}
+	got = append(got, '\n')
+	assertJSONGolden(t, got, "testdata/mcp_structured_content.golden.json")
+}
+
 func TestMCPHandlerReturnsServiceErrorsAsToolErrors(t *testing.T) {
 	svc := newRecordingMCPService()
 	svc.failTool = "nexttrace_geo_lookup"

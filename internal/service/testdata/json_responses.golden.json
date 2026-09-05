@@ -1,0 +1,119 @@
+{
+  "trace": {
+    "target": "escape \u003c\u0026\u003e\u2028 target",
+    "resolved_ip": "2001:db8::10",
+    "protocol": "udp",
+    "data_provider": "NextTrace-API",
+    "language": "en",
+    "hops": [
+      {
+        "ttl": 1,
+        "attempts": [
+          {
+            "success": true,
+            "ip": "192.0.2.1",
+            "hostname": "edge.example",
+            "rtt_ms": 1.25
+          },
+          {
+            "success": false,
+            "error": "timeout\nsecond line"
+          }
+        ]
+      }
+    ],
+    "duration_ms": 1250,
+    "parameters": {
+      "supported": [
+        "target",
+        "protocol"
+      ]
+    }
+  },
+  "mtr_report": {
+    "target": "example.test",
+    "resolved_ip": "192.0.2.9",
+    "protocol": "icmp",
+    "stats": [
+      {
+        "ttl": 1,
+        "host": "edge.example",
+        "ip": "192.0.2.1",
+        "loss_percent": 33.333333333333336,
+        "snt": 3,
+        "last_ms": 1.25,
+        "avg_ms": 1.5,
+        "best_ms": 1.25,
+        "wrst_ms": 1.75,
+        "stdev_ms": 0.25,
+        "mpls": [
+          "[MPLS: Lbl 16000, TC 0, S 1, TTL 63]"
+        ],
+        "received": 2,
+        "response": {
+          "kind": "transit",
+          "description": "ICMP Time Exceeded"
+        }
+      }
+    ],
+    "duration_ms": 30000,
+    "parameters": {
+      "supported": [
+        "target",
+        "hop_interval_ms"
+      ],
+      "not_applicable": [
+        "queries"
+      ],
+      "not_yet_supported": [
+        "future_option"
+      ]
+    },
+    "path_end": {
+      "hop": 3,
+      "reason": "unreachable",
+      "responses": [
+        "ICMP Host Unreachable"
+      ],
+      "markers": [
+        "!H"
+      ]
+    }
+  },
+  "mtr_raw": {
+    "target": "raw.example",
+    "resolved_ip": "2001:db8::20",
+    "protocol": "tcp",
+    "records": [
+      {
+        "iteration": 2,
+        "ttl": 4,
+        "success": true,
+        "ip": "2001:db8::4",
+        "host": "router \u003c\u0026\u003e\u2028 name",
+        "rtt_ms": 12.75,
+        "asn": "AS64512",
+        "country": "ZZ",
+        "city": "Example City",
+        "owner": "Example Network",
+        "lat": -0.125,
+        "lng": 179.999,
+        "response": {
+          "kind": "destination",
+          "marker": "!X"
+        }
+      }
+    ],
+    "duration_ms": 5000,
+    "warnings": [
+      "first line\nsecond line",
+      ""
+    ],
+    "parameters": {
+      "supported": [
+        "target",
+        "duration_ms"
+      ]
+    }
+  }
+}
