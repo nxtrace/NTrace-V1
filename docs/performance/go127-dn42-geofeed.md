@@ -90,6 +90,9 @@ PR-0 同名兼容 benchmark 也在 parent/head 各运行 10 次。`ReadGeoFeedCS
 1,179.5 us 降为 647.5 us（-45.11%），B/op 从 2.991 MiB 降为 1.028 MiB
 （-65.62%）；完整 legacy view 构造的 allocs/op 从 24.63k 增为 28.68k
 （+16.47%），但该构造只在装载/兼容接口边界执行，不在固定会话的查询热路径。
+上述历史结果比较的是 `ReadGeoFeed` 兼容接口：parent 每次读取、解析 CSV，head
+复用索引并构造 legacy view，不能解释为 CSV 解析加速。当前 benchmark 已更名为
+`ReadGeoFeedCachedLegacyView` 并在计时前装载索引；CSV 解析由 `GeoFeedParseIndex` 测量。
 
 首轮还发现 `FindGeoFeedRow` 命中路径因无必要防御性复制增加 3 alloc/op；最终实现
 恢复该旧接口原有的浅返回语义，所有命中/未命中子项重新保持 0 alloc/op，geomean

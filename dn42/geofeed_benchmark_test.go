@@ -24,10 +24,13 @@ var (
 	benchmarkGeoFeedFoundSink  bool
 )
 
-func BenchmarkReadGeoFeedCSV(b *testing.B) {
+func BenchmarkReadGeoFeedCachedLegacyView(b *testing.B) {
 	content := buildBenchmarkGeoFeedCSV(false, benchmarkGeoFeedEntryCount/2) +
 		buildBenchmarkGeoFeedCSV(true, benchmarkGeoFeedEntryCount/2)
 	setBenchmarkGeoFeedPath(b, writeBenchmarkGeoFeed(b, content))
+	if _, err := ReadGeoFeed(); err != nil {
+		b.Fatalf("ReadGeoFeed() setup error = %v", err)
+	}
 
 	b.ReportAllocs()
 	var (
