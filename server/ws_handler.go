@@ -33,11 +33,12 @@ const (
 )
 
 var (
-	errWSSlowConsumer    = errors.New("websocket client too slow for mtr stream")
-	errWSSessionClosed   = errors.New("websocket session closed")
-	errWSSessionFinished = errors.New("websocket session finished")
-	traceTracerouteFn    = trace.Traceroute
-	traceRunMTRRawFn     = trace.RunMTRRaw
+	errWSSlowConsumer     = errors.New("websocket client too slow for mtr stream")
+	errWSSessionClosed    = errors.New("websocket session closed")
+	errWSSessionFinished  = errors.New("websocket session finished")
+	errWSTraceWorkerPanic = errors.New("websocket trace worker panic")
+	traceTracerouteFn     = trace.Traceroute
+	traceRunMTRRawFn      = trace.RunMTRRaw
 )
 
 // sanitizeLogParam 清理用户输入中的换行和控制字符，防止日志注入。
@@ -225,6 +226,12 @@ func (s *wsTraceSession) runTrace(run func(context.Context)) {
 	done := make(chan struct{})
 	s.workers.Go(func() {
 		defer close(done)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("[deploy] websocket trace worker panic: %v", recovered)
+				s.requestAbort(errWSTraceWorkerPanic, websocket.CloseInternalServerErr, "internal error")
+			}
+		}()
 		run(s.ctx)
 	})
 	<-done

@@ -9,9 +9,11 @@
 - 正常完成进入 draining，按 FIFO 排空发送队列后关闭连接；异常完成进入 aborting，取消
   trace、丢弃尚未开始写的消息，再由唯一 writer 发送既有 close frame 并关闭连接。
 - slow consumer、reader error、writer error 和 parent cancel 共用幂等终止状态机；删除
-  `writeLoop` 的宽泛 panic recovery。
-- `WriteJSON`、`WriteControl` 和会话期 `Close` 只由 writer 执行，避免 data frame 与 close
-  frame 并发写入 Gorilla WebSocket。
+  `writeLoop` 的宽泛 panic recovery；trace worker 边界仅将未捕获 panic 转为 1011/internal
+  error，避免 panic 越过 Gin recovery 终止进程。
+- 会话主动发出的 `WriteJSON`、close frame 和会话期 `Close` 由 writer 串行执行；reader 只调用
+  `NextReader`。Gorilla 可能在读调用内自动发送 control frame，此时依赖其对 `WriteControl` 和
+  `Close` 的并发安全保证。
 - 既有 64 KiB init 首帧上限不改值；新增真实 Gorilla 连接的 65,536/65,537 字节边界测试。
 
 JSON schema、消息顺序、CLI、REST、MCP、三 flavor 依赖边界和导出 API 均不变。
@@ -111,7 +113,8 @@ Go 1.27.1、`nojsonv2`，Darwin 不执行 UPX。
 
 - 正常 drain 严格保持 `start -> hop -> complete`，并等待 reader、writer、trace 全部退出；
 - slow consumer、reader error、writer error、parent cancel 取消 trace 并丢弃尾队列；
-- data/control write 最大并发为 1；并发 finish/close 只关闭一次且不混合终态；
+- 会话主动发出的 data/close write 最大并发为 1；并发 finish/close 只关闭一次且不混合终态；
+- trace worker panic 被限制在 worker 边界，转换为单次 1011/internal error 并完整 join；
 - 65,536 字节合法 init 进入 trace，65,537 字节收到 1009 且不会调用 tracer；
 - 既有 MTR `path_end -> mtr_raw -> path_end(null) -> complete`、single trace stop reason
   和 provider canonicalization 合同保持不变。

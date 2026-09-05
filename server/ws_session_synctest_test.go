@@ -421,6 +421,36 @@ func TestWSTraceSessionSerializesDataAndCloseWrites(t *testing.T) {
 	})
 }
 
+func TestWSTraceSessionTracePanicAborts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := newWSSessionTestConn()
+		session := newWSTraceSession(t.Context(), conn, "en", 2)
+		<-conn.readerStarted
+
+		session.runTrace(func(context.Context) {
+			panic("scripted trace failure")
+		})
+		session.finish()
+		synctest.Wait()
+
+		if !errors.Is(context.Cause(session.ctx), errWSTraceWorkerPanic) {
+			t.Fatalf("session cause = %v, want errWSTraceWorkerPanic", context.Cause(session.ctx))
+		}
+		requireWSTestChannelClosed(t, conn.readerExited, "reader")
+		writes, frames, closeCalls, maxWriters := conn.snapshot()
+		requireWSTestEnvelopeTypes(t, writes)
+		if len(frames) != 1 || frames[0].code != websocket.CloseInternalServerErr || frames[0].reason != "internal error" {
+			t.Fatalf("close frames = %#v, want one internal-error frame", frames)
+		}
+		if closeCalls != 1 {
+			t.Fatalf("Close calls = %d, want 1", closeCalls)
+		}
+		if maxWriters != 1 {
+			t.Fatalf("maximum concurrent writers = %d, want 1", maxWriters)
+		}
+	})
+}
+
 func TestWSTraceSessionConcurrentFinishAndCloseIsIdempotent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		conn := newWSSessionTestConn()
