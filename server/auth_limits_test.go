@@ -25,6 +25,31 @@ func TestDeployLoginRejectsOversizedJSONTail(t *testing.T) {
 	}
 }
 
+func TestDeployLoginPayloadErrorsRespectAccept(t *testing.T) {
+	for _, accept := range []string{"text/html", "application/json"} {
+		for _, oversized := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/oversized=%v", accept, oversized), func(t *testing.T) {
+				req := httptest.NewRequestWithContext(context.Background(), "POST", "/auth/login", nil)
+				req.Header.Set("Accept", accept)
+				req.Body = loginReadError{}
+				wantStatus := 400
+				if oversized {
+					req.Body = io.NopCloser(strings.NewReader(strings.Repeat("x", 8193)))
+					wantStatus = 413
+				}
+				resp := httptest.NewRecorder()
+				newDeployAuthTestRouter(deployAuth{Enabled: true, Token: "secret"}).ServeHTTP(resp, req)
+				if resp.Code != wantStatus || len(resp.Result().Cookies()) != 0 {
+					t.Fatalf("status=%d cookies=%d", resp.Code, len(resp.Result().Cookies()))
+				}
+				if !strings.HasPrefix(resp.Header().Get("Content-Type"), accept) {
+					t.Fatalf("content type=%s, want %s", resp.Header().Get("Content-Type"), accept)
+				}
+			})
+		}
+	}
+}
+
 func loginBodyForLimitTest(t *testing.T, encoding string, size int) (string, string) {
 	t.Helper()
 	switch encoding {

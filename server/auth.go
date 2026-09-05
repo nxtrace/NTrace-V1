@@ -146,11 +146,15 @@ func registerDeployAuthRoutes(router *gin.Engine, auth deployAuth) {
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxDeployLoginBodyBytes))
 		if err != nil {
+			status, message := http.StatusBadRequest, "invalid request payload"
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
-				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request payload too large"})
+				status, message = http.StatusRequestEntityTooLarge, "request payload too large"
+			}
+			if acceptsHTML(c.Request) {
+				c.Data(status, "text/html; charset=utf-8", []byte(deployLoginPage(message)))
 			} else {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
+				c.JSON(status, gin.H{"error": message})
 			}
 			return
 		}
