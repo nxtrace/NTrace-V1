@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"html"
+	"io"
 	"net/http"
 	"strings"
 
@@ -12,6 +15,8 @@ import (
 )
 
 const deployAuthCookieName = "nexttrace_deploy_auth"
+
+const maxDeployLoginBodyBytes = 8 * 1024
 
 type deployAuth struct {
 	Enabled bool
@@ -139,6 +144,21 @@ func registerDeployAuthRoutes(router *gin.Engine, auth deployAuth) {
 			writeDeployAuthConfigError(c)
 			return
 		}
+		body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxDeployLoginBodyBytes))
+		if err != nil {
+			status, message := http.StatusBadRequest, "invalid request payload"
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				status, message = http.StatusRequestEntityTooLarge, "request payload too large"
+			}
+			if acceptsHTML(c.Request) {
+				c.Data(status, "text/html; charset=utf-8", []byte(deployLoginPage(message)))
+			} else {
+				c.JSON(status, gin.H{"error": message})
+			}
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 		token := strings.TrimSpace(c.PostForm("token"))
 		if token == "" {
 			var body struct {

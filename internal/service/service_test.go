@@ -106,13 +106,13 @@ func TestMTRParameterBoundariesMatchMCPBehavior(t *testing.T) {
 			name:       "report",
 			boundaries: report,
 			supported:  []string{"target", "hop_interval_ms", "max_per_hop"},
-			notApp:     []string{"queries", "packet_interval", "ttl_interval"},
+			notApp:     []string{"queries", "packet_interval", "ttl_interval", "max_attempts"},
 		},
 		{
 			name:       "raw",
 			boundaries: raw,
 			supported:  []string{"target", "hop_interval_ms", "max_per_hop", "duration_ms"},
-			notApp:     []string{"queries", "packet_interval", "ttl_interval"},
+			notApp:     []string{"queries", "packet_interval", "ttl_interval", "max_attempts"},
 		},
 	} {
 		t.Run(params.name, func(t *testing.T) {
@@ -564,11 +564,13 @@ func containsParam(params []string, target string) bool {
 func assertMTRBoundaries(t *testing.T, name string, boundaries ParameterBoundaries, wantDuration bool) {
 	t.Helper()
 
-	if containsParam(boundaries.Supported, "queries") {
-		t.Fatalf("%s supported includes queries: %+v", name, boundaries)
-	}
-	if !containsParam(boundaries.NotApplicable, "queries") {
-		t.Fatalf("%s not_applicable missing queries: %+v", name, boundaries)
+	for _, param := range []string{"queries", "packet_interval", "ttl_interval", "max_attempts"} {
+		if containsParam(boundaries.Supported, param) {
+			t.Fatalf("%s supported includes %s: %+v", name, param, boundaries)
+		}
+		if !containsParam(boundaries.NotApplicable, param) {
+			t.Fatalf("%s not_applicable missing %s: %+v", name, param, boundaries)
+		}
 	}
 	if !containsParam(boundaries.Supported, "hop_interval_ms") || !containsParam(boundaries.Supported, "max_per_hop") {
 		t.Fatalf("%s supported missing MTR controls: %+v", name, boundaries)
