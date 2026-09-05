@@ -13,7 +13,25 @@ var (
 )
 
 func BenchmarkWebSocketJSONMarshalEnvelope(b *testing.B) {
-	envelope := wsEnvelope{
+	envelope := benchmarkWebSocketEnvelope()
+	sample, err := json.Marshal(envelope)
+	if err != nil {
+		b.Fatalf("marshal sample envelope: %v", err)
+	}
+	b.SetBytes(int64(len(sample)))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		encoded, err := json.Marshal(envelope)
+		if err != nil {
+			b.Fatalf("marshal websocket envelope: %v", err)
+		}
+		wsJSONBytesSink = encoded
+	}
+}
+
+func benchmarkWebSocketEnvelope() wsEnvelope {
+	return wsEnvelope{
 		Type: "mtr_raw",
 		Data: trace.MTRRawRecord{
 			Iteration: 8,
@@ -35,24 +53,10 @@ func BenchmarkWebSocketJSONMarshalEnvelope(b *testing.B) {
 			},
 		},
 	}
-	sample, err := json.Marshal(envelope)
-	if err != nil {
-		b.Fatalf("marshal sample envelope: %v", err)
-	}
-	b.SetBytes(int64(len(sample)))
-	b.ReportAllocs()
-
-	for b.Loop() {
-		encoded, err := json.Marshal(envelope)
-		if err != nil {
-			b.Fatalf("marshal websocket envelope: %v", err)
-		}
-		wsJSONBytesSink = encoded
-	}
 }
 
 func BenchmarkWebSocketJSONUnmarshalRequest(b *testing.B) {
-	payload := []byte(`{"target":"example.test","protocol":"udp","port":33494,"queries":3,"max_hops":64,"timeout_ms":2000,"packet_size":84,"tos":32,"parallel_requests":16,"begin_hop":1,"ipv6_only":true,"data_provider":"NextTrace-API","dot_server":"dns.example:853","always_rdns":true,"disable_maptrace":true,"language":"en","source_address":"2001:db8::10","source_device":"en0","packet_interval":50,"ttl_interval":300,"mode":"mtr","hop_interval_ms":1000,"max_rounds":10}`)
+	payload := benchmarkWebSocketRequestPayload()
 	var sample traceRequest
 	if err := json.Unmarshal(payload, &sample); err != nil {
 		b.Fatalf("unmarshal sample websocket request: %v", err)
@@ -89,6 +93,38 @@ func BenchmarkWebSocketJSONUnmarshalRequest(b *testing.B) {
 		if err := json.Unmarshal(payload, &request); err != nil {
 			b.Fatalf("unmarshal websocket request: %v", err)
 		}
+		wsJSONRequestSink = request
+	}
+}
+
+func benchmarkWebSocketRequestPayload() []byte {
+	return []byte(`{"target":"example.test","protocol":"udp","port":33494,"queries":3,"max_hops":64,"timeout_ms":2000,"packet_size":84,"tos":32,"parallel_requests":16,"begin_hop":1,"ipv6_only":true,"data_provider":"NextTrace-API","dot_server":"dns.example:853","always_rdns":true,"disable_maptrace":true,"language":"en","source_address":"2001:db8::10","source_device":"en0","packet_interval":50,"ttl_interval":300,"mode":"mtr","hop_interval_ms":1000,"max_rounds":10}`)
+}
+
+func BenchmarkPGOWebSocketJSONWorkload(b *testing.B) {
+	envelope := benchmarkWebSocketEnvelope()
+	payload := benchmarkWebSocketRequestPayload()
+	encodedSample, err := json.Marshal(envelope)
+	if err != nil {
+		b.Fatalf("marshal sample envelope: %v", err)
+	}
+	var sample traceRequest
+	if err := json.Unmarshal(payload, &sample); err != nil {
+		b.Fatalf("unmarshal sample request: %v", err)
+	}
+	b.SetBytes(int64(len(payload) + len(encodedSample)))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		encoded, err := json.Marshal(envelope)
+		if err != nil {
+			b.Fatalf("marshal websocket envelope: %v", err)
+		}
+		var request traceRequest
+		if err := json.Unmarshal(payload, &request); err != nil {
+			b.Fatalf("unmarshal websocket request: %v", err)
+		}
+		wsJSONBytesSink = encoded
 		wsJSONRequestSink = request
 	}
 }

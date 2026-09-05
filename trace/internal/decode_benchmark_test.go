@@ -167,6 +167,69 @@ func BenchmarkDecodeUDPSocketMessage(b *testing.B) {
 	}
 }
 
+func BenchmarkPGOProtocolDecodeWorkload(b *testing.B) {
+	ipv4Dst := net.ParseIP("192.0.2.9")
+	ipv6Dst := net.ParseIP("2001:db8::9")
+	ipv4Peer := &net.IPAddr{IP: net.ParseIP("198.51.100.1")}
+	ipv6Peer := &net.IPAddr{IP: net.ParseIP("2001:db8::1")}
+
+	icmp4Raw := benchmarkICMPTimeExceeded(b, 4, benchmarkEmbeddedICMPPacket(4, ipv4Dst, 401, 1234))
+	icmp6Raw := benchmarkICMPTimeExceeded(b, 6, benchmarkEmbeddedICMPPacket(6, ipv6Dst, 402, 2345))
+	icmp4Spec := &ICMPSpec{IPVersion: 4, EchoID: 401, DstIP: ipv4Dst}
+	icmp6Spec := &ICMPSpec{IPVersion: 6, EchoID: 402, DstIP: ipv6Dst}
+	icmp4Msg := ReceivedMessage{Peer: ipv4Peer, Msg: icmp4Raw}
+	icmp6Msg := ReceivedMessage{Peer: ipv6Peer, Msg: icmp6Raw}
+
+	udp4Raw := benchmarkICMPTimeExceeded(b, 4, benchmarkEmbeddedUDPPacket(4, ipv4Dst, 40000, 33494))
+	udp6Raw := benchmarkICMPTimeExceeded(b, 6, benchmarkEmbeddedUDPPacket(6, ipv6Dst, 40001, 33494))
+	udp4Spec := &UDPSpec{IPVersion: 4, DstIP: ipv4Dst, DstPort: 33494}
+	udp6Spec := &UDPSpec{IPVersion: 6, DstIP: ipv6Dst, DstPort: 33494}
+	udp4Msg := ReceivedMessage{Peer: ipv4Peer, Msg: udp4Raw}
+	udp6Msg := ReceivedMessage{Peer: ipv6Peer, Msg: udp6Raw}
+
+	tcp4Packet := benchmarkSerializeTCPPacket(b, &layers.IPv4{
+		Version: 4, IHL: 5, Protocol: layers.IPProtocolTCP,
+		SrcIP: net.ParseIP("198.51.100.1").To4(), DstIP: ipv4Dst.To4(),
+	}, &layers.TCP{SrcPort: 443, DstPort: 32100, ACK: true, RST: true, Ack: 200})
+	tcp6Packet := benchmarkSerializeTCPPacket(b, &layers.IPv6{
+		Version: 6, NextHeader: layers.IPProtocolTCP,
+		SrcIP: net.ParseIP("2001:db8::1"), DstIP: ipv6Dst,
+	}, &layers.TCP{SrcPort: 8443, DstPort: 45678, ACK: true, SYN: true, Ack: 91})
+
+	if _, seq, _, ok := icmp4Spec.decodeICMPSocketMessage(icmp4Msg); !ok || seq != 1234 {
+		b.Fatal("IPv4 ICMP workload fixture did not decode")
+	}
+	if _, seq, _, ok := icmp6Spec.decodeICMPSocketMessage(icmp6Msg); !ok || seq != 2345 {
+		b.Fatal("IPv6 ICMP workload fixture did not decode")
+	}
+	if _, data, _, ok := udp4Spec.decodeICMPSocketMessage(udp4Msg); !ok || len(data) == 0 {
+		b.Fatal("IPv4 UDP workload fixture did not decode")
+	}
+	if _, data, _, ok := udp6Spec.decodeICMPSocketMessage(udp6Msg); !ok || len(data) == 0 {
+		b.Fatal("IPv6 UDP workload fixture did not decode")
+	}
+	if _, _, _, _, ok := decodeTCPProbePacket(4, 443, tcp4Packet); !ok {
+		b.Fatal("IPv4 TCP workload fixture did not decode")
+	}
+	if _, _, _, _, ok := decodeTCPProbePacket(6, 8443, tcp6Packet); !ok {
+		b.Fatal("IPv6 TCP workload fixture did not decode")
+	}
+
+	b.SetBytes(int64(
+		len(icmp4Raw) + len(icmp6Raw) + len(udp4Raw) + len(udp6Raw) +
+			len(tcp4Packet.Data()) + len(tcp6Packet.Data()),
+	))
+	b.ReportAllocs()
+	for b.Loop() {
+		decodeBenchmarkFinishSink, decodeBenchmarkSeqSink, decodeBenchmarkResponseSink, decodeBenchmarkOKSink = icmp4Spec.decodeICMPSocketMessage(icmp4Msg)
+		decodeBenchmarkFinishSink, decodeBenchmarkSeqSink, decodeBenchmarkResponseSink, decodeBenchmarkOKSink = icmp6Spec.decodeICMPSocketMessage(icmp6Msg)
+		decodeBenchmarkFinishSink, decodeBenchmarkDataSink, decodeBenchmarkResponseSink, decodeBenchmarkOKSink = udp4Spec.decodeICMPSocketMessage(udp4Msg)
+		decodeBenchmarkFinishSink, decodeBenchmarkDataSink, decodeBenchmarkResponseSink, decodeBenchmarkOKSink = udp6Spec.decodeICMPSocketMessage(udp6Msg)
+		decodeBenchmarkSrcPortSink, decodeBenchmarkSeqSink, decodeBenchmarkAckSink, decodeBenchmarkPeerSink, decodeBenchmarkOKSink = decodeTCPProbePacket(4, 443, tcp4Packet)
+		decodeBenchmarkSrcPortSink, decodeBenchmarkSeqSink, decodeBenchmarkAckSink, decodeBenchmarkPeerSink, decodeBenchmarkOKSink = decodeTCPProbePacket(6, 8443, tcp6Packet)
+	}
+}
+
 func benchmarkICMPTimeExceeded(b *testing.B, ipVersion int, inner []byte) []byte {
 	b.Helper()
 
