@@ -552,7 +552,8 @@ func (e *mtrICMPEngine) validProbeRTT(rtt time.Duration) bool {
 	if maxRTT <= 0 {
 		maxRTT = 2 * time.Second
 	}
-	return rtt > 0 && rtt <= maxRTT
+	// A valid reply can arrive within one clock tick, especially on Windows.
+	return rtt >= 0 && rtt <= maxRTT
 }
 
 func (e *mtrICMPEngine) discardProbeLocked(seq int) {

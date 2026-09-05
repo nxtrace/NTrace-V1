@@ -227,7 +227,7 @@
   - `seqWillWrap(...)` 触发 `rotateEngine(...)`
   - 轮换 echoID 并重建 listener，协议层隔离新旧回包。
 - 额外安全网：
-  - onICMP 中有 RTT 合理性检查（`<=0` 或 `>timeout` 丢弃）。
+  - onICMP 中有 RTT 合理性检查（`<0` 或 `>timeout` 丢弃；同一时钟刻度内的零 RTT 回包有效）。
 - 流式预览：
   - 仅已发送 TTL 才会参与预览；未发送 TTL 保持 nil 槽位，避免提前计入 Snt/Loss。
 

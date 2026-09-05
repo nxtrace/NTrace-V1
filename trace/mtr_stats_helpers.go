@@ -120,7 +120,7 @@ func (agg *MTRAggregator) includeAttemptLocked(bucket *mtrTTLBucket, attempt Hop
 	if rttMs > acc.worst {
 		acc.worst = rttMs
 	}
-	if rttMs > 0 && rttMs < acc.best {
+	if rttMs >= 0 && rttMs < acc.best {
 		acc.best = rttMs
 	}
 }
@@ -159,7 +159,7 @@ func mergeMTRHopAccum(dst, src *mtrHopAccum) {
 		dst.sum += src.sum
 		dst.sumSq += src.sumSq
 		dst.last = src.last
-		if src.best > 0 && src.best < dst.best {
+		if src.best >= 0 && src.best < dst.best {
 			dst.best = src.best
 		}
 		if src.worst > dst.worst {

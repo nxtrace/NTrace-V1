@@ -2139,6 +2139,18 @@ func TestFormatMTRRawLine_Success(t *testing.T) {
 	}
 }
 
+func TestFormatMTRRawLine_ZeroRTT(t *testing.T) {
+	line := FormatMTRRawLine(trace.MTRRawRecord{
+		TTL:     1,
+		IP:      "127.0.0.1",
+		Success: true,
+	})
+	cols := strings.Split(line, "|")
+	if len(cols) != 12 || cols[3] != "0.00" {
+		t.Fatalf("zero RTT line = %q, want 12 columns with RTT 0.00", line)
+	}
+}
+
 func TestFormatMTRRawLine_TimeoutFixedColumns(t *testing.T) {
 	line := FormatMTRRawLine(trace.MTRRawRecord{
 		TTL:     9,

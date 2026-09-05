@@ -142,3 +142,26 @@ test('unreachable marker stays beside the host before block metadata', () => {
     ['mtr-hostname', 'mtr-response-marker', 'attempt__geo', 'mtr-mpls'],
   );
 });
+
+for (const rtts of [[1, 0], [0, 1], [0, 0]]) {
+  test(`raw MTR counts successful RTTs ${rtts.join(' then ')} and excludes failures`, () => {
+    const ingest = loadAppRawIngestor();
+    const record = (success, rtt_ms) => ({ttl: 1, ip: '192.0.2.1', success, rtt_ms});
+    const [row] = ingest([
+      record(false, 50),
+      record(true, rtts[0]),
+      record(false, 100),
+      record(true, rtts[1]),
+      record(false, 200),
+    ], {path_end: null});
+
+    assert.equal(row.sent, 5);
+    assert.equal(row.received, 2);
+    assert.equal(row.loss_count, 3);
+    assert.equal(row.loss_percent, 60);
+    assert.equal(row.last_ms, rtts[1]);
+    assert.equal(row.avg_ms, (rtts[0] + rtts[1]) / 2);
+    assert.equal(row.best_ms, Math.min(...rtts));
+    assert.equal(row.worst_ms, Math.max(...rtts));
+  });
+}

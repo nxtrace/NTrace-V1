@@ -1173,10 +1173,10 @@ function ingestMTRRawRecord(rec) {
   const rtt = Number(rec.rtt_ms) || 0;
   if (success && (row.ip || row.host)) {
     row.received += 1;
-    if (rtt > 0) {
+    if (rtt >= 0) {
       row.last_ms = rtt;
       row._sum_ms += rtt;
-      if (row.best_ms <= 0 || rtt < row.best_ms) {
+      if (row.received === 1 || rtt < row.best_ms) {
         row.best_ms = rtt;
       }
       if (rtt > row.worst_ms) {

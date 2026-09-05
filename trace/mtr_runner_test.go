@@ -559,6 +559,32 @@ func TestOnICMP_NormalReply(t *testing.T) {
 	}
 }
 
+func TestOnICMP_ZeroRTTWithinClockTick(t *testing.T) {
+	e := newTestICMPEngine(time.Second)
+	e.roundID.Store(1)
+	start := time.Now()
+	const seq = 42
+	done := make(chan struct{})
+	e.sentAt[seq] = mtrProbeMeta{ttl: 1, start: start, roundID: 1}
+	e.probeNotify = map[int]chan struct{}{seq: done}
+
+	peer := &net.IPAddr{IP: net.IPv4(127, 0, 0, 1)}
+	e.onICMP(internal.ReceivedMessage{
+		Peer: peer,
+		ICMP: internal.ICMPResponse{Kind: internal.ICMPResponseEchoReply},
+	}, start, seq)
+
+	reply := e.replied[seq]
+	if reply == nil || reply.rtt != 0 || reply.peer != peer {
+		t.Fatalf("same-tick reply = %+v, want successful reply with zero RTT", reply)
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("same-tick reply did not notify the waiting probe")
+	}
+}
+
 // TestOnICMP_StaleRoundReply 旧轮次回包（roundID 不匹配）应被丢弃。
 func TestOnICMP_StaleRoundReply(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
