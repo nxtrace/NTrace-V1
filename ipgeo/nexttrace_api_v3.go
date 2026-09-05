@@ -102,8 +102,18 @@ func dispatchNextTraceAPIV3Message(data string) {
 }
 
 func parseNextTraceAPIV3Message(data string) (string, IPGeoData) {
-	// json解析 -> data
-	res := gjson.Parse(data)
+	return parseNextTraceAPIV3Result(gjson.Parse(data))
+}
+
+func decodeNextTraceAPIV3Message(data string) (string, IPGeoData, error) {
+	if !gjson.Valid(data) {
+		return "", IPGeoData{}, errors.New("invalid NextTrace API v3 response")
+	}
+	ip, geo := parseNextTraceAPIV3Result(gjson.Parse(data))
+	return ip, geo, nil
+}
+
+func parseNextTraceAPIV3Result(res gjson.Result) (string, IPGeoData) {
 	// 根据返回的IP信息，发送给对应等待回复的IP通道上
 	var domain = res.Get("domain").String()
 
