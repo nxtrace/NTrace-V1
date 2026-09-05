@@ -283,17 +283,16 @@ func (rt *mtrSchedulerRuntime) launchProbe(ttl int) {
 		}
 		select {
 		case rt.resultCh <- completed:
-		case <-generationCtx.Done():
 		case <-rt.ctx.Done():
 		}
 	})
 }
 
 func (rt *mtrSchedulerRuntime) processResult(cp mtrCompletedProbe) {
+	rt.inFlight--
 	if cp.gen != rt.generation {
 		return
 	}
-	rt.inFlight--
 	if cp.ttl < rt.beginHop || cp.ttl > rt.maxHops {
 		return
 	}
@@ -828,7 +827,6 @@ func (rt *mtrSchedulerRuntime) handleReset() {
 	for idx := range rt.states {
 		rt.states[idx] = mtrHopState{}
 	}
-	rt.inFlight = 0
 	clear(rt.metadataGeoInFlight)
 	clear(rt.metadataHostInFlight)
 	clear(rt.metadataCache)

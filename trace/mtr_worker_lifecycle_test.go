@@ -77,6 +77,82 @@ func TestMTRSchedulerResetCancelsProbeGeneration(t *testing.T) {
 	})
 }
 
+func TestMTRSchedulerResetRetainsGlobalProbeCapacityUntilOldWorkerExits(t *testing.T) {
+	var calls atomic.Int32
+	resetRequested := atomic.Bool{}
+	firstStarted := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+
+	prober := &mockTTLProber{
+		probeFn: func(ctx context.Context, ttl int) (mtrProbeResult, error) {
+			switch calls.Add(1) {
+			case 1:
+				close(firstStarted)
+				<-ctx.Done()
+				close(firstCanceled)
+				<-releaseFirst
+				return mtrProbeResult{TTL: ttl}, ctx.Err()
+			case 2:
+				close(secondStarted)
+				return mtrProbeResult{TTL: ttl}, nil
+			default:
+				return mtrProbeResult{TTL: ttl}, nil
+			}
+		},
+	}
+	workers := newMTRWorkerSession(t.Context())
+	defer workers.shutdown(func() { _ = prober.Close() })
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+	defer release()
+
+	rt, err := newMTRSchedulerRuntimeWithSession(workers, prober, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:         1,
+		MaxHops:          1,
+		HopInterval:      time.Second,
+		ParallelRequests: 1,
+		IsResetRequested: func() bool { return resetRequested.Swap(false) },
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("newMTRSchedulerRuntimeWithSession returned error: %v", err)
+	}
+
+	rt.launchProbe(1)
+	<-firstStarted
+	resetRequested.Store(true)
+	rt.handleReset()
+	select {
+	case <-firstCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not cancel the old probe")
+	}
+	if got := rt.inFlight; got != 1 {
+		t.Fatalf("global in-flight probes after reset = %d, want 1 until the old worker exits", got)
+	}
+
+	release()
+	var completed mtrCompletedProbe
+	select {
+	case completed = <-rt.resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("old probe did not report completion accounting")
+	}
+	rt.processResult(completed)
+	if got := rt.inFlight; got != 0 {
+		t.Fatalf("global in-flight probes after old worker exit = %d, want 0", got)
+	}
+
+	rt.scheduleReady()
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("new generation probe did not start after capacity was released")
+	}
+	rt.processResult(<-rt.resultCh)
+}
+
 type closeBlockingTTLProber struct {
 	started   chan struct{}
 	release   chan struct{}

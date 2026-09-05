@@ -6,8 +6,9 @@
 
 - scheduler、preview、legacy raw round、probe、Geo/PTR metadata 和 ICMP listener 全部登记到
   session 根 context 与同一 `WaitGroup`。
-- reset 只取消旧 generation，旧 probe 和 metadata 结果无法进入新 generation；最终 shutdown
-  固定执行“取消根 context -> 关闭 prober/listener -> 等待 worker”。
+- reset 只取消旧 generation，旧 probe 和 metadata 结果无法进入新 generation；旧 probe 退出前
+  仍占用全局并发容量，避免连续 reset 暂时超过 `ParallelRequests`。最终 shutdown 固定执行
+  “取消根 context -> 关闭 prober/listener -> 等待 worker”。
 - 所有结果发送同时监听 root/generation cancellation；生产 MTR 路径不再使用循环
   `time.After` 或独立 context watcher。
 - worker 使用 `pprof` 的 `owner` label；active goroutine profile 能定位 `mtr.probe`，最终
@@ -49,8 +50,9 @@ worker 没有统一取消与登记；shutdown 中存在先等待 worker、再关
 
 session 是唯一 worker owner。scheduler 启动时把 prober 与 ICMP listener 注册到同一 session；
 probe、同步/异步 metadata、preview 和 legacy raw round 通过 `session.Go(owner, fn)` 启动。
-reset 先取消旧 generation，再清空调度状态并建立新 generation；旧结果在发送和消费两侧都校验
-generation。最终退出由 session 先取消根 context、关闭资源以解除 I/O，再等待全部 worker。
+reset 先取消旧 generation，再清空该 generation 的 hop 状态并建立新 generation；旧结果在消费
+侧丢弃业务数据，但 worker completion 仍释放跨 generation 的全局并发账本。最终退出由 session
+先取消根 context、关闭资源以解除 I/O，再等待全部 worker。
 
 ICMP listener 首次启动和 seq 回卷后的轮换都登记为 `mtr.icmp-listener`。engine 的 spec 使用
 typed atomic pointer，echo ID 使用 typed atomic，关闭通过 swap-to-nil 串行化，避免 listener
@@ -61,6 +63,7 @@ typed atomic pointer，echo ID 使用 typed atomic，关闭通过 swap-to-nil �
 定向测试覆盖：
 
 - reset 取消旧 probe generation，只有新 generation 结果计入统计；
+- 取消中的旧 probe 退出前仍占用全局容量，新 generation 不会超过 `ParallelRequests`；
 - shutdown 必须先关闭 prober，再等待被其解除阻塞的 worker；
 - initial/rotated listener 与 preview worker 都由 session join；
 - probe、Geo/PTR metadata 与 raw round 发送在 root/generation 取消后可立即退出；
@@ -135,9 +138,10 @@ session 与 owner label 代码，没有新增依赖。
 
 ## 平台风险与回退
 
-主要风险是 reset 与在途结果竞争、listener 轮换期间关闭 spec、shutdown 的 close/wait 顺序，以及
-外部自定义 Source 不履行 timeout。generation 双侧校验、typed atomic、统一 session owner、
-100/1,000 次压力、race 和 active/final goroutine profile 覆盖这些边界。
+主要风险是 reset 与在途结果竞争、跨 generation 全局并发账本、listener 轮换期间关闭 spec、
+shutdown 的 close/wait 顺序，以及外部自定义 Source 不履行 timeout。generation 结果过滤、
+worker completion 账本、typed atomic、统一 session owner、100/1,000 次压力、race 和
+active/final goroutine profile 覆盖这些边界。
 
 Darwin 最低版本保持 macOS 13.0，没有新增平台 API。Windows/Linux 仍使用原有 prober 与 listener
 实现，只有外围 owner 与取消顺序变化。
