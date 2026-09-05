@@ -90,6 +90,7 @@ GOEXPERIMENT=nojsonv2 scripts/perf/run_json_benchmarks.sh nojsonv2
 go tool benchstat .cache/perf/nojsonv2.bench.txt .cache/perf/default-json.bench.txt
 
 MACOSX_DEPLOYMENT_TARGET=13.0 \
+GOEXPERIMENT=nojsonv2 \
 PERF_LDFLAGS='-s -w -buildid= -macos=13.0' \
 UPX_BIN=/opt/homebrew/bin/upx UPX_FLAGS='--force-macos -9' \
 scripts/perf/measure_binaries.sh go1271-nojsonv2-darwin
