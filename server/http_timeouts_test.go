@@ -130,7 +130,7 @@ func TestHTTPReadTimeoutPreservesLongMCPJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "nexttrace_mtr_report", Arguments: map[string]any{"target": "example.invalid"}})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestHTTPReadTimeoutPreservesContinuousWebsocketMTR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := conn.WriteJSON(traceRequest{Target: "example.invalid", DataProvider: "disable-geoip", Mode: "mtr"}); err != nil {
 		t.Fatal(err)
 	}
