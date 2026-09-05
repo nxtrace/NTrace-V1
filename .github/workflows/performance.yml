@@ -48,7 +48,7 @@ jobs:
           }
 
           reference_sha=""
-          reference_kind="unavailable"
+          reference_kind="head-only"
           range=""
 
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
@@ -60,12 +60,12 @@ jobs:
             candidate_sha=""
           fi
 
-          if [[ -n "${candidate_sha}" ]] && has_harness "${candidate_sha}"; then
+          if [[ -n "${candidate_sha}" && "${candidate_sha}" != "${HEAD_SHA}" ]] && has_harness "${candidate_sha}"; then
             reference_sha="${candidate_sha}"
             reference_kind="base"
           elif [[ -n "${range}" ]]; then
             while IFS= read -r commit; do
-              if has_harness "${commit}"; then
+              if [[ "${commit}" != "${HEAD_SHA}" ]] && has_harness "${commit}"; then
                 reference_sha="${commit}"
                 reference_kind="first-harness"
                 break
@@ -73,34 +73,31 @@ jobs:
             done < <(git rev-list --reverse "${range}")
           fi
 
-          if [[ -z "${reference_sha}" ]]; then
-            echo "FAIL: no comparison commit contains the performance harness" >&2
-            exit 1
-          fi
-          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ || ! "${reference_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ || ( -n "${reference_sha}" && ! "${reference_sha}" =~ ^[0-9a-f]{40}$ ) ]]; then
             echo "FAIL: head and comparison refs must be full commit SHAs" >&2
             exit 1
           fi
-          if [[ "${reference_sha}" == "${HEAD_SHA}" ]]; then
-            echo "FAIL: comparison commit must differ from head" >&2
-            exit 1
-          fi
 
-          reference_go_directive="$(git show "${reference_sha}:go.mod" | awk '$1 == "go" { print $2; exit }')"
-          case "${reference_go_directive}" in
-            1.26*)
-              reference_go_version="1.26.8"
-              reference_toolchain="go1.26.8"
-              ;;
-            1.27*)
-              reference_go_version="1.27.1"
-              reference_toolchain="go1.27.1"
-              ;;
-            *)
-              echo "FAIL: unsupported comparison go directive: ${reference_go_directive:-missing}" >&2
-              exit 1
-              ;;
-          esac
+          reference_go_directive=""
+          reference_go_version=""
+          reference_toolchain=""
+          if [[ -n "${reference_sha}" ]]; then
+            reference_go_directive="$(git show "${reference_sha}:go.mod" | awk '$1 == "go" { print $2; exit }')"
+            case "${reference_go_directive}" in
+              1.26*)
+                reference_go_version="1.26.8"
+                reference_toolchain="go1.26.8"
+                ;;
+              1.27*)
+                reference_go_version="1.27.1"
+                reference_toolchain="go1.27.1"
+                ;;
+              *)
+                echo "FAIL: unsupported comparison go directive: ${reference_go_directive:-missing}" >&2
+                exit 1
+                ;;
+            esac
+          fi
 
           evidence_dir="${RUNNER_TEMP}/performance-evidence"
           mkdir -p "${evidence_dir}"
@@ -122,10 +119,12 @@ jobs:
             echo "reference_toolchain=${reference_toolchain}"
           } >> "${GITHUB_OUTPUT}"
 
-          git switch --detach "${reference_sha}"
-          if [[ "$(git rev-parse HEAD)" != "${reference_sha}" ]]; then
-            echo "FAIL: comparison checkout did not resolve to ${reference_sha}" >&2
-            exit 1
+          if [[ -n "${reference_sha}" ]]; then
+            git switch --detach "${reference_sha}"
+            if [[ "$(git rev-parse HEAD)" != "${reference_sha}" ]]; then
+              echo "FAIL: comparison checkout did not resolve to ${reference_sha}" >&2
+              exit 1
+            fi
           fi
 
       - name: Set up comparison Go
@@ -332,6 +331,7 @@ jobs:
         shell: bash
         env:
           GOTOOLCHAIN: go1.27.1
+          REFERENCE_SHA: ${{ steps.refs.outputs.reference_sha }}
         run: |
           set -Eeuo pipefail
           evidence_dir="${RUNNER_TEMP}/performance-evidence"
@@ -339,12 +339,15 @@ jobs:
           head_raw="${evidence_dir}/head/head.bench.txt"
           summary="${evidence_dir}/benchstat.txt"
 
-          if [[ ! -s "${reference_raw}" || ! -s "${head_raw}" ]]; then
+          if [[ -z "${REFERENCE_SHA}" ]]; then
+            echo "benchstat skipped: no earlier commit contains the performance harness; head-only evidence is recorded." | tee "${summary}"
+          elif [[ ! -s "${reference_raw}" || ! -s "${head_raw}" ]]; then
             echo "benchstat unavailable: reference or head benchmark output is missing" | tee "${summary}"
             exit 1
+          else
+            bash scripts/perf/compare_benchmarks.sh "${reference_raw}" "${head_raw}" | tee "${summary}"
           fi
 
-          bash scripts/perf/compare_benchmarks.sh "${reference_raw}" "${head_raw}" | tee "${summary}"
           {
             echo "## Linux performance cross-reference"
             echo
