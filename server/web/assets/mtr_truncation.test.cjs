@@ -165,3 +165,30 @@ for (const rtts of [[1, 0], [0, 1], [0, 0]]) {
     assert.equal(row.worst_ms, Math.max(...rtts));
   });
 }
+
+test('MTR latency cells display successful zero RTT and hide missing or negative values', () => {
+  const app = loadAppRawIngestor();
+  for (const {value, received, expected} of [
+    {value: 0, received: 1, expected: '0.00 ms'},
+    {value: 1.234, received: 1, expected: '1.23 ms'},
+    {value: 0, received: 0, expected: '--'},
+    {value: undefined, received: 1, expected: '--'},
+    {value: null, received: 1, expected: '--'},
+    {value: -1, received: 1, expected: '--'},
+  ]) {
+    const result = app.render([{
+      ttl: 1,
+      ip: '192.0.2.1',
+      sent: 1,
+      received,
+      loss_count: 1 - received,
+      last_ms: value,
+      avg_ms: value,
+      best_ms: value,
+      worst_ms: value,
+    }]);
+    const row = result.children[0].children[1].children[0];
+    assert.deepEqual(row.children.slice(2, 6).map((cell) => cell.textContent),
+      Array(4).fill(expected), `RTT ${value}, received ${received}`);
+  }
+});

@@ -1378,7 +1378,7 @@ function formatMPLSText(mpls) {
 }
 
 function formatLatency(value, received) {
-  if (!received || value === undefined || value === null || Number(value) <= 0) {
+  if (!received || value === undefined || value === null || Number(value) < 0) {
     return '--';
   }
   return Number(value).toFixed(2) + ' ms';
