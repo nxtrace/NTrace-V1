@@ -43,6 +43,7 @@ jobs:
       - name: Checkout codebase
         uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Go (built-in cache)
@@ -57,4 +58,6 @@ jobs:
         with:
           version: v2.13.2
           install-mode: goinstall
-          only-new-issues: true
+          # Large PRs exceed GitHub's diff API limit; compare the local Git history instead.
+          only-new-issues: ${{ github.event_name != 'pull_request' }}
+          args: ${{ github.event_name == 'pull_request' && format('--new-from-merge-base={0}', github.event.pull_request.base.sha) || '' }}
