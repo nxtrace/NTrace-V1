@@ -38,7 +38,8 @@ committing them.
 
 `measure_binaries.sh` records stripped local-platform sizes. Set `UPX_BIN` to an
 exact UPX executable when that target format is supported; use the same binary
-and flags for both sides of a comparison.
+and flags for both sides of a comparison. Set `PERF_LDFLAGS` when reproducing
+release-specific linker metadata such as Darwin's `-macos=13.0`.
 
 On macOS, `measure_help_startup.sh` records ten no-warmup `--help` process
 launches and the maximum resident set size reported by `/usr/bin/time -l`:

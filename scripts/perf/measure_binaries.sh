@@ -7,6 +7,7 @@ CALLER_DIR="${PWD}"
 RESULT_NAME="${1:-$(git -C "${ROOT_DIR}" rev-parse --short HEAD)}"
 RESULT_DIR="${PERF_RESULT_DIR:-${ROOT_DIR}/.cache/perf}"
 BUILD_DIR="$(mktemp -d)"
+PERF_LDFLAGS="${PERF_LDFLAGS:--s -w -buildid=}"
 
 if [[ "${RESULT_DIR}" != /* ]]; then
   RESULT_DIR="${CALLER_DIR}/${RESULT_DIR}"
@@ -31,7 +32,7 @@ measure_flavor() {
     tags_flag=(-tags "${tags}")
   fi
 
-  go build -buildvcs=false -trimpath "${tags_flag[@]}" -ldflags '-s -w -buildid=' -o "${binary}" .
+  go build -buildvcs=false -trimpath "${tags_flag[@]}" -ldflags "${PERF_LDFLAGS}" -o "${binary}" .
 
   local plain_size
   plain_size="$(wc -c <"${binary}" | tr -d ' ')"
