@@ -14,6 +14,15 @@ GOEXPERIMENT=nojsonv2 scripts/perf/measure_binaries.sh head
 These commands select the release JSON runtime explicitly. Set
 `GOEXPERIMENT=` instead when measuring the Go 1.27 default JSON runtime.
 
+Use `run_json_benchmarks.sh` to compare the WebSocket marshal/unmarshal hot
+paths without running unrelated benchmarks:
+
+```sh
+GOEXPERIMENT= scripts/perf/run_json_benchmarks.sh default-json
+GOEXPERIMENT=nojsonv2 scripts/perf/run_json_benchmarks.sh nojsonv2
+go tool benchstat .cache/perf/nojsonv2.bench.txt .cache/perf/default-json.bench.txt
+```
+
 If a result crosses a merge threshold without a statistically clear result,
 repeat both sides with `BENCH_COUNT=20`. Generate CPU and heap profiles for a
 single representative benchmark with:
