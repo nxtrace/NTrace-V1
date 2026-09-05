@@ -73,12 +73,31 @@ func BenchmarkPGOTraceWorkload(b *testing.B) {
 	provider := ipgeo.Source(func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
 		return geo, nil
 	})
+	cachedProviderCalls := 0
+	cachedProvider := CachedGeoSource(ipgeo.SourceDescriptor{
+		Source: func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
+			cachedProviderCalls++
+			return geo, nil
+		},
+		Namespace: ipgeo.SourceNamespaceIPSB,
+		Backend:   ipgeo.SourceNamespaceIPSB,
+	})
+	const hotQuery = "198.18.1.1"
+	coldQueries := make([]string, 4095)
+	for idx := range coldQueries {
+		coldQueries[idx] = fmt.Sprintf("198.19.%d.%d", idx>>8, idx&0xff)
+	}
+	ClearCaches()
+	b.Cleanup(ClearCaches)
 	prober := newPGOBenchmarkProber(geo)
 	agg := NewMTRAggregator()
 	result := &Result{Hops: make([][]Hop, mtrBenchmarkTTLCount)}
 
-	if got, err := provider("198.18.1.1", time.Second, "en", false); err != nil || got != geo {
+	if got, err := provider(hotQuery, time.Second, "en", false); err != nil || got != geo {
 		b.Fatalf("fake geo provider = (%+v, %v), want fixture", got, err)
+	}
+	if got, err := cachedProvider(hotQuery, time.Second, "en", false); err != nil || got == nil {
+		b.Fatalf("cached fake geo provider = (%+v, %v), want fixture", got, err)
 	}
 	if probe, err := prober.ProbeTTL(context.Background(), 1); err != nil || !probe.Success {
 		b.Fatalf("fake prober = (%+v, %v), want success", probe, err)
@@ -86,6 +105,8 @@ func BenchmarkPGOTraceWorkload(b *testing.B) {
 	_ = prober.Reset()
 
 	b.ReportAllocs()
+	b.ResetTimer()
+	iteration := 0
 	for b.Loop() {
 		agg.Reset()
 		if err := prober.Reset(); err != nil {
@@ -95,10 +116,20 @@ func BenchmarkPGOTraceWorkload(b *testing.B) {
 			result.Hops[idx] = result.Hops[idx][:0]
 		}
 
-		resolved, err := provider("198.18.1.1", time.Second, "en", false)
-		if err != nil {
+		if _, err := provider(hotQuery, time.Second, "en", false); err != nil {
 			b.Fatalf("fake geo provider: %v", err)
 		}
+		resolved, err := cachedProvider(hotQuery, time.Second, "en", false)
+		if err != nil {
+			b.Fatalf("cached fake geo provider: %v", err)
+		}
+		if iteration%64 == 0 {
+			coldQuery := coldQueries[(iteration/64)%len(coldQueries)]
+			if _, err := cachedProvider(coldQuery, time.Second, "en", false); err != nil {
+				b.Fatalf("cached fake geo provider miss: %v", err)
+			}
+		}
+		iteration++
 		for ttl := 1; ttl <= mtrBenchmarkTTLCount; ttl++ {
 			for range mtrBenchmarkPathCount {
 				probe, err := prober.ProbeTTL(context.Background(), ttl)
@@ -121,5 +152,8 @@ func BenchmarkPGOTraceWorkload(b *testing.B) {
 	}
 	if err := prober.Close(); err != nil {
 		b.Fatalf("close fake prober: %v", err)
+	}
+	if want := 1 + (iteration+63)/64; cachedProviderCalls != want {
+		b.Fatalf("cached fake geo provider calls = %d, want %d", cachedProviderCalls, want)
 	}
 }

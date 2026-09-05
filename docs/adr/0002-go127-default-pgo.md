@@ -18,8 +18,8 @@ benchmark 均不得显著回退超过 1%。
 ## 决策
 
 1. 不向仓库加入 `default.pgo`，发布构建继续不启用 PGO。
-2. 保留固定 fake prober/provider、协议 decoder、MTR/Geo JSON 与 WebSocket JSON
-   组成的复合 workload，以及 profile、benchmark、大小和启动测量脚本。
+2. 保留固定 fake prober/provider（含直接和缓存路径）、协议 decoder、MTR/Geo JSON
+   与 WebSocket JSON 组成的复合 workload，以及 profile、benchmark、大小和启动测量脚本。
 3. 候选 CPU profile、原始 benchmark 和二进制只作为测量产物保存，不进入 Git。
 
 ## 证据

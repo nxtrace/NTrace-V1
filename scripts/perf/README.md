@@ -55,8 +55,8 @@ scripts/perf/measure_help_startup.sh go127 \
 
 Generate a 30-second candidate profile from one deterministic composite
 workload with three equally timed phases. It covers the protocol decoders,
-fake-prober MTR aggregation with a fake Geo provider and JSON output, and
-WebSocket JSON encode/decode:
+fake-prober MTR aggregation with direct and cached fake Geo provider paths and
+JSON output, and WebSocket JSON encode/decode:
 
 ```sh
 scripts/perf/generate_pgo_profile.sh candidate

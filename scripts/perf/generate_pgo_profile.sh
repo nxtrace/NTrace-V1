@@ -84,6 +84,11 @@ profile_component ./server BenchmarkPGOWebSocketJSONWorkload websocket-json
 candidate="${RESULT_DIR}/${RESULT_NAME}.candidate.pgo"
 go tool pprof -proto -output "${candidate}" "${profiles[@]}"
 
+candidate_sha256="$(sha256_file "${candidate}")" || {
+  echo "error: failed to calculate SHA-256 for ${candidate}" >&2
+  exit 1
+}
+
 manifest="${RESULT_DIR}/${RESULT_NAME}.profile.txt"
 {
   printf 'commit=%s\n' "$(git -C "${ROOT_DIR}" rev-parse HEAD)"
@@ -97,7 +102,7 @@ manifest="${RESULT_DIR}/${RESULT_NAME}.profile.txt"
   printf 'profile_2=./trace:BenchmarkPGOTraceWorkload\n'
   printf 'profile_3=./server:BenchmarkPGOWebSocketJSONWorkload\n'
   printf 'candidate=%s\n' "${candidate}"
-  printf 'candidate_sha256=%s\n' "$(sha256_file "${candidate}")"
+  printf 'candidate_sha256=%s\n' "${candidate_sha256}"
 } >"${manifest}"
 
 cat "${manifest}"

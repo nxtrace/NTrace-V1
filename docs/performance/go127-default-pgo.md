@@ -20,8 +20,8 @@
 单一复合 workload 由三个等长阶段组成，每段采集 10 秒 CPU profile：
 
 1. IPv4/IPv6 ICMP、TCP、UDP 纯 decoder。
-2. fake prober 生成 64 TTL × 4 path，经过 MTR 聚合、fake Geo provider 与
-   `encoding/json` 输出。
+2. fake prober 生成 64 TTL × 4 path，经过 MTR 聚合、fake Geo provider
+   直接/缓存路径与 `encoding/json` 输出。
 3. WebSocket envelope 编码和请求解码。
 
 三段 profile 使用 `go tool pprof -proto` 合并。候选 profile SHA-256 为
