@@ -69,6 +69,7 @@ var (
 	ensureNextTraceAPIV3ConnectionFn = ensureNextTraceAPIV3Connection
 	prepareNextTraceAPIV4FastIPFn    = ipgeo.PrepareNextTraceAPIV4FastIP
 	tracerouteWithContextFn          = trace.TracerouteWithContext
+	traceTargetLookupFn              = util.DomainLookUpWithContext
 	lookupIPGeoWithDescriptorFn      = trace.LookupIPGeoWithDescriptor
 	runMTRFn                         = trace.RunMTR
 	runMTRRawFn                      = trace.RunMTRRaw
@@ -133,6 +134,7 @@ func (s *Service) MTRReport(ctx context.Context, req MTRReportRequest) (MTRRepor
 	start := time.Now()
 	base := req.TraceRequest
 	base.Queries = 1
+	base.MaxAttempts = 1
 	setup, err := s.prepareTrace(ctx, base)
 	if err != nil {
 		return MTRReportResponse{}, err
@@ -172,6 +174,7 @@ func (s *Service) MTRRaw(ctx context.Context, req MTRRawRequest) (MTRRawResponse
 	start := time.Now()
 	base := req.TraceRequest
 	base.Queries = 1
+	base.MaxAttempts = 1
 	setup, err := s.prepareTrace(ctx, base)
 	if err != nil {
 		return MTRRawResponse{}, err
@@ -229,6 +232,12 @@ func (s *Service) MTRRaw(ctx context.Context, req MTRRawRequest) (MTRRawResponse
 }
 
 func (s *Service) MTUTrace(ctx context.Context, req MTUTraceRequest) (MTUTraceResponse, error) {
+	if err := ValidateProbeLimits(trace.Config{
+		MaxHops: req.MaxHops, BeginHop: req.BeginHop, NumMeasurements: req.Queries,
+		ParallelRequests: 1, MaxAttempts: 1,
+	}); err != nil {
+		return MTUTraceResponse{}, err
+	}
 	start := time.Now()
 	_, needsNextTraceAPIV3 := resolveMTUDataProvider(req.DataProvider)
 	return withServiceRuntime(ctx, runtimeOptions{
@@ -333,6 +342,9 @@ func (s *Service) GeoLookup(ctx context.Context, req GeoLookupRequest) (GeoLooku
 }
 
 func (s *Service) prepareTrace(ctx context.Context, req TraceRequest) (*traceSetup, error) {
+	if err := validateTraceRequestLimits(req); err != nil {
+		return nil, err
+	}
 	if req.IPv4Only && req.IPv6Only {
 		return nil, errors.New("ipv4_only and ipv6_only cannot both be true")
 	}
@@ -349,7 +361,7 @@ func (s *Service) prepareTrace(ctx context.Context, req TraceRequest) (*traceSet
 		return nil, err
 	}
 	dataProvider, needsNextTraceAPIV3 := resolveDataProvider(&req)
-	ip, err := util.DomainLookUpWithContext(ctx, target, resolveIPVersion(req), strings.ToLower(req.DotServer), true)
+	ip, err := traceTargetLookupFn(ctx, target, resolveIPVersion(req), strings.ToLower(req.DotServer), true)
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +396,7 @@ func (s *Service) buildMTUConfig(ctx context.Context, req MTUTraceRequest) (mtut
 	if err != nil {
 		return mtutrace.Config{}, err
 	}
-	ip, err := util.DomainLookUpWithContext(ctx, target, resolveMTUIPVersion(req), strings.ToLower(req.DotServer), true)
+	ip, err := traceTargetLookupFn(ctx, target, resolveMTUIPVersion(req), strings.ToLower(req.DotServer), true)
 	if err != nil {
 		return mtutrace.Config{}, err
 	}

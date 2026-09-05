@@ -225,6 +225,13 @@ func prepareTrace(ctx context.Context, req traceRequest) (*traceExecution, int, 
 	if statusCode, err := normalizeTraceRequest(&exec.Req); err != nil {
 		return nil, statusCode, err
 	}
+	if err := service.ValidateProbeLimits(trace.Config{
+		MaxHops: exec.Req.MaxHops, BeginHop: exec.Req.BeginHop,
+		NumMeasurements: exec.Req.Queries, ParallelRequests: exec.Req.ParallelRequests,
+		MaxAttempts: exec.Req.MaxAttempts,
+	}); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
 
 	target, err := normalizeTarget(exec.Req.Target)
 	if err != nil {
