@@ -9,6 +9,7 @@ import (
 
 type mtrLoopRuntime struct {
 	ctx               context.Context
+	workers           *mtrWorkerSession
 	prober            mtrProber
 	config            Config
 	opts              MTROptions
@@ -23,7 +24,7 @@ type mtrLoopRuntime struct {
 }
 
 func newMTRLoopRuntime(
-	ctx context.Context,
+	workers *mtrWorkerSession,
 	prober mtrProber,
 	config Config,
 	opts MTROptions,
@@ -39,7 +40,8 @@ func newMTRLoopRuntime(
 		opts.ProgressThrottle = 200 * time.Millisecond
 	}
 	rt := &mtrLoopRuntime{
-		ctx:        ctx,
+		ctx:        workers.ctx,
+		workers:    workers,
 		prober:     prober,
 		config:     config,
 		opts:       opts,
@@ -157,32 +159,33 @@ func (rt *mtrLoopRuntime) runProbeRound() (*Result, error) {
 }
 
 func (rt *mtrLoopRuntime) runProbeRoundWithPreview(peeker mtrPeeker) (*Result, error) {
-	var (
-		res *Result
-		err error
-	)
-
-	done := make(chan struct{})
-	go func() {
-		res, err = rt.prober.probeRound(rt.ctx)
-		close(done)
-	}()
+	type probeRoundResult struct {
+		result *Result
+		err    error
+	}
+	done := make(chan probeRoundResult, 1)
+	rt.workers.Go("mtr.preview", func() {
+		res, err := rt.prober.probeRound(rt.ctx)
+		select {
+		case done <- probeRoundResult{result: res, err: err}:
+		case <-rt.ctx.Done():
+		}
+	})
 
 	ticker := time.NewTicker(rt.opts.ProgressThrottle)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-done:
-			return res, err
+		case result := <-done:
+			if rt.ctx.Err() != nil {
+				return nil, rt.ctx.Err()
+			}
+			return result.result, result.err
 		case <-ticker.C:
 			rt.emitPreview(peeker)
 		case <-rt.ctx.Done():
-			<-done
-			if err == nil && rt.ctx.Err() != nil {
-				err = rt.ctx.Err()
-			}
-			return res, err
+			return nil, rt.ctx.Err()
 		}
 	}
 }
@@ -232,7 +235,7 @@ func (rt *mtrLoopRuntime) waitBackoff() error {
 
 func (rt *mtrLoopRuntime) recordSuccess(res *Result) {
 	if rt.fillGeo {
-		mtrFillGeoRDNS(res, rt.config)
+		mtrFillGeoRDNS(rt.workers, res, rt.config)
 	}
 
 	rt.consecutiveErrors = 0

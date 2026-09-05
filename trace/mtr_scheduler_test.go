@@ -1617,7 +1617,7 @@ func TestScheduler_ResetRefreshesSourceAfterInvalidatingOldWork(t *testing.T) {
 	var refreshCalls atomic.Int32
 	resetRequested := true
 	var rt *mtrSchedulerRuntime
-	var oldMetadataCtx context.Context
+	var oldGenerationCtx context.Context
 
 	rt, err := newMTRSchedulerRuntime(context.Background(), prober, NewMTRAggregator(), mtrSchedulerConfig{
 		BeginHop:         1,
@@ -1642,10 +1642,10 @@ func TestScheduler_ResetRefreshesSourceAfterInvalidatingOldWork(t *testing.T) {
 			},
 			RefreshIPGeoSource: func() {
 				refreshCalls.Add(1)
-				if oldMetadataCtx.Err() == nil {
+				if oldGenerationCtx.Err() == nil {
 					t.Error("source refreshed before canceling the old metadata context")
 				}
-				if rt.metadataCtx != oldMetadataCtx {
+				if rt.generationCtx != oldGenerationCtx {
 					t.Error("new metadata context published before source refresh completed")
 				}
 				if proberReset.Load() {
@@ -1658,15 +1658,15 @@ func TestScheduler_ResetRefreshesSourceAfterInvalidatingOldWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newMTRSchedulerRuntime error: %v", err)
 	}
-	oldMetadataCtx = rt.metadataCtx
+	oldGenerationCtx = rt.generationCtx
 	rt.inFlight = 1
 	rt.states[1].inFlightCount = 1
 	rt.handleReset()
 
-	if oldMetadataCtx.Err() == nil {
+	if oldGenerationCtx.Err() == nil {
 		t.Fatal("reset did not cancel the previous metadata generation")
 	}
-	if rt.metadataCtx == oldMetadataCtx || rt.metadataCtx.Err() != nil {
+	if rt.generationCtx == oldGenerationCtx || rt.generationCtx.Err() != nil {
 		t.Fatal("reset did not publish a fresh metadata context after cleanup")
 	}
 	if got := refreshCalls.Load(); got != 1 {
