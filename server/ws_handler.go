@@ -350,8 +350,8 @@ func serveTraceWebsocket(parent context.Context, conn traceWSConn) {
 	session := newWSTraceSession(parent, conn, "", wsSendQueueSize)
 	defer session.finish()
 
-	var req traceRequest
-	if err := json.Unmarshal(message, &req); err != nil {
+	req, err := decodeWSInitRequest(message)
+	if err != nil {
 		_ = session.send(wsEnvelope{Type: "error", Error: "invalid request payload", Status: 400})
 		return
 	}
@@ -399,6 +399,12 @@ func serveTraceWebsocket(parent context.Context, conn traceWSConn) {
 			runSingleTrace(sessionCtx, session, setup)
 		}
 	})
+}
+
+func decodeWSInitRequest(message []byte) (traceRequest, error) {
+	var req traceRequest
+	err := json.Unmarshal(message, &req)
+	return req, err
 }
 
 func runSingleTrace(ctx context.Context, session *wsTraceSession, setup *traceExecution) {
