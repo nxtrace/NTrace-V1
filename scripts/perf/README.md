@@ -39,3 +39,13 @@ committing them.
 `measure_binaries.sh` records stripped local-platform sizes. Set `UPX_BIN` to an
 exact UPX executable when that target format is supported; use the same binary
 and flags for both sides of a comparison.
+
+On macOS, `measure_help_startup.sh` records ten no-warmup `--help` process
+launches and the maximum resident set size reported by `/usr/bin/time -l`:
+
+```sh
+scripts/perf/measure_help_startup.sh go127 \
+  nexttrace /path/to/nexttrace \
+  nexttrace-tiny /path/to/nexttrace-tiny \
+  ntr /path/to/ntr
+```
