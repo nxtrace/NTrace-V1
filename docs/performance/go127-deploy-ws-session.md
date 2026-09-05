@@ -23,7 +23,7 @@ JSON schema、消息顺序、CLI、REST、MCP、三 flavor 依赖边界和导出
 | 项目 | 值 |
 | --- | --- |
 | parent | `acfffd84e74c1745b4e10a284979c1facc194439` |
-| benchmark/profile source head | `c098446193b2671f5d625af27d6455fb6c5ee781` |
+| benchmark/profile source head | `9ba52ea12dbf3172c9ee13f40f52fe6476ac89ed` |
 | 主机 | Apple M5，10 核，32 GB 内存，AC 供电 |
 | 系统 | macOS 26.6.2，darwin/arm64 |
 | 工具链 | Go 1.27.1，`GOEXPERIMENT=nojsonv2` |
@@ -62,15 +62,15 @@ session 使用 `open -> draining/aborting -> closed` 状态机：
 ## Benchmark
 
 parent/source head 先使用完整 Go 1.27.1 `nojsonv2` harness 各顺序运行 10 次。该轮 WS JSON
-marshal 显示 `+2.66%`，但本 PR 没有修改 benchmark 或 JSON 编解码路径，且同轮未修改模块也
+marshal 显示 `+2.55%`，但本 PR 没有修改 benchmark 或 JSON 编解码路径，且同轮未修改模块也
 存在双向漂移。按门槛规则，随后预编译两侧 server test binary，并交替顺序采样 20 次，避免
 整套长跑的温度和执行顺序偏差。以下以校准结果作为 WS 判定依据：
 
 | Benchmark | parent | source head | benchstat | B/op | allocs/op |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| WebSocket JSON marshal | 473.5 ns | 470.1 ns | 不显著，`p=0.304` | 416 -> 416 | 2 -> 2 |
-| WebSocket JSON unmarshal | 2.336 us | 2.358 us | 不显著，`p=0.560` | 656 -> 656 | 15 -> 15 |
-| geomean | 1.052 us | 1.053 us | +0.10% | 522.4 -> 522.4 | 5.477 -> 5.477 |
+| WebSocket JSON marshal | 472.9 ns | 471.6 ns | 不显著，`p=0.743` | 416 -> 416 | 2 -> 2 |
+| WebSocket JSON unmarshal | 2.357 us | 2.369 us | 不显著，`p=0.606` | 656 -> 656 | 15 -> 15 |
+| geomean | 1.056 us | 1.057 us | +0.11% | 522.4 -> 522.4 | 5.477 -> 5.477 |
 
 现有 benchmark harness 没有对网络连接生命周期做微基准。该路径以确定性交错、worker join 和
 race 证明正确性；WS JSON 只用于确认完整 server 构建没有编解码或分配回退，不归因于本轮
@@ -79,12 +79,12 @@ race 证明正确性；WS JSON 只用于确认完整 server 构建没有编解�
 ## Profile
 
 parent/source head 对相同 `BenchmarkWebSocketJSONMarshalEnvelope` 各采集 30 秒 CPU 与 heap
-profile。单次读数为 460.0 ns/op 和 469.6 ns/op，不用于门槛判断；20 次交替 benchstat 才是
+profile。单次读数为 460.0 ns/op 和 473.8 ns/op，不用于门槛判断；20 次交替 benchstat 才是
 统计结论。
 
 两侧 CPU top 都由 Darwin runtime wait 与 `encoding/json` 主导；该 profile 不执行会话
 生命周期，不能用来判断 session、reader、writer 或终止状态机热点，只作为 JSON 路径的
-交叉回归证据。heap alloc-space 构成一致：约 84.6% 来自 `encoding/json.Marshal`，其余来自
+交叉回归证据。heap alloc-space 构成一致：约 84.8% 来自 `encoding/json.Marshal`，其余来自
 benchmark 调用；每次操作仍为 416 B、2 allocs。
 
 ## 产物大小与测试耗时
@@ -102,8 +102,8 @@ Go 1.27.1、`nojsonv2`，Darwin 不执行 UPX。
 
 | 指标 | parent | source head |
 | --- | ---: | ---: |
-| 墙钟 | 23.46 s | 22.88 s |
-| maximum resident set size | 448,102,400 B | 446,382,080 B |
+| 墙钟 | 23.46 s | 25.76 s |
+| maximum resident set size | 448,102,400 B | 434,044,928 B |
 
 测试耗时和 RSS 只记录完成成本，不解释为性能改善。
 
