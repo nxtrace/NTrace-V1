@@ -87,6 +87,13 @@ func TestGetSourceDescriptorMappings(t *testing.T) {
 			assert.Equal(t, tc.backend, descriptor.Backend)
 			assert.False(t, descriptor.HasGeneration)
 			assert.Zero(t, descriptor.Generation)
+			assert.False(t, descriptor.HasGeoDNSResolver)
+			scoped := GetSourceDescriptorWithGeoDNS(tc.input, " CloudFlare ")
+			assert.True(t, scoped.HasGeoDNSResolver)
+			assert.Equal(t, "cloudflare", scoped.GeoDNSResolver)
+			system := GetSourceDescriptorWithGeoDNS(tc.input, "")
+			assert.True(t, system.HasGeoDNSResolver)
+			assert.Empty(t, system.GeoDNSResolver)
 		})
 	}
 }

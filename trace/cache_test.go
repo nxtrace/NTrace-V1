@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
+	"github.com/nxtrace/NTrace-core/util"
 )
 
 type fakeGeoCacheClock struct {
@@ -547,13 +548,14 @@ func TestGeoCacheRuntimeFollowerUsesOwnDeadline(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
-	descriptor := geoCacheTestDescriptor(func(query string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
+	descriptor := ipgeo.GetSourceDescriptorWithGeoDNS("disable-geoip", " GOOGLE ")
+	descriptor.Source = func(query string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
 		if calls.Add(1) == 1 {
 			close(started)
 		}
 		<-release
 		return &ipgeo.IPGeoData{IP: query}, nil
-	})
+	}
 
 	firstDone := make(chan error, 1)
 	go func() {
@@ -574,6 +576,101 @@ func TestGeoCacheRuntimeFollowerUsesOwnDeadline(t *testing.T) {
 	close(release)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first lookup error = %v", err)
+	}
+}
+
+func TestGeoCacheRuntimeFollowerUsesOwnProviderTimeout(t *testing.T) {
+	cache := newGeoCacheRuntime(2, time.Hour, time.Now)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	const shortTimeout = 20 * time.Millisecond
+	var calls atomic.Int32
+	descriptor := geoCacheTestDescriptor(func(query string, timeout time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
+		calls.Add(1)
+		if timeout == shortTimeout {
+			close(started)
+			<-release
+			return nil, context.DeadlineExceeded
+		}
+		return &ipgeo.IPGeoData{IP: query}, nil
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := cache.lookup(descriptor, "1.1.1.1", shortTimeout, "en", false)
+		firstDone <- err
+	}()
+	<-started
+
+	geo, err := cache.lookup(descriptor, "1.1.1.1", 100*time.Millisecond, "en", false)
+	close(release)
+	if firstErr := <-firstDone; !errors.Is(firstErr, context.DeadlineExceeded) {
+		t.Fatalf("short lookup error = %v, want context.DeadlineExceeded", firstErr)
+	}
+	if err != nil || geo == nil || geo.IP != "1.1.1.1" {
+		t.Fatalf("long lookup = (%+v, %v), want its independent provider timeout", geo, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("source calls = %d, want separate flights for different provider timeouts", got)
+	}
+	if _, err := cache.lookup(descriptor, "1.1.1.1", shortTimeout, "en", false); err != nil || calls.Load() != 2 {
+		t.Fatalf("completed value was not shared across timeouts: error %v, calls %d", err, calls.Load())
+	}
+}
+
+func TestGeoCacheRuntimeDoesNotJoinBlockedDNSResolverScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		outer     string
+		other     string
+		unwrapped bool
+	}{
+		{name: "different-resolvers", outer: "google", other: "cloudflare"},
+		{name: "explicit-system-resolver", outer: "google", other: ""},
+		{name: "system-resolver-outer-scope", outer: "", other: "cloudflare"},
+		{name: "unwrapped-source", outer: "google", other: "", unwrapped: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := newGeoCacheRuntime(2, time.Hour, time.Now)
+			first := ipgeo.GetSourceDescriptorWithGeoDNS("disable-geoip", tc.outer)
+			if tc.unwrapped {
+				first = ipgeo.GetSourceDescriptor("disable-geoip")
+			}
+			second := ipgeo.GetSourceDescriptorWithGeoDNS("disable-geoip", tc.other)
+			entered := make(chan struct{})
+			finished := make(chan struct{})
+			secondSource := second.Source
+			second.Source = func(query string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+				defer close(finished)
+				close(entered)
+				return secondSource(query, timeout, lang, maptrace)
+			}
+			secondDone := make(chan error, 1)
+			const timeout = 100 * time.Millisecond
+			_, firstErr := util.WithGeoDNSResolver(tc.outer, func() (*ipgeo.IPGeoData, error) {
+				go func() {
+					_, err := cache.lookup(second, "1.1.1.1", timeout, "en", false)
+					secondDone <- err
+				}()
+				<-entered
+				return cache.lookup(first, "1.1.1.1", timeout, "en", false)
+			})
+			secondErr := <-secondDone
+			<-finished
+			if firstErr != nil {
+				t.Fatalf("lookup holding its DNS scope joined a blocked flight: %v", firstErr)
+			}
+			if secondErr != nil {
+				t.Fatalf("lookup did not resume after the other DNS scope exited: %v", secondErr)
+			}
+			second.Source = func(string, time.Duration, string, bool) (*ipgeo.IPGeoData, error) {
+				t.Error("completed value was not shared across DNS scopes")
+				return nil, errors.New("unexpected source call")
+			}
+			if _, err := cache.lookup(second, "1.1.1.1", timeout, "en", false); err != nil {
+				t.Fatalf("shared completed value lookup failed: %v", err)
+			}
+		})
 	}
 }
 

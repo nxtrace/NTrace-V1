@@ -74,7 +74,7 @@ func dn42SourceDescriptor(index *dn42.GeoFeedIndex, dotServer string, withGeoDNS
 		return lookupDN42(index, ip)
 	})
 	descriptor := SourceDescriptor{
-		Source:    applyGeoDNS(source, dotServer, withGeoDNS),
+		Source:    source,
 		Namespace: SourceNamespaceDN42,
 		Backend:   SourceBackendDN42GeoFeed,
 	}
@@ -82,7 +82,7 @@ func dn42SourceDescriptor(index *dn42.GeoFeedIndex, dotServer string, withGeoDNS
 		descriptor.Generation = index.Generation()
 		descriptor.HasGeneration = true
 	}
-	return descriptor
+	return applyGeoDNS(descriptor, dotServer, withGeoDNS)
 }
 
 func lookupDN42(index *dn42.GeoFeedIndex, ip string) (*IPGeoData, error) {

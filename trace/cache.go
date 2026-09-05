@@ -116,7 +116,7 @@ func (cache *geoCacheRuntime) lookupContext(
 	if ok {
 		return value, nil
 	}
-	flightKey := encodeGeoFlightKey(epoch, key)
+	flightKey := encodeGeoFlightKey(epoch, key, descriptor, timeout)
 	resultCh := cache.flights.DoChan(flightKey, func() (any, error) {
 		if cached, ok := cache.loadAtEpoch(key, epoch); ok {
 			return cached, nil
@@ -359,7 +359,7 @@ func normalizeDN42CacheHostname(hostname string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(hostname), "."))
 }
 
-func encodeGeoFlightKey(epoch uint64, key geoCacheKey) string {
+func encodeGeoFlightKey(epoch uint64, key geoCacheKey, descriptor ipgeo.SourceDescriptor, timeout time.Duration) string {
 	var encoded strings.Builder
 	encoded.WriteString(strconv.FormatUint(epoch, 10))
 	encoded.WriteByte('|')
@@ -377,6 +377,16 @@ func encodeGeoFlightKey(epoch uint64, key geoCacheKey) string {
 	encoded.WriteByte('|')
 	if key.hasGeneration {
 		encoded.WriteByte('1')
+	} else {
+		encoded.WriteByte('0')
+	}
+	// Resolver scopes can wait on each other, and a provider's timeout belongs
+	// to the leader. Share completed values without joining incompatible work.
+	encoded.WriteByte('|')
+	appendGeoFlightKeyPart(&encoded, strconv.FormatInt(int64(timeout), 10))
+	if descriptor.HasGeoDNSResolver {
+		encoded.WriteByte('1')
+		appendGeoFlightKeyPart(&encoded, descriptor.GeoDNSResolver)
 	} else {
 		encoded.WriteByte('0')
 	}

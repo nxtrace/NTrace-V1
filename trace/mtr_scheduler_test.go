@@ -2106,8 +2106,12 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 	ClearCaches()
 	t.Cleanup(ClearCaches)
 
+	var lookupCount atomic.Int32
 	slowSource := func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
-		time.Sleep(geoTimeoutForAttempt(0) + time.Second)
+		if lookupCount.Add(1) == 1 {
+			time.Sleep(timeout)
+			return nil, context.DeadlineExceeded
+		}
 		return &ipgeo.IPGeoData{Asnumber: "64514"}, nil
 	}
 	descriptor := geoCacheTestDescriptor(slowSource)
@@ -2122,8 +2126,9 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 		},
 	}
 
+	agg := NewMTRAggregator()
 	start := time.Now()
-	err := runMTRScheduler(context.Background(), prober, NewMTRAggregator(), mtrSchedulerConfig{
+	err := runMTRScheduler(context.Background(), prober, agg, mtrSchedulerConfig{
 		BeginHop:         1,
 		MaxHops:          1,
 		HopInterval:      time.Millisecond,
@@ -2133,6 +2138,7 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 		FillGeo:          true,
 		AsyncMetadata:    true,
 		BaseConfig: Config{
+			NumMeasurements: 1,
 			IPGeoSource:     slowSource,
 			IPGeoDescriptor: func() ipgeo.SourceDescriptor { return descriptor },
 			Timeout:         80 * time.Millisecond,
@@ -2148,7 +2154,14 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 		t.Fatalf("runMTRScheduler elapsed = %s, want metadata timeout floor near %s", elapsed, floor)
 	}
 	if elapsed > floor+2*time.Second {
-		t.Fatalf("runMTRScheduler elapsed = %s, want async metadata bounded near slow source completion", elapsed)
+		t.Fatalf("runMTRScheduler elapsed = %s, want async metadata bounded near first timeout and immediate retry", elapsed)
+	}
+	if got := lookupCount.Load(); got != 2 {
+		t.Fatalf("geo lookup count = %d, want one timed-out attempt and one successful retry", got)
+	}
+	stats := agg.Snapshot()
+	if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "64514" {
+		t.Fatalf("final metadata = %+v, want successful retry before natural completion", stats)
 	}
 }
 

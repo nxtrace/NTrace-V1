@@ -38,6 +38,10 @@ type SourceDescriptor struct {
 	Backend       string
 	Generation    uint64
 	HasGeneration bool
+	// GeoDNSResolver identifies an explicitly wrapped resolver scope, including
+	// the empty system resolver. It separates in-flight work, not cached values.
+	GeoDNSResolver    string
+	HasGeoDNSResolver bool
 }
 
 // SourceDescriptorSession returns a descriptor whose Source and generation
@@ -152,7 +156,7 @@ func getSourceDescriptorSession(s string, dotServer string, withGeoDNS bool) Sou
 	}
 
 	descriptor := sourceDescriptor(s)
-	descriptor.Source = applyGeoDNS(descriptor.Source, dotServer, withGeoDNS)
+	descriptor = applyGeoDNS(descriptor, dotServer, withGeoDNS)
 	return SourceDescriptorSession{
 		Current: func() SourceDescriptor { return descriptor },
 	}
@@ -206,15 +210,20 @@ func staticSourceDescriptor(source Source, namespace string) SourceDescriptor {
 	return SourceDescriptor{Source: source, Namespace: namespace, Backend: namespace}
 }
 
-func applyGeoDNS(source Source, dotServer string, enabled bool) Source {
+func applyGeoDNS(descriptor SourceDescriptor, dotServer string, enabled bool) SourceDescriptor {
+	source := descriptor.Source
 	if source == nil || !enabled {
-		return source
+		return descriptor
 	}
-	return func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
+	dotServer = strings.ToLower(strings.TrimSpace(dotServer))
+	descriptor.GeoDNSResolver = dotServer
+	descriptor.HasGeoDNSResolver = true
+	descriptor.Source = func(ip string, timeout time.Duration, lang string, maptrace bool) (*IPGeoData, error) {
 		return util.WithGeoDNSResolver(dotServer, func() (*IPGeoData, error) {
 			return source(ip, timeout, lang, maptrace)
 		})
 	}
+	return descriptor
 }
 
 func sourceSessionFromDescriptorSession(session SourceDescriptorSession) SourceSession {

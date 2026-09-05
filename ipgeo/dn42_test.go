@@ -79,6 +79,8 @@ func TestDN42SourceDescriptorSessionPinsSourceAndGeneration(t *testing.T) {
 	assert.Equal(t, SourceNamespaceDN42, first.Namespace)
 	assert.Equal(t, SourceBackendDN42GeoFeed, first.Backend)
 	assert.True(t, first.HasGeneration)
+	assert.True(t, first.HasGeoDNSResolver)
+	assert.Empty(t, first.GeoDNSResolver)
 	require.NotZero(t, first.Generation)
 	assertDN42GeoResult(t, first.Source, "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
 
@@ -91,6 +93,8 @@ func TestDN42SourceDescriptorSessionPinsSourceAndGeneration(t *testing.T) {
 	second := session.Current()
 	assert.Greater(t, second.Generation, first.Generation)
 	assert.True(t, second.HasGeneration)
+	assert.True(t, second.HasGeoDNSResolver)
+	assert.Equal(t, first.GeoDNSResolver, second.GeoDNSResolver)
 	assertDN42GeoResult(t, second.Source, "China", "Taiwan", "Taipei", "AS650001", "Owner version B")
 	assertDN42GeoResult(t, first.Source, "China", "Hong Kong", "Hong Kong", "AS65000", "Owner A")
 }
