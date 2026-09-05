@@ -206,7 +206,9 @@ Document Language: [English](README.md) | 简体中文
 
 ### 手动编译
 
-需要 Go 1.27.1+ 环境。与正式发布一致的构建目前使用 `GOEXPERIMENT=nojsonv2`，以在迁移期间保持既有 JSON 行为：
+需要 Go 1.27.1+ 环境。与正式发布一致的构建使用
+`GOEXPERIMENT=nojsonv2`；CI 仍覆盖 Go 1.27 默认 JSON 运行时，但其 WebSocket
+编码开销未达到发布性能门槛。详见 [JSON 运行时 ADR](docs/adr/0001-go127-json-runtime.md)。
 
 ```bash
 export GOTOOLCHAIN=go1.27.1

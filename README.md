@@ -205,7 +205,10 @@ Starting from this release, NextTrace is published in **three flavors** under th
 
 ### Manual Build
 
-Build from source with Go 1.27.1+ installed. Release-equivalent builds currently use `GOEXPERIMENT=nojsonv2` to retain the established JSON behavior during the transition:
+Build from source with Go 1.27.1+ installed. Release-equivalent builds use
+`GOEXPERIMENT=nojsonv2`; the Go 1.27 default JSON runtime remains covered by CI,
+but its WebSocket encoding cost does not meet the release performance threshold.
+See the [JSON runtime ADR](docs/adr/0001-go127-json-runtime.md).
 
 ```bash
 export GOTOOLCHAIN=go1.27.1

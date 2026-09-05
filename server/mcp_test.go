@@ -1,13 +1,17 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -371,6 +375,45 @@ func TestMCPHandlerCallsEveryToolWithStructuredContent(t *testing.T) {
 	}
 }
 
+func TestMCPStructuredContentGolden(t *testing.T) {
+	session, capture, cleanup := newTestMCPWireSession(t, newRecordingMCPService())
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	type contract struct {
+		Tool              string          `json:"tool"`
+		StructuredContent json.RawMessage `json:"structured_content"`
+	}
+	contracts := make([]contract, 0, 3)
+	for _, name := range []string{"nexttrace_traceroute", "nexttrace_mtr_report", "nexttrace_mtr_raw"} {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      name,
+			Arguments: map[string]any{"target": "example.com"},
+		})
+		if err != nil {
+			t.Fatalf("CallTool(%s): %v", name, err)
+		}
+		payload := capture.takeStructuredContent(t)
+		var decoded any
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("decode wire structuredContent for %s: %v", name, err)
+		}
+		if !reflect.DeepEqual(decoded, result.StructuredContent) {
+			t.Fatalf("wire and SDK structuredContent differ for %s", name)
+		}
+		contracts = append(contracts, contract{Tool: name, StructuredContent: payload})
+	}
+
+	got, err := json.MarshalIndent(contracts, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal MCP JSON contracts: %v", err)
+	}
+	got = append(got, '\n')
+	assertJSONGolden(t, got, "testdata/mcp_structured_content.golden.json")
+}
+
 func TestMCPHandlerReturnsServiceErrorsAsToolErrors(t *testing.T) {
 	svc := newRecordingMCPService()
 	svc.failTool = "nexttrace_geo_lookup"
@@ -398,7 +441,27 @@ func TestMCPHandlerReturnsServiceErrorsAsToolErrors(t *testing.T) {
 func newTestMCPSession(t *testing.T, svc nexttraceMCPService) (*mcp.ClientSession, func()) {
 	t.Helper()
 
+	session, cleanup := connectTestMCPSession(t, svc, nil)
+	return session, cleanup
+}
+
+func newTestMCPWireSession(t *testing.T, svc nexttraceMCPService) (*mcp.ClientSession, *mcpWireCapture, func()) {
+	t.Helper()
+
+	capture := &mcpWireCapture{}
+	session, cleanup := connectTestMCPSession(t, svc, capture)
+	return session, capture, cleanup
+}
+
+func connectTestMCPSession(t *testing.T, svc nexttraceMCPService, capture *mcpWireCapture) (*mcp.ClientSession, func()) {
+	t.Helper()
+
 	ts := httptest.NewServer(newMCPHTTPHandlerWithService(svc))
+	httpClient := ts.Client()
+	if capture != nil {
+		capture.base = httpClient.Transport
+		httpClient.Transport = capture
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	connectOK := false
@@ -410,7 +473,11 @@ func newTestMCPSession(t *testing.T, svc nexttraceMCPService) (*mcp.ClientSessio
 	}()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	transport := &mcp.StreamableClientTransport{Endpoint: ts.URL, HTTPClient: httpClient}
+	if capture != nil {
+		transport.DisableStandaloneSSE = true
+	}
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		t.Fatalf("Connect returned error: %v", err)
 	}
@@ -421,6 +488,54 @@ func newTestMCPSession(t *testing.T, svc nexttraceMCPService) (*mcp.ClientSessio
 		cancel()
 		ts.Close()
 	}
+}
+
+type mcpWireCapture struct {
+	base       http.RoundTripper
+	mu         sync.Mutex
+	structured []json.RawMessage
+}
+
+func (c *mcpWireCapture) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := c.base.RoundTrip(request)
+	if err != nil {
+		return nil, err
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		_ = response.Body.Close()
+		return nil, err
+	}
+	_ = response.Body.Close()
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	response.ContentLength = int64(len(body))
+
+	var message struct {
+		Result json.RawMessage `json:"result"`
+	}
+	var result struct {
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	if json.Unmarshal(body, &message) == nil && len(message.Result) > 0 &&
+		json.Unmarshal(message.Result, &result) == nil && len(result.StructuredContent) > 0 {
+		c.mu.Lock()
+		c.structured = append(c.structured, bytes.Clone(result.StructuredContent))
+		c.mu.Unlock()
+	}
+	return response, nil
+}
+
+func (c *mcpWireCapture) takeStructuredContent(t *testing.T) json.RawMessage {
+	t.Helper()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.structured) == 0 {
+		t.Fatal("MCP response did not contain wire structuredContent")
+	}
+	payload := c.structured[0]
+	c.structured = c.structured[1:]
+	return payload
 }
 
 func structuredContentMap(t *testing.T, result *mcp.CallToolResult) map[string]any {

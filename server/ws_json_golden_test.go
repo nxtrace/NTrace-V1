@@ -1,9 +1,8 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
-	"os"
-	"reflect"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -51,25 +50,12 @@ func TestWebSocketEnvelopeGolden(t *testing.T) {
 		{Type: "complete", Data: gin.H{"iteration": 1, "path_end": pathEnd}},
 	}
 
-	gotJSON, err := json.Marshal(envelopes)
-	if err != nil {
-		t.Fatalf("marshal websocket envelopes: %v", err)
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	for _, envelope := range envelopes {
+		if err := encoder.Encode(envelope); err != nil {
+			t.Fatalf("encode websocket envelope: %v", err)
+		}
 	}
-	wantJSON, err := os.ReadFile("testdata/ws_envelopes.golden.json")
-	if err != nil {
-		t.Fatalf("read websocket envelope golden: %v", err)
-	}
-
-	var got any
-	if err := json.Unmarshal(gotJSON, &got); err != nil {
-		t.Fatalf("decode generated websocket envelopes: %v", err)
-	}
-	var want any
-	if err := json.Unmarshal(wantJSON, &want); err != nil {
-		t.Fatalf("decode websocket envelope golden: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		formatted, _ := json.MarshalIndent(got, "", "  ")
-		t.Fatalf("websocket envelope schema changed\n--- got ---\n%s\n--- want ---\n%s", formatted, wantJSON)
-	}
+	assertJSONGolden(t, encoded.Bytes(), "testdata/ws_envelopes.golden.jsonl")
 }
