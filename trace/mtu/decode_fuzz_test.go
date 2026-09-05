@@ -2,6 +2,7 @@ package mtu
 
 import (
 	"encoding/binary"
+	"net"
 	"testing"
 )
 
@@ -10,6 +11,9 @@ const fuzzEmbeddedUDPMaxBytes = 4096
 func FuzzParseEmbeddedUDPPacket(f *testing.F) {
 	f.Add(uint8(4), fuzzEmbeddedUDPSeed(4))
 	f.Add(uint8(6), fuzzEmbeddedUDPSeed(6))
+	f.Add(uint8(6), encodeFuzzEmbeddedUDP(6, embeddedUDPPacket{
+		dstIP: net.ParseIP("::ffff:192.0.2.9"), srcPort: 40000, dstPort: 33494,
+	}))
 	f.Add(uint8(6), []byte{0x60, 0, 0, 0})
 
 	f.Fuzz(func(t *testing.T, version uint8, data []byte) {
@@ -30,7 +34,7 @@ func FuzzParseEmbeddedUDPPacket(f *testing.F) {
 		if ipVersion == 4 && packet.dstIP.To4() == nil {
 			t.Fatalf("IPv4 parser returned destination %v", packet.dstIP)
 		}
-		if ipVersion == 6 && packet.dstIP.To4() != nil {
+		if ipVersion == 6 && len(packet.dstIP) != net.IPv6len {
 			t.Fatalf("IPv6 parser returned destination %v", packet.dstIP)
 		}
 		if packet.srcPort < 0 || packet.srcPort > 65535 || packet.dstPort < 0 || packet.dstPort > 65535 {
