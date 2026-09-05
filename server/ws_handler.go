@@ -33,10 +33,12 @@ const (
 )
 
 var (
-	errWSSlowConsumer  = errors.New("websocket client too slow for mtr stream")
-	errWSSessionClosed = errors.New("websocket session closed")
-	traceTracerouteFn  = trace.Traceroute
-	traceRunMTRRawFn   = trace.RunMTRRaw
+	errWSSlowConsumer     = errors.New("websocket client too slow for mtr stream")
+	errWSSessionClosed    = errors.New("websocket session closed")
+	errWSSessionFinished  = errors.New("websocket session finished")
+	errWSTraceWorkerPanic = errors.New("websocket trace worker panic")
+	traceTracerouteFn     = trace.Traceroute
+	traceRunMTRRawFn      = trace.RunMTRRaw
 )
 
 // sanitizeLogParam 清理用户输入中的换行和控制字符，防止日志注入。
@@ -56,11 +58,11 @@ func sanitizeLogParam(s string) string {
 	return b.String()
 }
 
-func newWSSessionContext(parent context.Context) (context.Context, context.CancelFunc) {
+func newWSSessionContext(parent context.Context) (context.Context, context.CancelCauseFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return context.WithCancel(parent)
+	return context.WithCancelCause(parent)
 }
 
 type wsEnvelope struct {
@@ -84,32 +86,54 @@ type wsInitConn interface {
 	ReadMessage() (messageType int, p []byte, err error)
 }
 
-type wsTraceSession struct {
-	conn       wsConn
-	sendMu     sync.Mutex
-	sendCh     chan wsEnvelope
-	stopCh     chan struct{}
-	writerDone chan struct{}
-	closeOnce  sync.Once
-	finishOnce sync.Once
-	closed     atomic.Bool
-	lang       string
-	seen       map[int]int
+type traceWSConn interface {
+	wsConn
+	wsInitConn
 }
 
-func newWSTraceSession(conn wsConn, lang string, queueSize int) *wsTraceSession {
+type wsSessionState uint8
+
+const (
+	wsSessionOpen wsSessionState = iota
+	wsSessionDraining
+	wsSessionAborting
+	wsSessionClosed
+)
+
+type wsSessionCloseRequest struct {
+	code   int
+	reason string
+}
+
+type wsTraceSession struct {
+	conn         wsConn
+	ctx          context.Context
+	cancel       context.CancelCauseFunc
+	stateMu      sync.Mutex
+	state        wsSessionState
+	sendCh       chan wsEnvelope
+	workers      sync.WaitGroup
+	closed       atomic.Bool
+	closeRequest wsSessionCloseRequest
+	lang         string
+	seen         map[int]int
+}
+
+func newWSTraceSession(parent context.Context, conn wsConn, lang string, queueSize int) *wsTraceSession {
 	if queueSize <= 0 {
 		queueSize = wsSendQueueSize
 	}
+	ctx, cancel := newWSSessionContext(parent)
 	s := &wsTraceSession{
-		conn:       conn,
-		sendCh:     make(chan wsEnvelope, queueSize),
-		stopCh:     make(chan struct{}),
-		writerDone: make(chan struct{}),
-		lang:       lang,
-		seen:       make(map[int]int),
+		conn:   conn,
+		ctx:    ctx,
+		cancel: cancel,
+		sendCh: make(chan wsEnvelope, queueSize),
+		lang:   lang,
+		seen:   make(map[int]int),
 	}
-	go s.writeLoop()
+	s.workers.Go(s.writeLoop)
+	s.workers.Go(s.readLoop)
 	return s
 }
 
@@ -129,70 +153,181 @@ func readWSInitMessage(conn wsInitConn) ([]byte, error) {
 }
 
 func (s *wsTraceSession) writeLoop() {
-	defer close(s.writerDone)
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[deploy] writeLoop panic: %v", r)
-			s.closeWithCode(websocket.CloseInternalServerErr, "internal error")
-		}
-	}()
 	for {
 		select {
-		case <-s.stopCh:
+		case <-s.ctx.Done():
+			s.requestAbort(context.Cause(s.ctx), 0, "")
+			s.finishAbort()
 			return
 		case msg, ok := <-s.sendCh:
 			if !ok {
+				if !s.finishDrain() {
+					s.finishAbort()
+				}
+				return
+			}
+			if !s.writeAllowed() {
+				s.requestAbort(context.Cause(s.ctx), 0, "")
+				s.finishAbort()
 				return
 			}
 			deadline := time.Now().Add(wsWriteTimeout)
 			_ = s.conn.SetWriteDeadline(deadline)
 			err := s.conn.WriteJSON(msg)
 			if err != nil {
-				s.closeWithCode(websocket.CloseInternalServerErr, "write failed")
+				s.requestAbort(err, websocket.CloseInternalServerErr, "write failed")
+				s.finishAbort()
 				return
 			}
 		}
 	}
 }
 
+func (s *wsTraceSession) readLoop() {
+	for {
+		if _, _, err := s.conn.NextReader(); err != nil {
+			if s.ctx.Err() != nil {
+				s.requestAbort(context.Cause(s.ctx), 0, "")
+			} else {
+				s.requestAbort(err, websocket.CloseNormalClosure, "client disconnected")
+			}
+			return
+		}
+	}
+}
+
 func (s *wsTraceSession) send(msg wsEnvelope) error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
-	if s.closed.Load() {
+	s.stateMu.Lock()
+	if s.state != wsSessionOpen || s.ctx.Err() != nil {
+		s.stateMu.Unlock()
 		return errWSSessionClosed
 	}
 	select {
 	case s.sendCh <- msg:
+		s.stateMu.Unlock()
 		return nil
 	default:
-		s.closeWithCode(websocket.CloseTryAgainLater, "client too slow for mtr stream")
+		s.stateMu.Unlock()
+		s.requestAbort(errWSSlowConsumer, websocket.CloseTryAgainLater, "client too slow for mtr stream")
 		return errWSSlowConsumer
 	}
 }
 
 func (s *wsTraceSession) closeWithCode(code int, reason string) {
-	s.closed.Store(true)
-	s.closeOnce.Do(func() {
-		close(s.stopCh)
-		deadline := time.Now().Add(wsWriteTimeout)
-		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), deadline)
-		_ = s.conn.Close()
-	})
+	s.requestAbort(errWSSessionClosed, code, reason)
 }
 
 func (s *wsTraceSession) finish() {
-	s.finishOnce.Do(func() {
-		s.sendMu.Lock()
-		wasClosed := s.closed.Swap(true)
-		if !wasClosed {
-			close(s.sendCh)
-		}
-		s.sendMu.Unlock()
-		<-s.writerDone
-		s.closeOnce.Do(func() {
-			_ = s.conn.Close()
-		})
+	s.requestDrain()
+	s.workers.Wait()
+}
+
+func (s *wsTraceSession) runTrace(run func(context.Context)) {
+	done := make(chan struct{})
+	s.workers.Go(func() {
+		defer close(done)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("[deploy] websocket trace worker panic: %v", recovered)
+				s.requestAbort(errWSTraceWorkerPanic, websocket.CloseInternalServerErr, "internal error")
+			}
+		}()
+		run(s.ctx)
 	})
+	<-done
+}
+
+func (s *wsTraceSession) requestDrain() {
+	s.stateMu.Lock()
+	if s.state != wsSessionOpen {
+		s.stateMu.Unlock()
+		return
+	}
+	if s.ctx.Err() != nil {
+		s.stateMu.Unlock()
+		s.requestAbort(context.Cause(s.ctx), 0, "")
+		return
+	}
+	s.state = wsSessionDraining
+	s.closed.Store(true)
+	close(s.sendCh)
+	s.stateMu.Unlock()
+}
+
+func (s *wsTraceSession) requestAbort(cause error, code int, reason string) {
+	if cause == nil {
+		cause = errWSSessionClosed
+	}
+
+	s.stateMu.Lock()
+	if s.state == wsSessionAborting || s.state == wsSessionClosed {
+		s.stateMu.Unlock()
+		return
+	}
+	if s.ctx.Err() != nil {
+		cause = context.Cause(s.ctx)
+		code = 0
+		reason = ""
+	}
+	s.state = wsSessionAborting
+	s.closeRequest = wsSessionCloseRequest{code: code, reason: reason}
+	s.closed.Store(true)
+	s.stateMu.Unlock()
+	s.cancel(cause)
+}
+
+func (s *wsTraceSession) writeAllowed() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return (s.state == wsSessionOpen || s.state == wsSessionDraining) && s.ctx.Err() == nil
+}
+
+func (s *wsTraceSession) finishDrain() bool {
+	if s.ctx.Err() != nil {
+		s.requestAbort(context.Cause(s.ctx), 0, "")
+		return false
+	}
+
+	s.stateMu.Lock()
+	if s.state != wsSessionDraining || s.ctx.Err() != nil {
+		s.stateMu.Unlock()
+		if s.ctx.Err() != nil {
+			s.requestAbort(context.Cause(s.ctx), 0, "")
+		}
+		return false
+	}
+	s.state = wsSessionClosed
+	s.stateMu.Unlock()
+
+	s.cancel(errWSSessionFinished)
+	_ = s.conn.Close()
+	return true
+}
+
+func (s *wsTraceSession) finishAbort() {
+	s.stateMu.Lock()
+	if s.state == wsSessionClosed {
+		s.stateMu.Unlock()
+		return
+	}
+	if s.state != wsSessionAborting {
+		s.state = wsSessionAborting
+		s.closeRequest = wsSessionCloseRequest{}
+		s.closed.Store(true)
+	}
+	closeRequest := s.closeRequest
+	s.state = wsSessionClosed
+	s.stateMu.Unlock()
+
+	if closeRequest.code != 0 {
+		deadline := time.Now().Add(wsWriteTimeout)
+		_ = s.conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeRequest.code, closeRequest.reason),
+			deadline,
+		)
+	}
+	_ = s.conn.Close()
 }
 
 func traceWebsocketHandler(c *gin.Context) {
@@ -201,38 +336,27 @@ func traceWebsocketHandler(c *gin.Context) {
 		log.Printf("[deploy] websocket upgrade failed: %v", err)
 		return
 	}
-	defer func() {
-		_ = conn.Close()
-	}()
+	serveTraceWebsocket(c.Request.Context(), conn)
+}
 
+func serveTraceWebsocket(parent context.Context, conn traceWSConn) {
 	message, err := readWSInitMessage(conn)
 	if err != nil {
 		log.Printf("[deploy] websocket read failed: %v", err)
+		_ = conn.Close()
 		return
 	}
+
+	session := newWSTraceSession(parent, conn, "", wsSendQueueSize)
+	defer session.finish()
 
 	var req traceRequest
 	if err := json.Unmarshal(message, &req); err != nil {
-		_ = conn.WriteJSON(wsEnvelope{Type: "error", Error: "invalid request payload", Status: 400})
+		_ = session.send(wsEnvelope{Type: "error", Error: "invalid request payload", Status: 400})
 		return
 	}
 
-	sessionCtx, cancel := newWSSessionContext(c.Request.Context())
-	defer cancel()
-	var sessionRef atomic.Pointer[wsTraceSession]
-	go func() {
-		for {
-			if _, _, err := conn.NextReader(); err != nil {
-				cancel()
-				if session := sessionRef.Load(); session != nil {
-					session.closeWithCode(websocket.CloseNormalClosure, "client disconnected")
-				}
-				return
-			}
-		}
-	}()
-
-	setup, statusCode, err := prepareTrace(sessionCtx, req)
+	setup, statusCode, err := prepareTrace(session.ctx, req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
@@ -241,13 +365,11 @@ func traceWebsocketHandler(c *gin.Context) {
 			statusCode = 500
 		}
 		log.Printf("[deploy] websocket prepare trace failed target=%s error=%v", sanitizeLogParam(req.Target), err)
-		_ = conn.WriteJSON(wsEnvelope{Type: "error", Error: err.Error(), Status: statusCode})
+		_ = session.send(wsEnvelope{Type: "error", Error: err.Error(), Status: statusCode})
 		return
 	}
 
-	session := newWSTraceSession(conn, setup.Config.Lang, wsSendQueueSize)
-	sessionRef.Store(session)
-	defer session.finish()
+	session.lang = setup.Config.Lang
 
 	startPayload := gin.H{
 		"target":        setup.Target,
@@ -269,12 +391,14 @@ func traceWebsocketHandler(c *gin.Context) {
 		mode = "single"
 	}
 
-	switch mode {
-	case "mtr", "continuous":
-		runMTRTrace(sessionCtx, session, setup)
-	default:
-		runSingleTrace(sessionCtx, session, setup)
-	}
+	session.runTrace(func(sessionCtx context.Context) {
+		switch mode {
+		case "mtr", "continuous":
+			runMTRTrace(sessionCtx, session, setup)
+		default:
+			runSingleTrace(sessionCtx, session, setup)
+		}
+	})
 }
 
 func runSingleTrace(ctx context.Context, session *wsTraceSession, setup *traceExecution) {
