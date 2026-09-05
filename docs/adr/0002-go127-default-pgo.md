@@ -25,11 +25,11 @@ benchmark 均不得显著回退超过 1%。
 ## 证据
 
 Apple M5、Go 1.27.1、`GOMAXPROCS=10`、`nojsonv2` 下，PGO 让三个 workload
-等权几何均值改善 6.58%，达到综合门槛；但同时产生以下显著回退：
+等权几何均值改善 5.59%，达到综合门槛；但同时产生以下显著回退：
 
-- TCP decoder IPv4 +6.40%，IPv6 +6.59%。
-- Geo cache hit +2.72%，miss +3.18%，cached lookup hit +5.03%。
-- MTR snapshot +3.36%。
+- TCP decoder IPv4 +5.07%，IPv6 +4.77%。
+- Geo cache hit +3.21%，miss +3.96%，eviction +5.21%，cached lookup hit +1.48%。
+- MTR snapshot +3.41%，preview +2.30%。
 
 任一项均足以否决默认 PGO。完整 benchstat、产物大小、启动和 RSS 数据见
 [Go 1.27.1 默认 PGO 评估](../performance/go127-default-pgo.md)。
