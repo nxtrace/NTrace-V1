@@ -63,8 +63,8 @@ func lookupGeoData(ctx context.Context, target string, cfg *speedconfig.Config) 
 	if cfg == nil {
 		return nil, fmt.Errorf("nil speed config")
 	}
-	source := ipgeo.GetSourceWithGeoDNS(defaultSpeedGeoSourceProvider, cfg.DotServer)
-	return trace.LookupIPGeo(ctx, source, cfg.Language, false, defaultSpeedGeoLookupRetryCount, target)
+	descriptor := ipgeo.GetSourceDescriptorWithGeoDNS(defaultSpeedGeoSourceProvider, cfg.DotServer)
+	return trace.LookupIPGeoWithDescriptor(ctx, descriptor, cfg.Language, false, defaultSpeedGeoLookupRetryCount, target)
 }
 
 func formatGeoDescription(ip string, geo *ipgeo.IPGeoData, lang string) string {

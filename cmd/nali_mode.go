@@ -11,6 +11,7 @@ import (
 
 	"github.com/nxtrace/NTrace-core/internal/nali"
 	"github.com/nxtrace/NTrace-core/ipgeo"
+	"github.com/nxtrace/NTrace-core/trace"
 )
 
 func registerNaliFlag(parser *argparse.Parser) *bool {
@@ -218,11 +219,15 @@ func runNaliMode(ctx context.Context, opts naliRunOptions) error {
 	restoreFastIPOutput := setFastIPOutputSuppression(true)
 	defer restoreFastIPOutput()
 
-	if opts.dn42 {
+	dn42Configured := opts.dn42 || isDN42Provider(opts.data)
+	if dn42Configured {
 		applyDN42DataOrigin(&opts.data)
 	}
 	nextTraceAPIV3WS := initNextTraceAPIV3WebSocket(ctx, &opts.data, &opts.pow, false)
 	defer closeNextTraceAPIV3WebSocket(nextTraceAPIV3WS)
+	if !dn42Configured && isDN42Provider(opts.data) {
+		applyDN42DataOrigin(&opts.data)
+	}
 
 	family := nali.FamilyAll
 	if opts.ipv4Only {
@@ -231,9 +236,10 @@ func runNaliMode(ctx context.Context, opts naliRunOptions) error {
 		family = nali.Family6
 	}
 	return nali.Run(ctx, nali.Config{
-		Source:  ipgeo.GetSourceWithGeoDNS(opts.data, opts.dot),
+		Source:  trace.CachedGeoSource(ipgeo.GetSourceDescriptorWithGeoDNS(opts.data, opts.dot)),
 		Timeout: time.Duration(opts.timeoutMs) * time.Millisecond,
 		Lang:    opts.lang,
 		Family:  family,
+		DN42:    isDN42Provider(opts.data),
 	}, opts.stdin, opts.stdout, opts.target)
 }

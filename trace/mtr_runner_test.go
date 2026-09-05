@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace/internal"
 )
 
@@ -26,6 +28,17 @@ func (m *mockProber) probeRound(ctx context.Context) (*Result, error) {
 
 func (m *mockProber) close() {
 	atomic.AddInt32(&m.closed, 1)
+}
+
+type resettableMockProber struct {
+	*mockProber
+	resetFn func()
+}
+
+func (m *resettableMockProber) resetFinalTTL() {
+	if m.resetFn != nil {
+		m.resetFn()
+	}
 }
 
 func constantResultProber(res *Result) *mockProber {
@@ -72,6 +85,81 @@ func TestMTRLoopMaxRounds(t *testing.T) {
 	}
 	if atomic.LoadInt32(&prober.closed) != 1 {
 		t.Error("prober.close() was not called")
+	}
+}
+
+func TestMTRLoopResetRefreshesStableSource(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	var rounds atomic.Int32
+	var proberResets atomic.Int32
+	var sourceGeneration atomic.Int32
+	sourceGeneration.Store(1)
+	prober := &resettableMockProber{
+		mockProber: &mockProber{
+			roundFn: func(_ context.Context) (*Result, error) {
+				rounds.Add(1)
+				return mkResult([]Hop{mkHop(1, "172.20.0.5", time.Millisecond)}), nil
+			},
+		},
+		resetFn: func() {
+			proberResets.Add(1)
+		},
+	}
+
+	var refreshCalls atomic.Int32
+	var resetConsumed atomic.Bool
+	config := Config{
+		DN42: true,
+		IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+			if sourceGeneration.Load() == 1 {
+				return &ipgeo.IPGeoData{Asnumber: "OLD"}, nil
+			}
+			return &ipgeo.IPGeoData{Asnumber: "NEW"}, nil
+		},
+		RefreshIPGeoSource: func() {
+			refreshCalls.Add(1)
+			if proberResets.Load() == 0 {
+				t.Error("source refreshed before prober state reset")
+			}
+			sourceGeneration.Store(2)
+		},
+	}
+
+	var snapshotsAfterReset int
+	err := mtrLoop(context.Background(), prober, config, MTROptions{
+		MaxRounds: 2,
+		Interval:  time.Millisecond,
+		IsResetRequested: func() bool {
+			return rounds.Load() >= 1 && resetConsumed.CompareAndSwap(false, true)
+		},
+	}, NewMTRAggregator(), func(_ int, stats []MTRHopStat) {
+		if !resetConsumed.Load() {
+			if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "OLD" {
+				t.Errorf("pre-reset stats = %+v, want OLD metadata", stats)
+			}
+			return
+		}
+		snapshotsAfterReset++
+		if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "NEW" {
+			t.Errorf("post-reset stats = %+v, want NEW metadata", stats)
+		}
+	}, true, fastBackoff)
+	if err != nil {
+		t.Fatalf("mtrLoop() error = %v", err)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("source refresh calls = %d, want 1", got)
+	}
+	if got := proberResets.Load(); got != 1 {
+		t.Fatalf("prober reset calls = %d, want 1", got)
+	}
+	if got := rounds.Load(); got != 3 {
+		t.Fatalf("probe rounds = %d, want 3 (one before reset plus two after)", got)
+	}
+	if snapshotsAfterReset != 2 {
+		t.Fatalf("post-reset snapshots = %d, want 2", snapshotsAfterReset)
 	}
 }
 
@@ -434,18 +522,27 @@ func newTestICMPEngine(timeout time.Duration) *mtrICMPEngine {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
-	return &mtrICMPEngine{
-		config:   Config{Timeout: timeout},
-		notifyCh: make(chan struct{}, 1),
-		sentAt:   make(map[int]mtrProbeMeta),
-		replied:  make(map[int]*mtrProbeReply),
+	engine := newMTRICMPEngineState(Config{Timeout: timeout}, 4, net.IPv4zero)
+	engine.notifyCh = make(chan struct{}, 1)
+	engine.sentAt = make(map[int]mtrProbeMeta)
+	engine.replied = make(map[int]*mtrProbeReply)
+	return engine
+}
+
+func TestNewMTRICMPEngineStateInitialFinalTTL(t *testing.T) {
+	engine := newMTRICMPEngineState(Config{Timeout: time.Second}, 4, net.IPv4zero)
+	if got := engine.knownFinalTTL.Load(); got != -1 {
+		t.Fatalf("knownFinalTTL = %d, want -1", got)
+	}
+	if got := engine.roundFinalTTL.Load(); got != -1 {
+		t.Fatalf("roundFinalTTL = %d, want -1", got)
 	}
 }
 
 // TestOnICMP_NormalReply 正常回包应被接受。
 func TestOnICMP_NormalReply(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreUint32(&e.roundID, 1)
+	e.roundID.Store(1)
 
 	now := time.Now()
 	seq := 42
@@ -462,10 +559,36 @@ func TestOnICMP_NormalReply(t *testing.T) {
 	}
 }
 
+func TestOnICMP_ZeroRTTWithinClockTick(t *testing.T) {
+	e := newTestICMPEngine(time.Second)
+	e.roundID.Store(1)
+	start := time.Now()
+	const seq = 42
+	done := make(chan struct{})
+	e.sentAt[seq] = mtrProbeMeta{ttl: 1, start: start, roundID: 1}
+	e.probeNotify = map[int]chan struct{}{seq: done}
+
+	peer := &net.IPAddr{IP: net.IPv4(127, 0, 0, 1)}
+	e.onICMP(internal.ReceivedMessage{
+		Peer: peer,
+		ICMP: internal.ICMPResponse{Kind: internal.ICMPResponseEchoReply},
+	}, start, seq)
+
+	reply := e.replied[seq]
+	if reply == nil || reply.rtt != 0 || reply.peer != peer {
+		t.Fatalf("same-tick reply = %+v, want successful reply with zero RTT", reply)
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("same-tick reply did not notify the waiting probe")
+	}
+}
+
 // TestOnICMP_StaleRoundReply 旧轮次回包（roundID 不匹配）应被丢弃。
 func TestOnICMP_StaleRoundReply(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreUint32(&e.roundID, 5)
+	e.roundID.Store(5)
 
 	now := time.Now()
 	seq := 100
@@ -496,7 +619,7 @@ func TestOnICMP_StaleRoundReply(t *testing.T) {
 func TestOnICMP_SeqWrapStaleReply(t *testing.T) {
 	timeout := 2 * time.Second
 	e := newTestICMPEngine(timeout)
-	atomic.StoreUint32(&e.roundID, 2000)
+	e.roundID.Store(2000)
 
 	// 模拟新轮次刚刚发送 seq=100（1ms 前）
 	newSendTime := time.Now()
@@ -525,7 +648,7 @@ func TestOnICMP_SeqWrapStaleReply(t *testing.T) {
 // TestOnICMP_NegativeRTT 时间倒退（finish < start）的回包应被丢弃。
 func TestOnICMP_NegativeRTT(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreUint32(&e.roundID, 1)
+	e.roundID.Store(1)
 
 	now := time.Now()
 	seq := 200
@@ -545,7 +668,7 @@ func TestOnICMP_NegativeRTT(t *testing.T) {
 func TestOnICMP_ExactTimeoutBoundary(t *testing.T) {
 	timeout := 2 * time.Second
 	e := newTestICMPEngine(timeout)
-	atomic.StoreUint32(&e.roundID, 1)
+	e.roundID.Store(1)
 
 	now := time.Now()
 	seq := 300
@@ -564,7 +687,7 @@ func TestOnICMP_ExactTimeoutBoundary(t *testing.T) {
 // TestOnICMP_UnknownSeq 未知 seq 的回包应被静默忽略。
 func TestOnICMP_UnknownSeq(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreUint32(&e.roundID, 1)
+	e.roundID.Store(1)
 
 	peer := &net.IPAddr{IP: net.ParseIP("10.0.0.4")}
 	e.onICMP(internal.ReceivedMessage{Peer: peer}, time.Now(), 999)
@@ -637,6 +760,19 @@ func TestSeqWillWrap_NegativeProbes(t *testing.T) {
 	}
 }
 
+func TestNewMTREchoIDPreservesProcessByte(t *testing.T) {
+	wantLow := os.Getpid() & 0xFF
+	for range 1000 {
+		got := newMTREchoID()
+		if got < 0 || got > 0xFFFF {
+			t.Fatalf("newMTREchoID() = %d, want uint16 range", got)
+		}
+		if got&0xFF != wantLow {
+			t.Fatalf("newMTREchoID() low byte = %d, want process byte %d", got&0xFF, wantLow)
+		}
+	}
+}
+
 // TestProbeRound_BeginHopExceedsMaxHops 验证 beginHop > maxHops 时：
 //   - seqWillWrap 不误判（不触发 rotateEngine）
 //   - probeRound 返回 maxHops 长度的 Hops，但全部为 nil（两个循环均被跳过）
@@ -646,9 +782,9 @@ func TestProbeRound_BeginHopExceedsMaxHops(t *testing.T) {
 	e.config.BeginHop = 10
 	e.config.MaxHops = 5
 	// seqCounter 接近边界 — 若 probeCount 保护缺失会触发 rotateEngine（此处无 spec 会 panic）
-	atomic.StoreUint32(&e.seqCounter, 0xFFF0)
+	e.seqCounter.Store(0xFFF0)
 
-	seqBefore := atomic.LoadUint32(&e.seqCounter)
+	seqBefore := e.seqCounter.Load()
 
 	res, err := e.probeRound(context.Background())
 	if err != nil {
@@ -668,8 +804,8 @@ func TestProbeRound_BeginHopExceedsMaxHops(t *testing.T) {
 	}
 
 	// 未发送任何探针，seqCounter 应不变
-	if atomic.LoadUint32(&e.seqCounter) != seqBefore {
-		t.Errorf("seqCounter should not change, was %d now %d", seqBefore, atomic.LoadUint32(&e.seqCounter))
+	if e.seqCounter.Load() != seqBefore {
+		t.Errorf("seqCounter should not change, was %d now %d", seqBefore, e.seqCounter.Load())
 	}
 }
 
@@ -747,11 +883,11 @@ func TestMTRLoop_RestartStatistics(t *testing.T) {
 // TestResetClearsKnownFinalTTL 验证 resetFinalTTL 清除已知目的地 TTL 缓存。
 func TestResetClearsKnownFinalTTL(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreInt32(&e.knownFinalTTL, 5)
+	e.knownFinalTTL.Store(5)
 
 	e.resetFinalTTL()
 
-	if got := atomic.LoadInt32(&e.knownFinalTTL); got != -1 {
+	if got := e.knownFinalTTL.Load(); got != -1 {
 		t.Errorf("expected knownFinalTTL=-1 after reset, got %d", got)
 	}
 }
@@ -764,9 +900,9 @@ func TestResetClearsKnownFinalTTL(t *testing.T) {
 func TestOnICMP_DetectsDestination(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
 	e.config.DstIP = net.ParseIP("8.8.8.8")
-	atomic.StoreUint32(&e.roundID, 1)
-	atomic.StoreInt32(&e.roundFinalTTL, -1)
-	atomic.StoreInt32(&e.knownFinalTTL, -1)
+	e.roundID.Store(1)
+	e.roundFinalTTL.Store(-1)
+	e.knownFinalTTL.Store(-1)
 
 	now := time.Now()
 	seq := 42
@@ -778,7 +914,7 @@ func TestOnICMP_DetectsDestination(t *testing.T) {
 		ICMP: internal.ICMPResponse{Kind: internal.ICMPResponseEchoReply, Description: "ICMP Echo Reply"},
 	}, now.Add(15*time.Millisecond), seq)
 
-	if got := atomic.LoadInt32(&e.roundFinalTTL); got != 5 {
+	if got := e.roundFinalTTL.Load(); got != 5 {
 		t.Errorf("expected roundFinalTTL=5, got %d", got)
 	}
 }
@@ -787,8 +923,8 @@ func TestOnICMP_DetectsDestination(t *testing.T) {
 func TestOnICMP_NonDestinationDoesNotSetFinal(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
 	e.config.DstIP = net.ParseIP("8.8.8.8")
-	atomic.StoreUint32(&e.roundID, 1)
-	atomic.StoreInt32(&e.roundFinalTTL, -1)
+	e.roundID.Store(1)
+	e.roundFinalTTL.Store(-1)
 
 	now := time.Now()
 	seq := 42
@@ -798,7 +934,7 @@ func TestOnICMP_NonDestinationDoesNotSetFinal(t *testing.T) {
 	peer := &net.IPAddr{IP: net.ParseIP("10.0.0.1")}
 	e.onICMP(internal.ReceivedMessage{Peer: peer}, now.Add(10*time.Millisecond), seq)
 
-	if got := atomic.LoadInt32(&e.roundFinalTTL); got != -1 {
+	if got := e.roundFinalTTL.Load(); got != -1 {
 		t.Errorf("expected roundFinalTTL=-1 for non-destination, got %d", got)
 	}
 }
@@ -817,8 +953,8 @@ func TestPeekPartialResult_EmptyBeforeRound(t *testing.T) {
 
 func TestPeekPartialResult_PartialReplies(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreUint32(&e.roundID, 1)
-	atomic.StoreInt32(&e.roundFinalTTL, -1)
+	e.roundID.Store(1)
+	e.roundFinalTTL.Store(-1)
 
 	// 模拟 probeRound 已初始化 peek 状态
 	e.curBeginHop = 1
@@ -854,8 +990,8 @@ func TestPeekPartialResult_PartialReplies(t *testing.T) {
 
 func TestPeekPartialResult_UnsentTTLsAreNil(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreUint32(&e.roundID, 1)
-	atomic.StoreInt32(&e.roundFinalTTL, -1)
+	e.roundID.Store(1)
+	e.roundFinalTTL.Store(-1)
 
 	// 模拟发送进行到一半：TTL 1-2 已发送，TTL 3-5 尚未
 	e.curBeginHop = 1
@@ -894,8 +1030,8 @@ func TestPeekPartialResult_UnsentTTLsAreNil(t *testing.T) {
 
 func TestPeekPartialResult_TrimsByRoundFinalTTL(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
-	atomic.StoreUint32(&e.roundID, 1)
-	atomic.StoreInt32(&e.roundFinalTTL, 2) // 本轮已检测到目的地在 TTL 2
+	e.roundID.Store(1)
+	e.roundFinalTTL.Store(2) // 本轮已检测到目的地在 TTL 2
 
 	e.curBeginHop = 1
 	e.curEffectiveMax = 5
@@ -1009,7 +1145,7 @@ func TestMTRLoopPreviewFiltersProvisionalPathWithoutClearingHigherStats(t *testi
 
 	var snapshots [][]MTRHopStat
 	peeker := &mockPeekerProber{peekFn: func() *Result { return full }}
-	rt := newMTRLoopRuntime(context.Background(), peeker, Config{MaxHops: 3}, MTROptions{}, agg, func(_ int, stats []MTRHopStat) {
+	rt := newMTRLoopRuntime(newMTRWorkerSession(context.Background()), peeker, Config{MaxHops: 3}, MTROptions{}, agg, func(_ int, stats []MTRHopStat) {
 		snapshots = append(snapshots, stats)
 	}, false, fastBackoff)
 
@@ -1083,9 +1219,9 @@ func TestMTRLoopRoundPathReopensProvisionalEdgeAndKeepsHigherStats(t *testing.T)
 func TestMTRICMPEngineCarriesTransitAndUnreachableResponses(t *testing.T) {
 	e := newTestICMPEngine(2 * time.Second)
 	e.config.DstIP = net.ParseIP("203.0.113.10")
-	atomic.StoreUint32(&e.roundID, 1)
-	atomic.StoreInt32(&e.roundFinalTTL, -1)
-	atomic.StoreInt32(&e.knownFinalTTL, -1)
+	e.roundID.Store(1)
+	e.roundFinalTTL.Store(-1)
+	e.knownFinalTTL.Store(-1)
 	e.curBeginHop = 1
 	e.curEffectiveMax = 3
 	e.curTtlSeq = map[int]int{2: 20, 3: 30}
@@ -1099,7 +1235,7 @@ func TestMTRICMPEngineCarriesTransitAndUnreachableResponses(t *testing.T) {
 	if got := e.replied[20].response; got == nil || got.Kind != MTRResponseTransit {
 		t.Fatalf("target-IP Time Exceeded response = %#v, want transit", got)
 	}
-	if got := atomic.LoadInt32(&e.roundFinalTTL); got != -1 {
+	if got := e.roundFinalTTL.Load(); got != -1 {
 		t.Fatalf("target-IP transit set round final TTL to %d", got)
 	}
 
@@ -1111,7 +1247,7 @@ func TestMTRICMPEngineCarriesTransitAndUnreachableResponses(t *testing.T) {
 	if got := e.replied[30].response; got == nil || got.Kind != MTRResponseUnreachable || got.Marker != "!H" {
 		t.Fatalf("unreachable response = %#v, want unreachable !H", got)
 	}
-	if got := atomic.LoadInt32(&e.roundFinalTTL); got != -1 {
+	if got := e.roundFinalTTL.Load(); got != -1 {
 		t.Fatalf("provisional unreachable set sticky round final TTL to %d", got)
 	}
 

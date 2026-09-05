@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -413,7 +412,7 @@ func TestAttachMTRHistoryIfTTY(t *testing.T) {
 		t.Fatalf("history did not collect TTY probe event: %+v", snap)
 	}
 
-	atomic.StoreInt32(&ttyUI.restartReq, 1)
+	ttyUI.restartReq.Store(true)
 	if ttyOpts.IsResetRequested == nil || !ttyOpts.IsResetRequested() {
 		t.Fatal("wrapped reset callback should consume reset request")
 	}
@@ -439,13 +438,17 @@ func TestNormalizeMTRReportConfig_NonWideDisablesGeoAndKeepsRDNS(t *testing.T) {
 		return &ipgeo.IPGeoData{}, nil
 	}
 	original := trace.Config{
-		TTLInterval:    1200,
-		IPGeoSource:    geoSource,
-		RDNS:           true,
-		AlwaysWaitRDNS: false,
-		PacketInterval: 25,
-		Timeout:        3,
-		MaxHops:        18,
+		TTLInterval: 1200,
+		IPGeoSource: geoSource,
+		IPGeoDescriptor: func() ipgeo.SourceDescriptor {
+			return ipgeo.SourceDescriptor{Source: geoSource, Namespace: ipgeo.SourceNamespaceIPInfo}
+		},
+		RefreshIPGeoSource: func() {},
+		RDNS:               true,
+		AlwaysWaitRDNS:     false,
+		PacketInterval:     25,
+		Timeout:            3,
+		MaxHops:            18,
 	}
 
 	normalized := normalizeMTRReportConfig(original, false)
@@ -456,6 +459,12 @@ func TestNormalizeMTRReportConfig_NonWideDisablesGeoAndKeepsRDNS(t *testing.T) {
 	if normalized.IPGeoSource != nil {
 		t.Fatal("non-wide report should disable IPGeoSource")
 	}
+	if normalized.IPGeoDescriptor != nil {
+		t.Fatal("non-wide report should disable IPGeoDescriptor")
+	}
+	if normalized.RefreshIPGeoSource != nil {
+		t.Fatal("non-wide report should disable RefreshIPGeoSource")
+	}
 	if !normalized.RDNS {
 		t.Fatal("non-wide report should preserve RDNS=true")
 	}
@@ -465,7 +474,7 @@ func TestNormalizeMTRReportConfig_NonWideDisablesGeoAndKeepsRDNS(t *testing.T) {
 	if normalized.PacketInterval != original.PacketInterval || normalized.Timeout != original.Timeout || normalized.MaxHops != original.MaxHops {
 		t.Fatalf("unexpected mutation of other fields: %+v", normalized)
 	}
-	if original.IPGeoSource == nil || original.TTLInterval != 1200 || original.AlwaysWaitRDNS {
+	if original.IPGeoSource == nil || original.IPGeoDescriptor == nil || original.RefreshIPGeoSource == nil || original.TTLInterval != 1200 || original.AlwaysWaitRDNS {
 		t.Fatalf("original config was modified in place: %+v", original)
 	}
 }
@@ -475,8 +484,11 @@ func TestNormalizeMTRReportConfig_NonWideRespectsNoRDNS(t *testing.T) {
 		return &ipgeo.IPGeoData{}, nil
 	}
 	original := trace.Config{
-		TTLInterval:    1200,
-		IPGeoSource:    geoSource,
+		TTLInterval: 1200,
+		IPGeoSource: geoSource,
+		IPGeoDescriptor: func() ipgeo.SourceDescriptor {
+			return ipgeo.SourceDescriptor{Source: geoSource, Namespace: ipgeo.SourceNamespaceIPInfo}
+		},
 		RDNS:           false,
 		AlwaysWaitRDNS: false,
 	}
@@ -485,6 +497,9 @@ func TestNormalizeMTRReportConfig_NonWideRespectsNoRDNS(t *testing.T) {
 
 	if normalized.IPGeoSource != nil {
 		t.Fatal("non-wide report should disable IPGeoSource")
+	}
+	if normalized.IPGeoDescriptor != nil {
+		t.Fatal("non-wide report should disable IPGeoDescriptor")
 	}
 	if normalized.RDNS {
 		t.Fatal("non-wide report should preserve RDNS=false")
@@ -498,12 +513,17 @@ func TestNormalizeMTRReportConfig_WidePreservesGeoSettings(t *testing.T) {
 	geoSource := func(_ string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
 		return &ipgeo.IPGeoData{}, nil
 	}
+	refreshCalls := 0
 	original := trace.Config{
-		TTLInterval:    1200,
-		IPGeoSource:    geoSource,
-		RDNS:           true,
-		AlwaysWaitRDNS: false,
-		PacketInterval: 25,
+		TTLInterval: 1200,
+		IPGeoSource: geoSource,
+		IPGeoDescriptor: func() ipgeo.SourceDescriptor {
+			return ipgeo.SourceDescriptor{Source: geoSource, Namespace: ipgeo.SourceNamespaceIPInfo}
+		},
+		RefreshIPGeoSource: func() { refreshCalls++ },
+		RDNS:               true,
+		AlwaysWaitRDNS:     false,
+		PacketInterval:     25,
 	}
 
 	normalized := normalizeMTRReportConfig(original, true)
@@ -514,13 +534,23 @@ func TestNormalizeMTRReportConfig_WidePreservesGeoSettings(t *testing.T) {
 	if normalized.IPGeoSource == nil {
 		t.Fatal("wide report should preserve IPGeoSource")
 	}
+	if normalized.IPGeoDescriptor == nil || normalized.IPGeoDescriptor().Namespace != ipgeo.SourceNamespaceIPInfo {
+		t.Fatal("wide report should preserve IPGeoDescriptor")
+	}
+	if normalized.RefreshIPGeoSource == nil {
+		t.Fatal("wide report should preserve RefreshIPGeoSource")
+	}
+	normalized.RefreshIPGeoSource()
+	if refreshCalls != 1 {
+		t.Fatalf("wide report refresh calls = %d, want 1", refreshCalls)
+	}
 	if !normalized.RDNS {
 		t.Fatal("wide report should preserve RDNS=true")
 	}
 	if normalized.AlwaysWaitRDNS != original.AlwaysWaitRDNS {
 		t.Fatalf("wide report should preserve AlwaysWaitRDNS, got %v want %v", normalized.AlwaysWaitRDNS, original.AlwaysWaitRDNS)
 	}
-	if original.IPGeoSource == nil || original.TTLInterval != 1200 {
+	if original.IPGeoSource == nil || original.IPGeoDescriptor == nil || original.RefreshIPGeoSource == nil || original.TTLInterval != 1200 {
 		t.Fatalf("original config was modified in place: %+v", original)
 	}
 }
@@ -628,7 +658,7 @@ func TestMTRUI_ConsumeRestartRequest(t *testing.T) {
 	}
 
 	// 模拟按下 r 键
-	atomic.StoreInt32(&ui.restartReq, 1)
+	ui.restartReq.Store(true)
 
 	// 第一次消费应返回 true
 	if !ui.ConsumeRestartRequest() {
@@ -641,6 +671,29 @@ func TestMTRUI_ConsumeRestartRequest(t *testing.T) {
 	}
 
 	_ = ctx // suppress unused
+}
+
+func TestMTRUI_ReadKeysFromInjectedReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ui := &mtrUI{isTTY: true, cancel: cancel}
+
+	ui.readKeysLoop(ctx, bytes.NewReader([]byte{'p'}))
+	if !ui.IsPaused() {
+		t.Fatal("pause key did not set the paused state")
+	}
+
+	ui.readKeysLoop(ctx, bytes.NewReader([]byte{'r', ' '}))
+	if ui.IsPaused() {
+		t.Fatal("resume key did not clear the paused state")
+	}
+	if !ui.ConsumeRestartRequest() {
+		t.Fatal("restart key was not recorded")
+	}
+
+	ui.readKeysLoop(ctx, bytes.NewReader([]byte{'q'}))
+	if ctx.Err() == nil {
+		t.Fatal("quit key did not cancel the session")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -694,7 +747,7 @@ func TestMTRUI_DisplayModeNotResetByRestart(t *testing.T) {
 	ui.CycleDisplayMode() // 1 → 2
 
 	// 模拟重置请求
-	atomic.StoreInt32(&ui.restartReq, 1)
+	ui.restartReq.Store(true)
 	ui.ConsumeRestartRequest()
 
 	// 显示模式不应被重置
@@ -841,7 +894,7 @@ func TestMTRUI_NameModeNotResetByRestart(t *testing.T) {
 	}
 
 	// 模拟重置请求
-	atomic.StoreInt32(&ui.restartReq, 1)
+	ui.restartReq.Store(true)
 	ui.ConsumeRestartRequest()
 
 	// nameMode 不应被重置

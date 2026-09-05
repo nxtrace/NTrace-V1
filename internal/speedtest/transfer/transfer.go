@@ -73,9 +73,7 @@ func Run(
 	}()
 
 	for i := 0; i < threads; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var fault bool
 			if dir == Download {
 				_, fault = doDownload(ctx2, client, spec, timeout, &totalBytes)
@@ -85,7 +83,7 @@ func Run(
 			if fault {
 				faultCount.Add(1)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

@@ -27,6 +27,11 @@ type MTRRawOptions struct {
 	MaxPerHop int
 	// RunRound optionally overrides the traceroute call for each round.
 	// It is mainly for callers that need per-round locking or global-state setup.
+	// The callback must observe cfg.Context, including during blocking I/O or lock
+	// acquisition, and return promptly after cancellation. Before returning it
+	// must release its per-round resources and stop any workers it started.
+	// RunMTRRaw waits for this cleanup even when canceled; it cannot forcibly
+	// terminate a callback that ignores the supplied session context.
 	// Legacy round-based mode only.
 	RunRound func(method Method, cfg Config) (*Result, error)
 	// OnPathEnd is called when the semantic path edge changes. nil reopens it.
@@ -97,11 +102,6 @@ func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRaw
 		if err != nil {
 			return fmt.Errorf("mtr raw: %w", err)
 		}
-		defer engine.close()
-		if err := engine.start(ctx); err != nil {
-			engine.close()
-			return fmt.Errorf("mtr raw: %w", err)
-		}
 		prober = engine
 	} else {
 		prober = &mtrFallbackTTLProber{method: method, config: roundCfg}
@@ -119,6 +119,7 @@ func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRaw
 		FillGeo:          true,
 		BaseConfig:       roundCfg,
 		OnPathEnd:        opts.OnPathEnd,
+		StartErrorPrefix: "mtr raw",
 	}, nil, func(result mtrProbeResult, iteration int, _ time.Time) {
 		if onRecord == nil {
 			return
@@ -130,6 +131,8 @@ func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRaw
 
 // runMTRRawRoundBased is the legacy round-based raw streaming path.
 func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MTRRawOptions, onRecord MTRRawOnRecord) error {
+	session := newMTRWorkerSession(ctx)
+	defer session.shutdown(nil)
 	normalizeRuntimeConfig(&cfg)
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
@@ -189,31 +192,35 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 			}
 		}
 
-		done := make(chan struct{})
-		var traceErr error
-		var roundRes *Result
-		go func() {
-			roundRes, traceErr = runRound(method, cfgForRound)
-			close(done)
-		}()
+		type rawRoundResult struct {
+			result *Result
+			err    error
+		}
+		done := make(chan rawRoundResult, 1)
+		cfgForRound.Context = session.ctx
+		session.Go("mtr.raw-round", func() {
+			result, err := runRound(method, cfgForRound)
+			select {
+			case done <- rawRoundResult{result: result, err: err}:
+			case <-session.ctx.Done():
+			}
+		})
 
+		var completed rawRoundResult
 		select {
 		case <-ctx.Done():
-			// Wait for the in-flight round to finish before returning, so callers
-			// can safely release any per-round/global state after RunMTRRaw exits.
-			<-done
 			return ctx.Err()
-		case <-done:
+		case completed = <-done:
 		}
 
-		if traceErr != nil {
-			return traceErr
+		if completed.err != nil {
+			return completed.err
 		}
-		if roundRes != nil {
-			for ttl := range roundRes.responses {
-				pathTracker.observe(ttl, bestMTRProbeResponse(roundRes, ttl))
+		if completed.result != nil {
+			for ttl := range completed.result.responses {
+				pathTracker.observe(ttl, bestMTRProbeResponse(completed.result, ttl))
 			}
-			pathTracker.observeStopReason(roundRes.StopReason)
+			pathTracker.observeStopReason(completed.result.StopReason)
 		}
 
 		if opts.MaxRounds > 0 && iteration >= opts.MaxRounds {
@@ -221,10 +228,12 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 			return nil
 		}
 
+		timer := time.NewTimer(opts.Interval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(opts.Interval):
+		case <-timer.C:
 		}
 	}
 }

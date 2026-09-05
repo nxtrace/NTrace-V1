@@ -20,6 +20,7 @@ import (
 	"github.com/nxtrace/NTrace-core/tracelog"
 	"github.com/nxtrace/NTrace-core/util"
 	"github.com/nxtrace/NTrace-core/wshandle"
+	"github.com/spf13/viper"
 )
 
 var errCmdOutputWriter = errors.New("cmd output writer failed")
@@ -431,6 +432,108 @@ func TestRunFastTraceModeLeavesRuntimeUnpreparedForNonNextTraceAPIProvider(t *te
 				t.Fatal("FastTest RuntimePrepared = true, want false for non-NextTrace API provider")
 			}
 		})
+	}
+}
+
+func TestRunFastTraceModePinsExplicitDN42Provider(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	oldRunFastTrace := runFastTraceFn
+	var got fastTrace.ParamsFastTrace
+	runFastTraceFn = func(_ trace.Method, params fastTrace.ParamsFastTrace) {
+		got = params
+	}
+	t.Cleanup(func() {
+		runFastTraceFn = oldRunFastTrace
+	})
+
+	dataProvider := " dn42 "
+	disableMaptrace := false
+	powProvider := "api.nxtrace.org"
+	if !runFastTraceModeWithRuntime(context.Background(), false, &dataProvider, &disableMaptrace, &powProvider, "", true, "", fastTrace.ParamsFastTrace{}, trace.ICMPTrace) {
+		t.Fatal("runFastTraceModeWithRuntime returned false, want true")
+	}
+	if dataProvider != "DN42" || got.DataProvider != "DN42" || !got.DN42 || got.IPGeoSource == nil {
+		t.Fatalf("DN42 fast trace params = provider %q, data %q, DN42 %v, source nil %v", dataProvider, got.DataProvider, got.DN42, got.IPGeoSource == nil)
+	}
+	if !disableMaptrace {
+		t.Fatal("disableMaptrace = false, want true for explicit DN42 provider")
+	}
+}
+
+func TestRunFastTraceModeAppliesDN42EnvironmentOverride(t *testing.T) {
+	t.Chdir(t.TempDir())
+	oldEnvDataProvider := util.EnvDataProvider
+	oldRunFastTrace := runFastTraceFn
+	util.EnvDataProvider = " dn42 "
+	var got fastTrace.ParamsFastTrace
+	runFastTraceFn = func(_ trace.Method, params fastTrace.ParamsFastTrace) {
+		got = params
+	}
+	t.Cleanup(func() {
+		util.EnvDataProvider = oldEnvDataProvider
+		runFastTraceFn = oldRunFastTrace
+	})
+
+	dataProvider := ipgeo.NextTraceAPIProvider
+	disableMaptrace := false
+	powProvider := "api.nxtrace.org"
+	if !runFastTraceModeWithRuntime(context.Background(), false, &dataProvider, &disableMaptrace, &powProvider, "", true, "", fastTrace.ParamsFastTrace{}, trace.ICMPTrace) {
+		t.Fatal("runFastTraceModeWithRuntime returned false, want true")
+	}
+	if dataProvider != "DN42" || got.DataProvider != "DN42" || !got.DN42 || got.IPGeoSource == nil {
+		t.Fatalf("DN42 env params = provider %q, data %q, DN42 %v, source nil %v", dataProvider, got.DataProvider, got.DN42, got.IPGeoSource == nil)
+	}
+	if !disableMaptrace || got.RuntimePrepared {
+		t.Fatalf("DN42 env state = disable maptrace %v, runtime prepared %v", disableMaptrace, got.RuntimePrepared)
+	}
+}
+
+func TestBuildTraceConfigPinsAndRefreshesDN42Source(t *testing.T) {
+	dir := t.TempDir()
+	geoFeedPath := filepath.Join(dir, "geofeed.csv")
+	ptrPath := filepath.Join(dir, "ptr.csv")
+	if err := os.WriteFile(geoFeedPath, []byte("10.0.0.0/8,us,US,First\n"), 0o600); err != nil {
+		t.Fatalf("write first geofeed: %v", err)
+	}
+	if err := os.WriteFile(ptrPath, nil, 0o600); err != nil {
+		t.Fatalf("write ptr: %v", err)
+	}
+	previousGeoFeedPath := viper.Get("geoFeedPath")
+	previousPtrPath := viper.Get("ptrPath")
+	viper.Set("geoFeedPath", geoFeedPath)
+	viper.Set("ptrPath", ptrPath)
+	t.Cleanup(func() {
+		viper.Set("geoFeedPath", previousGeoFeedPath)
+		viper.Set("ptrPath", previousPtrPath)
+	})
+
+	cfg := buildTraceConfig(
+		3, 0, false, "", "", 0, 1, net.ParseIP("10.0.0.1"), 0,
+		30, 50, 300, 3, 3, 18, "en", true, false, "DN42", 1000,
+		0, false, 0, false,
+	)
+	if !cfg.DN42 || cfg.IPGeoSource == nil || cfg.IPGeoDescriptor == nil || cfg.RefreshIPGeoSource == nil {
+		t.Fatalf("DN42 config = %+v", cfg)
+	}
+	if descriptor := cfg.IPGeoDescriptor(); descriptor.Namespace != ipgeo.SourceNamespaceDN42 || !descriptor.HasGeneration {
+		t.Fatalf("DN42 descriptor = %+v", descriptor)
+	}
+	first, err := cfg.IPGeoSource("10.0.0.1", time.Second, "en", false)
+	if err != nil || first.City != "First" {
+		t.Fatalf("first source = (%+v, %v), want First", first, err)
+	}
+	if err := os.WriteFile(geoFeedPath, []byte("10.0.0.0/8,us,US,Second City\n"), 0o600); err != nil {
+		t.Fatalf("write second geofeed: %v", err)
+	}
+	stillFirst, err := cfg.IPGeoSource("10.0.0.1", time.Second, "en", false)
+	if err != nil || stillFirst.City != "First" {
+		t.Fatalf("pinned source = (%+v, %v), want First", stillFirst, err)
+	}
+	cfg.RefreshIPGeoSource()
+	second, err := cfg.IPGeoSource("10.0.0.1", time.Second, "en", false)
+	if err != nil || second.City != "Second City" {
+		t.Fatalf("refreshed source = (%+v, %v), want Second City", second, err)
 	}
 }
 
@@ -1111,6 +1214,25 @@ func TestNormalizedNextTraceAPIProviderArgsParseAgainstCanonicalSelector(t *test
 		usage := parser.Usage(nil)
 		if strings.Contains(strings.ToUpper(usage), "LEOMOE") {
 			t.Fatalf("Parse(%q) usage exposes legacy provider name: %s", args, usage)
+		}
+	}
+}
+
+func TestDataProviderSelectorAcceptsDN42(t *testing.T) {
+	for _, args := range [][]string{
+		{"nexttrace", "-d", "DN42"},
+		{"nexttrace", "--data-provider=dn42"},
+	} {
+		parser := argparse.NewParser("nexttrace", "")
+		provider := registerDataProviderFlag(parser)
+		if err := parser.Parse(args); err != nil {
+			t.Fatalf("Parse(%q) error = %v", args, err)
+		}
+		if !isDN42Provider(*provider) {
+			t.Fatalf("Parse(%q) provider = %q, want DN42", args, *provider)
+		}
+		if usage := parser.Usage(nil); !strings.Contains(usage, "DN42") {
+			t.Fatalf("Parse(%q) usage does not mention DN42: %s", args, usage)
 		}
 	}
 }

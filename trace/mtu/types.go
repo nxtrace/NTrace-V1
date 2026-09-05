@@ -42,6 +42,7 @@ type Config struct {
 	AlwaysWaitRDNS bool
 	IPGeoSource    ipgeo.Source
 	Lang           string
+	DN42           bool
 }
 
 type Hop struct {

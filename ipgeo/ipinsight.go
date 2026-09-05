@@ -2,6 +2,7 @@ package ipgeo
 
 import (
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -10,8 +11,13 @@ import (
 )
 
 func IPInSight(ip string, timeout time.Duration, _ string, _ bool) (*IPGeoData, error) {
-	client := util.NewGeoHTTPClient(timeout)
-	resp, err := client.Get(token.BaseOrDefault("https://api.ipinsight.io/ip/") + ip + "?token=" + token.ipinsight)
+	client := util.NewSharedGeoHTTPClient(timeout)
+	req, cancel, err := newGeoRequest(http.MethodGet, token.BaseOrDefault("https://api.ipinsight.io/ip/")+ip+"?token="+token.ipinsight, timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

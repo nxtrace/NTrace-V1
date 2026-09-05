@@ -2,343 +2,570 @@ package ipgeo
 
 import (
 	"context"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nxtrace/NTrace-core/wshandle"
 )
 
-func TestNextTraceAPIV3GeoIPWaitsForConnectionBeforeSending(t *testing.T) {
-	oldGet := getNextTraceAPIV3WSConn
-	oldPools := IPPools.pool
-	oldRunning, oldRestart := nextTraceAPIV3ReceiveState()
-	var conn *wshandle.WsConn
-	nextTraceAPIV3ReceiveStarted := make(chan struct{})
-	var getConnCalls int32
-	var closeStarted sync.Once
-	defer func() {
-		if conn != nil && conn.MsgReceiveCh != nil {
-			close(conn.MsgReceiveCh)
+func TestNextTraceAPIV3ReceiverOwnerConcurrentEnsureUsesOneConsumer(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	receiveCh := make(chan string)
+	conn := &wshandle.WsConn{MsgReceiveCh: receiveCh}
+
+	const callers = 64
+	receivers := make([]*nextTraceAPIV3Receiver, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range receivers {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			receivers[index] = owner.ensure(conn)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	first := receivers[0]
+	if first == nil {
+		t.Fatal("ensure() receiver = nil")
+	}
+	for i, receiver := range receivers[1:] {
+		if receiver != first {
+			t.Fatalf("ensure() receiver[%d] = %p, want %p", i+1, receiver, first)
 		}
-		waitForNextTraceAPIV3ReceiveStart(t, nextTraceAPIV3ReceiveStarted)
-		waitForNextTraceAPIV3ReceiveStop(t)
-		getNextTraceAPIV3WSConn = oldGet
-		IPPools.pool = oldPools
-		setNextTraceAPIV3ReceiveState(oldRunning, oldRestart)
-	}()
+	}
+	if got := nextTraceAPIV3ReceiverCount(owner); got != 1 {
+		t.Fatalf("receiver count = %d, want 1", got)
+	}
 
-	IPPools.pool = make(map[string]chan IPGeoData)
-	setNextTraceAPIV3ReceiveState(false, false)
+	close(receiveCh)
+	waitForNextTraceAPIV3ReceiverDone(t, first)
+	if got := nextTraceAPIV3ReceiverCount(owner); got != 0 {
+		t.Fatalf("receiver count after close = %d, want 0", got)
+	}
+}
 
-	conn = &wshandle.WsConn{
+func TestNextTraceAPIV3ReceiverOwnerDeduplicatesSharedChannelWrappers(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	receiveCh := make(chan string)
+	firstConn := &wshandle.WsConn{MsgReceiveCh: receiveCh}
+	secondConn := &wshandle.WsConn{MsgReceiveCh: receiveCh}
+
+	first := owner.ensure(firstConn)
+	second := owner.ensure(secondConn)
+	if first == nil || second != first {
+		t.Fatalf("shared channel receivers = (%p, %p), want one receiver", first, second)
+	}
+	if got := nextTraceAPIV3ReceiverCount(owner); got != 1 {
+		t.Fatalf("receiver count = %d, want 1", got)
+	}
+
+	close(receiveCh)
+	waitForNextTraceAPIV3ReceiverDone(t, first)
+}
+
+func TestNextTraceAPIV3ReceiverOwnerKeepsOldAndNewChannelsDuringHandoff(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	oldReceiveCh := make(chan string, 1)
+	newReceiveCh := make(chan string, 1)
+	oldConn := &wshandle.WsConn{MsgReceiveCh: oldReceiveCh}
+	newConn := &wshandle.WsConn{MsgReceiveCh: newReceiveCh}
+	oldReceiver := owner.ensure(oldConn)
+	newReceiver := owner.ensure(newConn)
+	if oldReceiver == nil || newReceiver == nil || oldReceiver == newReceiver {
+		t.Fatalf("handoff receivers = (%p, %p), want distinct receivers", oldReceiver, newReceiver)
+	}
+	if got := nextTraceAPIV3ReceiverCount(owner); got != 2 {
+		t.Fatalf("receiver count during handoff = %d, want 2", got)
+	}
+
+	oldResult := make(chan IPGeoData, 1)
+	newResult := make(chan IPGeoData, 1)
+	restorePool := replaceNextTraceAPIV3Pool(map[string]chan IPGeoData{
+		"1.1.1.1": oldResult,
+		"2.2.2.2": newResult,
+	})
+	defer restorePool()
+
+	oldReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`
+	assertNextTraceAPIV3ASN(t, oldResult, "13335")
+	if !oldConn.ConnMux.TryLock() {
+		t.Fatal("receiver holds compatibility ConnMux while waiting for messages")
+	}
+	oldConn.ConnMux.Unlock()
+
+	close(oldReceiveCh)
+	waitForNextTraceAPIV3ReceiverDone(t, oldReceiver)
+	if got := nextTraceAPIV3ReceiverCount(owner); got != 1 {
+		t.Fatalf("receiver count after old close = %d, want 1", got)
+	}
+
+	newReceiveCh <- `{"ip":"2.2.2.2","asnumber":"64512"}`
+	assertNextTraceAPIV3ASN(t, newResult, "64512")
+	close(newReceiveCh)
+	waitForNextTraceAPIV3ReceiverDone(t, newReceiver)
+}
+
+func TestNextTraceAPIV3GeoIPBindsReceiverAndSendToSelectedConnection(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	oldConn := &wshandle.WsConn{
 		MsgSendCh:    make(chan string, 1),
 		MsgReceiveCh: make(chan string, 1),
-		Interrupt:    make(chan os.Signal, 1),
-	}
-	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
-		if atomic.AddInt32(&getConnCalls, 1) >= 3 {
-			closeStarted.Do(func() { close(nextTraceAPIV3ReceiveStarted) })
-		}
-		return conn
-	}
-
-	sent := make(chan string, 1)
-	go func() {
-		msg := <-conn.MsgSendCh
-		sent <- msg
-		conn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`
-	}()
-
-	var (
-		gotGeo *IPGeoData
-		gotErr error
-	)
-	done := make(chan struct{})
-	go func() {
-		gotGeo, gotErr = NextTraceAPIV3GeoIP("1.1.1.1", 300*time.Millisecond, "en", false)
-		close(done)
-	}()
-
-	select {
-	case <-sent:
-		t.Fatal("NextTraceAPIV3GeoIP sent request before websocket became connected")
-	case <-time.After(60 * time.Millisecond):
-	}
-
-	conn.SetConnected(true)
-
-	select {
-	case msg := <-sent:
-		if msg != "1.1.1.1" {
-			t.Fatalf("sent request = %q, want 1.1.1.1", msg)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("NextTraceAPIV3GeoIP did not send request after websocket became connected")
-	}
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("NextTraceAPIV3GeoIP did not complete")
-	}
-
-	if gotErr != nil {
-		t.Fatalf("NextTraceAPIV3GeoIP error = %v, want nil", gotErr)
-	}
-	if gotGeo == nil || gotGeo.Asnumber != "13335" {
-		t.Fatalf("NextTraceAPIV3GeoIP geo = %+v, want ASN 13335", gotGeo)
-	}
-}
-
-func TestNextTraceAPIV3GeoIPUsesSingleTimeoutBudget(t *testing.T) {
-	oldGet := getNextTraceAPIV3WSConn
-	oldPools := IPPools.pool
-	oldRunning, oldRestart := nextTraceAPIV3ReceiveState()
-	var conn *wshandle.WsConn
-	nextTraceAPIV3ReceiveStarted := make(chan struct{})
-	var getConnCalls int32
-	var closeStarted sync.Once
-	defer func() {
-		if conn != nil && conn.MsgReceiveCh != nil {
-			close(conn.MsgReceiveCh)
-		}
-		waitForNextTraceAPIV3ReceiveStart(t, nextTraceAPIV3ReceiveStarted)
-		waitForNextTraceAPIV3ReceiveStop(t)
-		getNextTraceAPIV3WSConn = oldGet
-		IPPools.pool = oldPools
-		setNextTraceAPIV3ReceiveState(oldRunning, oldRestart)
-	}()
-
-	IPPools.pool = make(map[string]chan IPGeoData)
-	setNextTraceAPIV3ReceiveState(false, false)
-
-	conn = &wshandle.WsConn{
-		MsgSendCh:    make(chan string, 1),
-		MsgReceiveCh: make(chan string),
-		Interrupt:    make(chan os.Signal, 1),
-	}
-	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
-		if atomic.AddInt32(&getConnCalls, 1) >= 3 {
-			closeStarted.Do(func() { close(nextTraceAPIV3ReceiveStarted) })
-		}
-		return conn
-	}
-
-	start := time.Now()
-	done := make(chan error, 1)
-	go func() {
-		_, err := NextTraceAPIV3GeoIP("1.1.1.1", 2*time.Second, "en", false)
-		done <- err
-	}()
-
-	time.Sleep(1500 * time.Millisecond)
-	conn.SetConnected(true)
-
-	select {
-	case err := <-done:
-		if err == nil || err.Error() != "TimeOut" {
-			t.Fatalf("NextTraceAPIV3GeoIP error = %v, want TimeOut", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("NextTraceAPIV3GeoIP exceeded expected shared timeout budget")
-	}
-
-	if elapsed := time.Since(start); elapsed > 2800*time.Millisecond {
-		t.Fatalf("NextTraceAPIV3GeoIP elapsed = %s, want <= 2.8s", elapsed)
-	}
-}
-
-func TestNextTraceAPIV3ReceiveReturnsWhenWebsocketMissing(t *testing.T) {
-	oldGet := getNextTraceAPIV3WSConn
-	defer func() { getNextTraceAPIV3WSConn = oldGet }()
-
-	getNextTraceAPIV3WSConn = func() *wshandle.WsConn { return nil }
-
-	done := make(chan struct{})
-	go func() {
-		receiveNextTraceAPIV3Responses()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses should return when websocket is nil")
-	}
-}
-
-func TestNextTraceAPIV3ReceiveContinuesAfterWebsocketReplacement(t *testing.T) {
-	oldGet := getNextTraceAPIV3WSConn
-	oldPools := IPPools.pool
-	defer func() {
-		getNextTraceAPIV3WSConn = oldGet
-		IPPools.pool = oldPools
-	}()
-
-	oldConn := &wshandle.WsConn{
-		MsgReceiveCh: make(chan string),
-		Interrupt:    make(chan os.Signal, 1),
 	}
 	newConn := &wshandle.WsConn{
-		MsgReceiveCh: make(chan string),
-		Interrupt:    make(chan os.Signal, 1),
+		MsgSendCh:    make(chan string, 1),
+		MsgReceiveCh: make(chan string, 1),
 	}
-	current := oldConn
-	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
-		return current
-	}
+	oldConn.SetConnected(true)
+	newConn.SetConnected(true)
 
-	oldResult := make(chan IPGeoData, 1)
-	newResult := make(chan IPGeoData, 1)
-	IPPools.pool = map[string]chan IPGeoData{
-		"1.1.1.1": oldResult,
-		"2.2.2.2": newResult,
-	}
+	var getCalls atomic.Int32
+	restoreGlobals := replaceNextTraceAPIV3Globals(owner, func() *wshandle.WsConn {
+		if getCalls.Add(1) == 1 {
+			return oldConn
+		}
+		return newConn
+	}, make(map[string]chan IPGeoData))
+	defer func() {
+		oldReceiver := nextTraceAPIV3ReceiverFor(owner, oldConn.MsgReceiveCh)
+		close(oldConn.MsgReceiveCh)
+		if oldReceiver != nil {
+			waitForNextTraceAPIV3ReceiverDone(t, oldReceiver)
+		}
+		close(newConn.MsgReceiveCh)
+		restoreGlobals()
+	}()
 
-	done := make(chan struct{})
+	type result struct {
+		geo *IPGeoData
+		err error
+	}
+	done := make(chan result, 1)
 	go func() {
-		receiveNextTraceAPIV3Responses()
-		close(done)
+		geo, err := NextTraceAPIV3GeoIP("1.1.1.1", 2*time.Second, "en", false)
+		done <- result{geo: geo, err: err}
 	}()
 
 	select {
-	case oldConn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`:
-	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not consume from the original websocket")
-	}
-	select {
-	case geo := <-oldResult:
-		if geo.Asnumber != "13335" {
-			t.Fatalf("old websocket geo ASN = %q, want 13335", geo.Asnumber)
+	case ip := <-oldConn.MsgSendCh:
+		if ip != "1.1.1.1" {
+			t.Fatalf("old connection request = %q, want 1.1.1.1", ip)
+		}
+		if nextTraceAPIV3ReceiverFor(owner, oldConn.MsgReceiveCh) == nil {
+			t.Fatal("request was sent before its selected receive channel was ensured")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch original websocket data")
-	}
-
-	current = newConn
-	close(oldConn.MsgReceiveCh)
-
-	select {
-	case newConn.MsgReceiveCh <- `{"ip":"2.2.2.2","asnumber":"64512"}`:
-	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not switch to replacement websocket")
+		t.Fatal("selected old connection did not receive request")
 	}
 	select {
-	case geo := <-newResult:
-		if geo.Asnumber != "64512" {
-			t.Fatalf("new websocket geo ASN = %q, want 64512", geo.Asnumber)
+	case ip := <-newConn.MsgSendCh:
+		t.Fatalf("replacement connection unexpectedly received request %q", ip)
+	default:
+	}
+
+	oldConn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("NextTraceAPIV3GeoIP() error = %v", got.err)
+		}
+		if got.geo == nil || got.geo.Asnumber != "13335" {
+			t.Fatalf("NextTraceAPIV3GeoIP() geo = %+v, want ASN 13335", got.geo)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch replacement websocket data")
+		t.Fatal("NextTraceAPIV3GeoIP() did not receive response from selected connection")
 	}
-
-	close(newConn.MsgReceiveCh)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not exit after replacement websocket closed")
+	if got := getCalls.Load(); got != 1 {
+		t.Fatalf("GetWsConn calls = %d, want 1", got)
+	}
+	if nextTraceAPIV3ReceiverFor(owner, newConn.MsgReceiveCh) != nil {
+		t.Fatal("replacement connection unexpectedly gained a receiver")
 	}
 }
 
-func TestStartNextTraceAPIV3ReceiverRestartsAfterQueuedStart(t *testing.T) {
-	oldGet := getNextTraceAPIV3WSConn
-	oldPools := IPPools.pool
-	oldRunning, oldRestart := nextTraceAPIV3ReceiveState()
-	var closeOld, closeNew sync.Once
-	var oldConn, newConn *wshandle.WsConn
+func TestNextTraceAPIV3GeoIPIgnoresOldConnectionResponseAfterBoundSubmit(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	oldConn := &wshandle.WsConn{MsgReceiveCh: make(chan string, 1)}
+	newConn := &wshandle.WsConn{MsgReceiveCh: make(chan string, 1)}
+	newConn.SetConnected(true)
+	responseCh := make(chan IPGeoData, 1)
+	restoreGlobals := replaceNextTraceAPIV3Globals(
+		owner,
+		func() *wshandle.WsConn { return newConn },
+		map[string]chan IPGeoData{"1.1.1.1": responseCh},
+	)
+	oldReceiver := owner.ensure(oldConn)
+	if oldReceiver == nil {
+		t.Fatal("old connection receiver = nil")
+	}
+
+	oldRequestFn := requestNextTraceAPIV3IPFn
+	oldSendFn := sendNextTraceAPIV3IPRequestFn
+	var fallbackSendCalled atomic.Bool
+	submitted := make(chan struct{})
+	boundResponse := make(chan string, 1)
+	requestNextTraceAPIV3IPFn = func(ctx context.Context, conn *wshandle.WsConn, ip string) (string, error) {
+		if conn != newConn || ip != "1.1.1.1" {
+			t.Errorf("bound request = (%p, %q), want (%p, 1.1.1.1)", conn, ip, newConn)
+		}
+		close(submitted)
+		select {
+		case response := <-boundResponse:
+			return response, nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	sendNextTraceAPIV3IPRequestFn = func(context.Context, *wshandle.WsConn, string) bool {
+		fallbackSendCalled.Store(true)
+		return false
+	}
 	defer func() {
-		if oldConn != nil {
-			closeOld.Do(func() { close(oldConn.MsgReceiveCh) })
+		requestNextTraceAPIV3IPFn = oldRequestFn
+		sendNextTraceAPIV3IPRequestFn = oldSendFn
+		close(oldConn.MsgReceiveCh)
+		waitForNextTraceAPIV3ReceiverDone(t, oldReceiver)
+		newReceiver := nextTraceAPIV3ReceiverFor(owner, newConn.MsgReceiveCh)
+		close(newConn.MsgReceiveCh)
+		if newReceiver != nil {
+			waitForNextTraceAPIV3ReceiverDone(t, newReceiver)
 		}
-		if newConn != nil {
-			closeNew.Do(func() { close(newConn.MsgReceiveCh) })
-		}
-		waitForNextTraceAPIV3ReceiveStop(t)
-		getNextTraceAPIV3WSConn = oldGet
-		IPPools.pool = oldPools
-		setNextTraceAPIV3ReceiveState(oldRunning, oldRestart)
+		restoreGlobals()
 	}()
 
-	oldConn = &wshandle.WsConn{
-		MsgReceiveCh: make(chan string),
-		Interrupt:    make(chan os.Signal, 1),
+	type result struct {
+		geo *IPGeoData
+		err error
 	}
-	newConn = &wshandle.WsConn{
-		MsgReceiveCh: make(chan string),
-		Interrupt:    make(chan os.Signal, 1),
+	done := make(chan result, 1)
+	go func() {
+		geo, err := NextTraceAPIV3GeoIP("1.1.1.1", 2*time.Second, "en", false)
+		done <- result{geo: geo, err: err}
+	}()
+
+	select {
+	case <-submitted:
+	case <-time.After(time.Second):
+		t.Fatal("new connection request was not submitted")
 	}
-	afterOldClose := atomic.Bool{}
-	afterOldCloseCalls := atomic.Int32{}
-	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
-		if afterOldClose.Load() {
-			if afterOldCloseCalls.Add(1) == 1 {
-				return oldConn
+
+	oldConn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"OLD"}`
+	var oldGeo IPGeoData
+	select {
+	case oldGeo = <-responseCh:
+		if oldGeo.Asnumber != "OLD" {
+			t.Fatalf("old response ASN = %q, want OLD", oldGeo.Asnumber)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("old connection response did not reach the compatibility pool")
+	}
+	responseCh <- oldGeo
+	select {
+	case got := <-done:
+		t.Fatalf("old connection response completed bound request: %+v", got)
+	default:
+	}
+
+	boundResponse <- `{"ip":"1.1.1.1","asnumber":"NEW"}`
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("NextTraceAPIV3GeoIP() error = %v", got.err)
+		}
+		if got.geo == nil || got.geo.Asnumber != "NEW" {
+			t.Fatalf("NextTraceAPIV3GeoIP() geo = %+v, want ASN NEW", got.geo)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bound response did not complete the new connection request")
+	}
+	if fallbackSendCalled.Load() {
+		t.Fatal("managed request fell back to the generationless send path")
+	}
+}
+
+func TestNextTraceAPIV3GeoIPRejectsSelectedConnectionClosedBeforeSubmit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		owner := newNextTraceAPIV3ReceiverOwner()
+		oldConn := &wshandle.WsConn{
+			MsgSendCh:    make(chan string, 1),
+			MsgReceiveCh: make(chan string, 1),
+		}
+		newConn := &wshandle.WsConn{
+			MsgSendCh:    make(chan string, 1),
+			MsgReceiveCh: make(chan string, 1),
+		}
+		oldConn.SetConnected(true)
+		newConn.SetConnected(true)
+
+		var current atomic.Pointer[wshandle.WsConn]
+		current.Store(oldConn)
+		restoreGlobals := replaceNextTraceAPIV3Globals(
+			owner,
+			func() *wshandle.WsConn { return current.Load() },
+			make(map[string]chan IPGeoData),
+		)
+		oldSendFn := sendNextTraceAPIV3IPRequestFn
+		reachedSubmit := make(chan struct{})
+		releaseSubmit := make(chan struct{})
+		sendNextTraceAPIV3IPRequestFn = func(ctx context.Context, conn *wshandle.WsConn, ip string) bool {
+			close(reachedSubmit)
+			<-releaseSubmit
+			return sendNextTraceAPIV3IPRequest(ctx, conn, ip)
+		}
+		defer func() {
+			sendNextTraceAPIV3IPRequestFn = oldSendFn
+			newConn.Close()
+			restoreGlobals()
+		}()
+
+		type result struct {
+			geo *IPGeoData
+			err error
+		}
+		startedAt := time.Now()
+		done := make(chan result, 1)
+		go func() {
+			geo, err := NextTraceAPIV3GeoIP("1.1.1.1", time.Millisecond, "en", false)
+			done <- result{geo: geo, err: err}
+		}()
+
+		<-reachedSubmit
+		receiver := nextTraceAPIV3ReceiverFor(owner, oldConn.MsgReceiveCh)
+		if receiver == nil {
+			t.Fatal("selected connection receiver was not ensured before submit")
+		}
+		current.Store(newConn)
+		oldConn.Close()
+		close(releaseSubmit)
+		synctest.Wait()
+
+		got := <-done
+		if got.err == nil || got.err.Error() != "TimeOut" {
+			t.Fatalf("NextTraceAPIV3GeoIP() error = %v, want TimeOut", got.err)
+		}
+		if got.geo == nil || got.geo.Asnumber != "" || got.geo.IP != "" {
+			t.Fatalf("NextTraceAPIV3GeoIP() geo = %+v, want empty result", got.geo)
+		}
+		if elapsed := time.Since(startedAt); elapsed != 0 {
+			t.Fatalf("closed selected connection consumed timeout budget: %s", elapsed)
+		}
+		select {
+		case msg := <-oldConn.MsgSendCh:
+			t.Fatalf("closed old connection accepted request %q", msg)
+		default:
+		}
+		select {
+		case msg := <-newConn.MsgSendCh:
+			t.Fatalf("replacement connection unexpectedly accepted request %q", msg)
+		default:
+		}
+		<-receiver.done
+	})
+}
+
+func TestNextTraceAPIV3GeoIPWaitsForConnectionBeforeSending(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		owner := newNextTraceAPIV3ReceiverOwner()
+		conn := &wshandle.WsConn{
+			MsgSendCh:    make(chan string, 1),
+			MsgReceiveCh: make(chan string, 1),
+		}
+		restoreGlobals := replaceNextTraceAPIV3Globals(
+			owner,
+			func() *wshandle.WsConn { return conn },
+			make(map[string]chan IPGeoData),
+		)
+		defer func() {
+			receiver := nextTraceAPIV3ReceiverFor(owner, conn.MsgReceiveCh)
+			close(conn.MsgReceiveCh)
+			if receiver != nil {
+				<-receiver.done
 			}
-			return newConn
+			restoreGlobals()
+		}()
+
+		type result struct {
+			geo *IPGeoData
+			err error
 		}
-		return oldConn
-	}
+		done := make(chan result, 1)
+		go func() {
+			geo, err := NextTraceAPIV3GeoIP("1.1.1.1", time.Millisecond, "en", false)
+			done <- result{geo: geo, err: err}
+		}()
+		synctest.Wait()
 
-	oldResult := make(chan IPGeoData, 1)
-	newResult := make(chan IPGeoData, 1)
-	IPPools.pool = map[string]chan IPGeoData{
-		"1.1.1.1": oldResult,
-		"2.2.2.2": newResult,
-	}
-	setNextTraceAPIV3ReceiveState(false, false)
-
-	startNextTraceAPIV3Receiver()
-	select {
-	case oldConn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`:
-	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not consume from the original websocket")
-	}
-	select {
-	case geo := <-oldResult:
-		if geo.Asnumber != "13335" {
-			t.Fatalf("old websocket geo ASN = %q, want 13335", geo.Asnumber)
+		select {
+		case ip := <-conn.MsgSendCh:
+			t.Fatalf("request %q sent before connection became ready", ip)
+		default:
 		}
-	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch original websocket data")
-	}
-
-	startNextTraceAPIV3Receiver()
-	afterOldClose.Store(true)
-	closeOld.Do(func() { close(oldConn.MsgReceiveCh) })
-
-	select {
-	case newConn.MsgReceiveCh <- `{"ip":"2.2.2.2","asnumber":"64512"}`:
-	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not restart for a queued start")
-	}
-	select {
-	case geo := <-newResult:
-		if geo.Asnumber != "64512" {
-			t.Fatalf("new websocket geo ASN = %q, want 64512", geo.Asnumber)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case ip := <-conn.MsgSendCh:
+			t.Fatalf("request %q sent before connection became ready", ip)
+		default:
 		}
+
+		conn.SetConnected(true)
+		synctest.Wait()
+		select {
+		case ip := <-conn.MsgSendCh:
+			if ip != "1.1.1.1" {
+				t.Fatalf("request = %q, want 1.1.1.1", ip)
+			}
+		default:
+			t.Fatal("request not sent after connection became ready")
+		}
+		conn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"13335"}`
+		synctest.Wait()
+		got := <-done
+		if got.err != nil {
+			t.Fatalf("NextTraceAPIV3GeoIP() error = %v", got.err)
+		}
+		if got.geo == nil || got.geo.Asnumber != "13335" {
+			t.Fatalf("NextTraceAPIV3GeoIP() geo = %+v, want ASN 13335", got.geo)
+		}
+	})
+}
+
+func TestNextTraceAPIV3GeoIPUsesSingleMinimumTimeoutBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		owner := newNextTraceAPIV3ReceiverOwner()
+		conn := &wshandle.WsConn{
+			MsgSendCh:    make(chan string, 1),
+			MsgReceiveCh: make(chan string),
+		}
+		restoreGlobals := replaceNextTraceAPIV3Globals(
+			owner,
+			func() *wshandle.WsConn { return conn },
+			make(map[string]chan IPGeoData),
+		)
+		defer func() {
+			receiver := nextTraceAPIV3ReceiverFor(owner, conn.MsgReceiveCh)
+			close(conn.MsgReceiveCh)
+			if receiver != nil {
+				<-receiver.done
+			}
+			restoreGlobals()
+		}()
+
+		started := time.Now()
+		done := make(chan error, 1)
+		go func() {
+			_, err := NextTraceAPIV3GeoIP("1.1.1.1", time.Millisecond, "en", false)
+			done <- err
+		}()
+		synctest.Wait()
+
+		time.Sleep(1500 * time.Millisecond)
+		conn.SetConnected(true)
+		synctest.Wait()
+		select {
+		case ip := <-conn.MsgSendCh:
+			if ip != "1.1.1.1" {
+				t.Fatalf("request = %q, want 1.1.1.1", ip)
+			}
+		default:
+			t.Fatal("request not sent after connection became ready")
+		}
+
+		time.Sleep(500 * time.Millisecond)
+		synctest.Wait()
+		if err := <-done; err == nil || err.Error() != "TimeOut" {
+			t.Fatalf("NextTraceAPIV3GeoIP() error = %v, want TimeOut", err)
+		}
+		if elapsed := time.Since(started); elapsed != 2*time.Second {
+			t.Fatalf("NextTraceAPIV3GeoIP() elapsed = %s, want 2s", elapsed)
+		}
+	})
+}
+
+func TestNextTraceAPIV3GeoIPReturnsTimeOutWhenWebsocketMissing(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	restoreGlobals := replaceNextTraceAPIV3Globals(
+		owner,
+		func() *wshandle.WsConn { return nil },
+		make(map[string]chan IPGeoData),
+	)
+	defer restoreGlobals()
+
+	_, err := NextTraceAPIV3GeoIP("1.1.1.1", time.Millisecond, "en", false)
+	if err == nil || err.Error() != "TimeOut" {
+		t.Fatalf("NextTraceAPIV3GeoIP() error = %v, want TimeOut", err)
+	}
+	if got := nextTraceAPIV3ReceiverCount(owner); got != 0 {
+		t.Fatalf("receiver count = %d, want 0", got)
+	}
+}
+
+func TestNextTraceAPIV3APIErrorDeliveredOnce(t *testing.T) {
+	owner := newNextTraceAPIV3ReceiverOwner()
+	conn := &wshandle.WsConn{
+		MsgSendCh:    make(chan string, 1),
+		MsgReceiveCh: make(chan string, 1),
+	}
+	conn.SetConnected(true)
+	restoreGlobals := replaceNextTraceAPIV3Globals(
+		owner,
+		func() *wshandle.WsConn { return conn },
+		make(map[string]chan IPGeoData),
+	)
+	defer func() {
+		receiver := nextTraceAPIV3ReceiverFor(owner, conn.MsgReceiveCh)
+		close(conn.MsgReceiveCh)
+		if receiver != nil {
+			waitForNextTraceAPIV3ReceiverDone(t, receiver)
+		}
+		restoreGlobals()
+	}()
+
+	done := make(chan struct {
+		geo *IPGeoData
+		err error
+	}, 1)
+	go func() {
+		geo, err := NextTraceAPIV3GeoIP("1.1.1.1", 2*time.Second, "en", false)
+		done <- struct {
+			geo *IPGeoData
+			err error
+		}{geo: geo, err: err}
+	}()
+
+	select {
+	case <-conn.MsgSendCh:
 	case <-time.After(time.Second):
-		t.Fatal("receiveNextTraceAPIV3Responses did not dispatch restarted websocket data")
+		t.Fatal("request was not sent")
+	}
+	conn.MsgReceiveCh <- `{"ip":"1.1.1.1","asnumber":"API Server Error"}`
+	got := <-done
+	if got.err != nil {
+		t.Fatalf("NextTraceAPIV3GeoIP() error = %v", got.err)
+	}
+	if got.geo == nil || got.geo.Asnumber != "API Server Error" {
+		t.Fatalf("NextTraceAPIV3GeoIP() geo = %+v, want API Server Error", got.geo)
 	}
 
-	closeNew.Do(func() { close(newConn.MsgReceiveCh) })
+	IPPools.poolMux.RLock()
+	responseCh := IPPools.pool["1.1.1.1"]
+	IPPools.poolMux.RUnlock()
+	select {
+	case duplicate := <-responseCh:
+		t.Fatalf("duplicate API error delivery = %+v", duplicate)
+	default:
+	}
 }
 
 func TestSendNextTraceAPIV3IPRequestHonorsContextWhenQueueIsFull(t *testing.T) {
-	oldGet := getNextTraceAPIV3WSConn
-	defer func() { getNextTraceAPIV3WSConn = oldGet }()
-
-	conn := &wshandle.WsConn{
-		MsgSendCh: make(chan string, 1),
-		Interrupt: make(chan os.Signal, 1),
-	}
+	conn := &wshandle.WsConn{MsgSendCh: make(chan string, 1)}
 	conn.MsgSendCh <- "blocked"
-	getNextTraceAPIV3WSConn = func() *wshandle.WsConn {
-		return conn
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if sendNextTraceAPIV3IPRequest(ctx, conn, "1.1.1.1") {
@@ -347,15 +574,7 @@ func TestSendNextTraceAPIV3IPRequestHonorsContextWhenQueueIsFull(t *testing.T) {
 }
 
 func TestSendNextTraceAPIV3IPRequestUsesProvidedConnection(t *testing.T) {
-	oldGet := getNextTraceAPIV3WSConn
-	defer func() { getNextTraceAPIV3WSConn = oldGet }()
-
-	conn := &wshandle.WsConn{
-		MsgSendCh: make(chan string, 1),
-		Interrupt: make(chan os.Signal, 1),
-	}
-	getNextTraceAPIV3WSConn = func() *wshandle.WsConn { return nil }
-
+	conn := &wshandle.WsConn{MsgSendCh: make(chan string, 1)}
 	if !sendNextTraceAPIV3IPRequest(context.Background(), conn, "1.1.1.1") {
 		t.Fatal("sendNextTraceAPIV3IPRequest() = false, want true")
 	}
@@ -370,12 +589,10 @@ func TestSendNextTraceAPIV3IPRequestUsesProvidedConnection(t *testing.T) {
 }
 
 func TestDispatchNextTraceAPIV3MessageReplacesStaleBufferedResponse(t *testing.T) {
-	oldPools := IPPools.pool
-	defer func() { IPPools.pool = oldPools }()
-
 	ch := make(chan IPGeoData, 1)
 	ch <- IPGeoData{Asnumber: "STALE"}
-	IPPools.pool = map[string]chan IPGeoData{"1.1.1.1": ch}
+	restorePool := replaceNextTraceAPIV3Pool(map[string]chan IPGeoData{"1.1.1.1": ch})
+	defer restorePool()
 
 	dispatchNextTraceAPIV3Message(`{"ip":"1.1.1.1","asnumber":"13335"}`)
 
@@ -389,42 +606,64 @@ func TestDispatchNextTraceAPIV3MessageReplacesStaleBufferedResponse(t *testing.T
 	}
 }
 
-func waitForNextTraceAPIV3ReceiveStart(t *testing.T, started <-chan struct{}) {
+func replaceNextTraceAPIV3Globals(
+	owner *nextTraceAPIV3ReceiverOwner,
+	getConn func() *wshandle.WsConn,
+	pool map[string]chan IPGeoData,
+) func() {
+	oldOwner := nextTraceAPIV3Receivers
+	oldGetConn := getNextTraceAPIV3WSConn
+	nextTraceAPIV3Receivers = owner
+	getNextTraceAPIV3WSConn = getConn
+	restorePool := replaceNextTraceAPIV3Pool(pool)
+	return func() {
+		restorePool()
+		getNextTraceAPIV3WSConn = oldGetConn
+		nextTraceAPIV3Receivers = oldOwner
+	}
+}
+
+func replaceNextTraceAPIV3Pool(pool map[string]chan IPGeoData) func() {
+	IPPools.poolMux.Lock()
+	oldPool := IPPools.pool
+	IPPools.pool = pool
+	IPPools.poolMux.Unlock()
+	return func() {
+		IPPools.poolMux.Lock()
+		IPPools.pool = oldPool
+		IPPools.poolMux.Unlock()
+	}
+}
+
+func nextTraceAPIV3ReceiverFor(owner *nextTraceAPIV3ReceiverOwner, ch <-chan string) *nextTraceAPIV3Receiver {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return owner.receivers[ch]
+}
+
+func nextTraceAPIV3ReceiverCount(owner *nextTraceAPIV3ReceiverOwner) int {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return len(owner.receivers)
+}
+
+func waitForNextTraceAPIV3ReceiverDone(t *testing.T, receiver *nextTraceAPIV3Receiver) {
 	t.Helper()
 	select {
-	case <-started:
+	case <-receiver.done:
 	case <-time.After(time.Second):
-		t.Fatal("waitForNextTraceAPIV3ReceiveStart: receiveNextTraceAPIV3Responses did not start")
+		t.Fatal("NextTrace API v3 receiver did not stop")
 	}
 }
 
-func waitForNextTraceAPIV3ReceiveStop(t *testing.T) {
+func assertNextTraceAPIV3ASN(t *testing.T, ch <-chan IPGeoData, want string) {
 	t.Helper()
-	deadline := time.After(time.Second)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		running, _ := nextTraceAPIV3ReceiveState()
-		if !running {
-			return
+	select {
+	case geo := <-ch:
+		if geo.Asnumber != want {
+			t.Fatalf("geo ASN = %q, want %q", geo.Asnumber, want)
 		}
-		select {
-		case <-deadline:
-			t.Fatal("waitForNextTraceAPIV3ReceiveStop: receiveNextTraceAPIV3Responses did not stop")
-		case <-ticker.C:
-		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for ASN %q", want)
 	}
-}
-
-func nextTraceAPIV3ReceiveState() (bool, bool) {
-	nextTraceAPIV3ReceiveMu.Lock()
-	defer nextTraceAPIV3ReceiveMu.Unlock()
-	return nextTraceAPIV3ReceiveRunning, nextTraceAPIV3ReceiveRestart
-}
-
-func setNextTraceAPIV3ReceiveState(running, restart bool) {
-	nextTraceAPIV3ReceiveMu.Lock()
-	defer nextTraceAPIV3ReceiveMu.Unlock()
-	nextTraceAPIV3ReceiveRunning = running
-	nextTraceAPIV3ReceiveRestart = restart
 }

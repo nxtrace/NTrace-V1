@@ -15,7 +15,6 @@ import (
 
 	"golang.org/x/net/idna"
 	"golang.org/x/sync/semaphore"
-	"golang.org/x/sync/singleflight"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
 	"github.com/nxtrace/NTrace-core/trace/internal"
@@ -27,8 +26,6 @@ var (
 	errInvalidMethod      = errors.New("invalid method")
 	errNaturalDone        = errors.New("trace natural done")
 	errTracerouteExecuted = errors.New("traceroute already executed")
-	geoCache              = sync.Map{}
-	ipGeoSF               singleflight.Group
 )
 
 type Config struct {
@@ -48,6 +45,13 @@ type Config struct {
 	DstPort          int
 	Quic             bool
 	IPGeoSource      ipgeo.Source
+	// IPGeoDescriptor returns the current canonical source identity for
+	// context-aware process cache lookups. Nil preserves legacy Source behavior.
+	IPGeoDescriptor func() ipgeo.SourceDescriptor
+
+	// RefreshIPGeoSource marks a refreshable source session and refreshes it at reset boundaries.
+	RefreshIPGeoSource func()
+
 	GeoLookupOffset  int
 	RDNS             bool
 	AlwaysWaitRDNS   bool
@@ -1214,35 +1218,47 @@ func geoTimeoutForAttempt(attempt int) time.Duration {
 	return time.Duration(timeout) * time.Second
 }
 
-func lookupGeoSourceWithContext(ctx context.Context, cacheKey string, fn func() (any, error)) (any, error) {
-	if ctx == nil || ctx.Done() == nil {
-		v, err, _ := ipGeoSF.Do(cacheKey, fn)
-		return v, err
+func lookupGeoSourceDirectWithContext(ctx context.Context, fn func() (any, error)) (any, error) {
+	// Source callbacks must honor their timeout argument. Running fn in a detached
+	// goroutine cannot stop a blocked callback and adds overhead to in-memory sources.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	value, err := fn()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	return value, err
+}
 
-	resultCh := ipGeoSF.DoChan(cacheKey, fn)
-
+func lookupGeoSourceWithContext(ctx context.Context, fn func() (any, error)) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	type result struct {
+		value any
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		value, err := fn()
+		resultCh <- result{value: value, err: err}
+	}()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case result := <-resultCh:
-		return result.Val, result.Err
+		return result.value, result.err
 	}
 }
 
-func lookupGeoWithRetry(c Config, cacheKey, query string, dn42 bool) (*ipgeo.IPGeoData, error) {
-	if cacheVal, ok := geoCache.Load(cacheKey); ok {
-		if g, ok := cacheVal.(*ipgeo.IPGeoData); ok && g != nil {
-			return g, nil
-		}
-	}
-
+func lookupGeoWithRetry(c Config, _ string, query string, dn42 bool) (*ipgeo.IPGeoData, error) {
 	ctx := c.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	typeErr := "ipgeo: nil or bad type from singleflight"
+	typeErr := "ipgeo: nil or bad type from source"
 	lookupErr := "ipgeo: lookup failed without specific error"
 	if dn42 {
 		typeErr += " (DN42)"
@@ -1270,14 +1286,37 @@ func lookupGeoWithRetry(c Config, cacheKey, query string, dn42 bool) (*ipgeo.IPG
 			}
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-		v, err := lookupGeoSourceWithContext(attemptCtx, cacheKey, func() (any, error) {
-			return c.IPGeoSource(query, timeout, c.Lang, c.Maptrace)
-		})
+		var v any
+		var err error
+		if c.IPGeoDescriptor != nil {
+			v, err = geoCache.lookupContext(
+				attemptCtx,
+				c.IPGeoDescriptor(),
+				query,
+				timeout,
+				c.Lang,
+				c.Maptrace,
+			)
+		} else {
+			lookup := func() (any, error) {
+				return c.IPGeoSource(query, timeout, c.Lang, c.Maptrace)
+			}
+			if dn42 {
+				v, err = lookupGeoSourceDirectWithContext(attemptCtx, lookup)
+			} else {
+				v, err = lookupGeoSourceWithContext(attemptCtx, lookup)
+			}
+		}
+		attemptErr := attemptCtx.Err()
 		cancel()
 		if err != nil {
-			lastErr = err
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
+			}
+			if attemptErr != nil {
+				lastErr = attemptErr
+			} else {
+				lastErr = err
 			}
 			continue
 		}
@@ -1288,7 +1327,6 @@ func lookupGeoWithRetry(c Config, cacheKey, query string, dn42 bool) (*ipgeo.IPG
 			continue
 		}
 
-		geoCache.Store(cacheKey, geo)
 		return geo, nil
 	}
 

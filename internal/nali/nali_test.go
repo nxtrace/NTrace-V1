@@ -43,6 +43,28 @@ func TestAnnotateLineIPv4AndCache(t *testing.T) {
 	}
 }
 
+func TestAnnotateLineDN42BypassesReservedAddressFilter(t *testing.T) {
+	calls := 0
+	a := New(Config{
+		DN42: true,
+		Lang: "en",
+		Source: func(ip string, _ time.Duration, _ string, _ bool) (*ipgeo.IPGeoData, error) {
+			calls++
+			if ip != "10.0.0.1" {
+				t.Fatalf("lookup ip = %q, want 10.0.0.1", ip)
+			}
+			return &ipgeo.IPGeoData{Asnumber: "4242420001", CountryEn: "DN42"}, nil
+		},
+	})
+
+	if got, want := a.AnnotateLine(context.Background(), "router 10.0.0.1"), "router 10.0.0.1 [AS4242420001, DN42]"; got != want {
+		t.Fatalf("AnnotateLine() = %q, want %q", got, want)
+	}
+	if calls != 1 {
+		t.Fatalf("lookup calls = %d, want 1", calls)
+	}
+}
+
 func TestAnnotateLineIPv6AndMappedIPv6(t *testing.T) {
 	a := New(Config{
 		Lang: "cn",

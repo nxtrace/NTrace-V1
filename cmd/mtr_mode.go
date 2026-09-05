@@ -253,6 +253,8 @@ func normalizeMTRReportConfig(conf trace.Config, wide bool) trace.Config {
 	}
 
 	normalized.IPGeoSource = nil
+	normalized.IPGeoDescriptor = nil
+	normalized.RefreshIPGeoSource = nil
 	if normalized.RDNS {
 		normalized.AlwaysWaitRDNS = true
 	}

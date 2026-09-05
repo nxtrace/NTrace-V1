@@ -2,6 +2,7 @@ package trace
 
 import (
 	"math"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -9,121 +10,146 @@ import (
 	"github.com/nxtrace/NTrace-core/ipgeo"
 )
 
-type mtrHopGroup struct {
-	host     string
-	ip       string
-	geo      *ipgeo.IPGeoData
-	sum      float64
-	sumSq    float64
-	last     float64
-	best     float64
-	worst    float64
-	received int
-	count    int
-	mpls     map[string]struct{}
-}
-
-func newMTRHopGroup(host, ip string) *mtrHopGroup {
-	return &mtrHopGroup{
-		host: host,
-		ip:   ip,
-		best: math.MaxFloat64,
+func (agg *MTRAggregator) ensureSlotLocked(ttl int) int {
+	slot := ttl - 1
+	if slot < len(agg.buckets) {
+		return slot
 	}
+	need := slot + 1 - len(agg.buckets)
+	agg.buckets = append(agg.buckets, make([]*mtrTTLBucket, need)...)
+	agg.owned = append(agg.owned, make([]bool, need)...)
+	agg.bucketSnapshots = append(agg.bucketSnapshots, make([]mtrBucketSnapshot, need)...)
+	return slot
 }
 
-func groupMTRHopAttempts(attempts []Hop) map[string]*mtrHopGroup {
-	groups := make(map[string]*mtrHopGroup)
-	for _, attempt := range attempts {
-		host := strings.TrimSpace(attempt.Hostname)
-		ip := strings.TrimSpace(mtrAddrString(attempt.Address))
-		key := mtrHopKey(ip, host)
-		group := groups[key]
-		if group == nil {
-			group = newMTRHopGroup(host, ip)
-			groups[key] = group
+func (agg *MTRAggregator) writableBucketLocked(ttl int) *mtrTTLBucket {
+	slot := agg.ensureSlotLocked(ttl)
+	bucket := agg.buckets[slot]
+	if bucket == nil {
+		bucket = &mtrTTLBucket{index: make(map[mtrHopIdentity]int)}
+		agg.buckets[slot] = bucket
+		agg.owned[slot] = true
+		return bucket
+	}
+	if !agg.owned[slot] {
+		bucket = cloneMTRBucket(bucket)
+		agg.buckets[slot] = bucket
+		agg.owned[slot] = true
+	}
+	return bucket
+}
+
+func cloneMTRBucket(src *mtrTTLBucket) *mtrTTLBucket {
+	dst := &mtrTTLBucket{
+		rows:    make([]mtrHopAccum, len(src.rows)),
+		index:   make(map[mtrHopIdentity]int, len(src.index)),
+		version: src.version,
+	}
+	for i, acc := range src.rows {
+		dst.rows[i] = cloneMTRHopAccum(acc)
+	}
+	for identity, index := range src.index {
+		dst.index[identity] = index
+	}
+	return dst
+}
+
+func cloneMTRHopAccum(src mtrHopAccum) mtrHopAccum {
+	src.mplsSet = cloneMTRLabelSet(src.mplsSet)
+	return src
+}
+
+func (agg *MTRAggregator) markBucketDirtyLocked(ttl int, bucket *mtrTTLBucket) {
+	bucket.version++
+	agg.bucketSnapshots[ttl-1] = mtrBucketSnapshot{}
+}
+
+func (agg *MTRAggregator) markDirtyLocked() {
+	agg.version++
+	agg.snapshotValid = false
+}
+
+func (agg *MTRAggregator) trimTrailingSlotsLocked() {
+	length := len(agg.buckets)
+	for length > 0 && agg.buckets[length-1] == nil {
+		length--
+	}
+	agg.buckets = agg.buckets[:length]
+	agg.owned = agg.owned[:length]
+	agg.bucketSnapshots = agg.bucketSnapshots[:length]
+}
+
+func (agg *MTRAggregator) includeAttemptLocked(bucket *mtrTTLBucket, attempt Hop) {
+	identity, host, ip := mtrHopIdentityForAttempt(attempt)
+	index, ok := bucket.index[identity]
+	if !ok {
+		index = len(bucket.rows)
+		bucket.index[identity] = index
+		bucket.rows = append(bucket.rows, mtrHopAccum{
+			identity: identity,
+			best:     math.MaxFloat64,
+			order:    agg.nextOrder,
+		})
+		agg.nextOrder++
+	}
+	acc := &bucket.rows[index]
+	if acc.seenUpdate != agg.updateSeq {
+		acc.seenUpdate = agg.updateSeq
+		if ip != "" {
+			acc.ip = ip
 		}
-		group.includeAttempt(attempt)
+		if host != "" {
+			acc.host = host
+		}
 	}
-	return groups
-}
-
-func (g *mtrHopGroup) includeAttempt(attempt Hop) {
-	g.count++
-	if g.geo == nil && attempt.Geo != nil {
-		g.geo = attempt.Geo
+	if attempt.Geo != nil && acc.geoUpdate != agg.updateSeq {
+		acc.geo = cloneMTRGeo(attempt.Geo)
+		acc.geoUpdate = agg.updateSeq
 	}
-	mergeMTRLabels(&g.mpls, attempt.MPLS)
+	acc.sent++
+	mergeMTRLabels(&acc.mplsSet, attempt.MPLS)
 	if !attempt.Success {
 		return
 	}
 
 	rttMs := float64(attempt.RTT) / float64(time.Millisecond)
-	g.sum += rttMs
-	g.sumSq += rttMs * rttMs
-	g.received++
-	g.last = rttMs
-	if rttMs > g.worst {
-		g.worst = rttMs
+	acc.sum += rttMs
+	acc.sumSq += rttMs * rttMs
+	acc.received++
+	acc.last = rttMs
+	if rttMs > acc.worst {
+		acc.worst = rttMs
 	}
-	if rttMs > 0 && rttMs < g.best {
-		g.best = rttMs
+	if rttMs >= 0 && rttMs < acc.best {
+		acc.best = rttMs
 	}
 }
 
-func (agg *MTRAggregator) accMapForTTLLocked(ttl int) map[string]*mtrHopAccum {
-	accMap := agg.stats[ttl]
-	if accMap == nil {
-		accMap = make(map[string]*mtrHopAccum)
-		agg.stats[ttl] = accMap
-	}
-	return accMap
-}
-
-func (agg *MTRAggregator) newHopAccum(ttl int, key string) *mtrHopAccum {
-	acc := &mtrHopAccum{
-		ttl:     ttl,
-		key:     key,
-		best:    math.MaxFloat64,
-		order:   agg.nextOrder,
-		mplsSet: make(map[string]struct{}),
-	}
-	agg.nextOrder++
-	return acc
-}
-
-func (agg *MTRAggregator) mergeGroupedHopLocked(ttl int, accMap map[string]*mtrHopAccum, key string, group *mtrHopGroup) {
-	acc := accMap[key]
-	if acc == nil {
-		acc = agg.newHopAccum(ttl, key)
-		accMap[key] = acc
-	}
-	mergeMTRHopGroupIntoAccum(acc, group)
-}
-
-func mergeMTRHopGroupIntoAccum(acc *mtrHopAccum, group *mtrHopGroup) {
-	if group.ip != "" {
-		acc.ip = group.ip
-	}
-	if group.host != "" {
-		acc.host = group.host
-	}
-	if group.geo != nil {
-		acc.geo = group.geo
-	}
-	acc.sent += group.count
-	if group.received > 0 {
-		acc.sum += group.sum
-		acc.sumSq += group.sumSq
-		acc.received += group.received
-		acc.last = group.last
-		if group.best > 0 && (acc.best == math.MaxFloat64 || group.best < acc.best) {
-			acc.best = group.best
-		}
-		if group.worst > acc.worst {
-			acc.worst = group.worst
+func mtrHopIdentityForAttempt(attempt Hop) (mtrHopIdentity, string, string) {
+	host := strings.TrimSpace(attempt.Hostname)
+	if ip := mtrAddrToIP(attempt.Address); ip != nil {
+		if addr, ok := netip.AddrFromSlice(ip); ok {
+			addr = addr.Unmap()
+			return mtrHopIdentity{kind: mtrHopIP, addr: addr}, host, addr.String()
 		}
 	}
-	mergeMTRLabelSet(acc.mplsSet, group.mpls)
+	if attempt.Address != nil {
+		network := strings.TrimSpace(attempt.Address.Network())
+		value := strings.TrimSpace(attempt.Address.String())
+		return mtrHopIdentity{kind: mtrHopFallback, network: network, value: value}, host, value
+	}
+	if host != "" {
+		return mtrHopIdentity{kind: mtrHopHost, value: strings.ToLower(host)}, host, ""
+	}
+	return mtrHopIdentity{kind: mtrHopUnknown}, "", ""
+}
+
+func parseMTRAddr(value string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(value))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
 }
 
 func mergeMTRHopAccum(dst, src *mtrHopAccum) {
@@ -133,7 +159,7 @@ func mergeMTRHopAccum(dst, src *mtrHopAccum) {
 		dst.sum += src.sum
 		dst.sumSq += src.sumSq
 		dst.last = src.last
-		if src.best > 0 && src.best < dst.best {
+		if src.best >= 0 && src.best < dst.best {
 			dst.best = src.best
 		}
 		if src.worst > dst.worst {
@@ -149,7 +175,7 @@ func mergeMTRHopAccum(dst, src *mtrHopAccum) {
 	if dst.ip == "" && src.ip != "" {
 		dst.ip = src.ip
 	}
-	mergeMTRLabelSet(dst.mplsSet, src.mplsSet)
+	mergeMTRLabelSet(&dst.mplsSet, src.mplsSet)
 }
 
 func mergeMTRLabels(dst *map[string]struct{}, labels []string) {
@@ -167,10 +193,27 @@ func mergeMTRLabels(dst *map[string]struct{}, labels []string) {
 	}
 }
 
-func mergeMTRLabelSet(dst, src map[string]struct{}) {
+func mergeMTRLabelSet(dst *map[string]struct{}, src map[string]struct{}) {
+	if len(src) == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = make(map[string]struct{}, len(src))
+	}
+	for label := range src {
+		(*dst)[label] = struct{}{}
+	}
+}
+
+func cloneMTRLabelSet(src map[string]struct{}) map[string]struct{} {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]struct{}, len(src))
 	for label := range src {
 		dst[label] = struct{}{}
 	}
+	return dst
 }
 
 func capMTRHopAccum(acc *mtrHopAccum, maxPerHop int) {
@@ -205,7 +248,7 @@ func capMTRHopAccum(acc *mtrHopAccum, maxPerHop int) {
 	acc.received = acc.sent
 }
 
-func buildMTRHopStat(acc *mtrHopAccum) MTRHopStat {
+func buildMTRHopStat(acc *mtrHopAccum, ttl int) MTRHopStat {
 	lossCount := acc.sent - acc.received
 	lossPct := 0.0
 	if acc.sent > 0 {
@@ -241,7 +284,7 @@ func buildMTRHopStat(acc *mtrHopAccum) MTRHopStat {
 	}
 
 	return MTRHopStat{
-		TTL:      acc.ttl,
+		TTL:      ttl,
 		Host:     acc.host,
 		IP:       acc.ip,
 		Loss:     lossPct,
@@ -255,4 +298,89 @@ func buildMTRHopStat(acc *mtrHopAccum) MTRHopStat {
 		MPLS:     mpls,
 		Received: acc.received,
 	}
+}
+
+func cloneMTRStats(src []MTRHopStat) []MTRHopStat {
+	if src == nil {
+		return nil
+	}
+	dst := make([]MTRHopStat, len(src))
+	for i, stat := range src {
+		dst[i] = stat
+		dst[i].Geo = cloneMTRGeo(stat.Geo)
+		if stat.MPLS != nil {
+			dst[i].MPLS = make([]string, len(stat.MPLS))
+			copy(dst[i].MPLS, stat.MPLS)
+		}
+		dst[i].Response = cloneMTRProbeResponse(stat.Response)
+	}
+	return dst
+}
+
+func cloneMTRGeo(src *ipgeo.IPGeoData) *ipgeo.IPGeoData {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	if src.Router != nil {
+		dst.Router = make(map[string][]string, len(src.Router))
+		for asn, route := range src.Router {
+			if route == nil {
+				dst.Router[asn] = nil
+				continue
+			}
+			dst.Router[asn] = make([]string, len(route))
+			copy(dst.Router[asn], route)
+		}
+	}
+	return &dst
+}
+
+// mergeUnknownIntoSingleKnown folds timeouts into the only observed path at a
+// TTL. With zero or multiple known paths, the unknown row stays independent.
+func mergeUnknownIntoSingleKnown(bucket *mtrTTLBucket) {
+	unknownIdentity := mtrHopIdentity{kind: mtrHopUnknown}
+	unknownIndex, ok := bucket.index[unknownIdentity]
+	if !ok || len(bucket.rows) != 2 {
+		return
+	}
+	knownIndex := 1 - unknownIndex
+	mergeMTRHopAccum(&bucket.rows[knownIndex], &bucket.rows[unknownIndex])
+	bucket.rows = append(bucket.rows[:unknownIndex], bucket.rows[unknownIndex+1:]...)
+	rebuildMTRBucketIndex(bucket)
+}
+
+func rebuildMTRBucketIndex(bucket *mtrTTLBucket) {
+	clear(bucket.index)
+	for i := range bucket.rows {
+		bucket.index[bucket.rows[i].identity] = i
+	}
+}
+
+func mtrBucketNeedsMetadataPatch(
+	bucket *mtrTTLBucket,
+	ip string,
+	targetAddr netip.Addr,
+	hasTargetAddr bool,
+	host string,
+	geo *ipgeo.IPGeoData,
+) bool {
+	if bucket == nil {
+		return false
+	}
+	for i := range bucket.rows {
+		acc := &bucket.rows[i]
+		if mtrAccumMatchesIP(acc, ip, targetAddr, hasTargetAddr) &&
+			((host != "" && acc.host == "") || (geo != nil && acc.geo == nil)) {
+			return true
+		}
+	}
+	return false
+}
+
+func mtrAccumMatchesIP(acc *mtrHopAccum, ip string, targetAddr netip.Addr, hasTargetAddr bool) bool {
+	if hasTargetAddr && acc.identity.kind == mtrHopIP {
+		return acc.identity.addr == targetAddr
+	}
+	return strings.TrimSpace(acc.ip) == ip
 }

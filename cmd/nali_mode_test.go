@@ -3,10 +3,13 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/akamensky/argparse"
+	"github.com/spf13/viper"
 )
 
 func TestRegisterNaliFlagWithAvailabilityEnabledAddsHelpEntry(t *testing.T) {
@@ -166,6 +169,43 @@ func TestRunNaliModeTargetWithDisableGeoIPKeepsOriginal(t *testing.T) {
 		t.Fatalf("runNaliMode() error = %v", err)
 	}
 	if got, want := out.String(), "A 8.8.8.8\n"; got != want {
+		t.Fatalf("runNaliMode() output = %q, want %q", got, want)
+	}
+}
+
+func TestRunNaliModeExplicitDN42ProviderBypassesReservedFilter(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	geoFeedPath := filepath.Join(dir, "geofeed.csv")
+	ptrPath := filepath.Join(dir, "ptr.csv")
+	if err := os.WriteFile(geoFeedPath, []byte("10.0.0.0/8,us,US,Test City,AS4242420001,Example Owner\n"), 0o600); err != nil {
+		t.Fatalf("write geofeed: %v", err)
+	}
+	if err := os.WriteFile(ptrPath, nil, 0o600); err != nil {
+		t.Fatalf("write ptr: %v", err)
+	}
+	previousGeoFeedPath := viper.Get("geoFeedPath")
+	previousPtrPath := viper.Get("ptrPath")
+	viper.Set("geoFeedPath", geoFeedPath)
+	viper.Set("ptrPath", ptrPath)
+	t.Cleanup(func() {
+		viper.Set("geoFeedPath", previousGeoFeedPath)
+		viper.Set("ptrPath", previousPtrPath)
+	})
+
+	var out bytes.Buffer
+	err := runNaliMode(context.Background(), naliRunOptions{
+		stdout:    &out,
+		data:      "DN42",
+		pow:       "api.nxtrace.org",
+		lang:      "en",
+		timeoutMs: 100,
+		target:    "router 10.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("runNaliMode() error = %v", err)
+	}
+	if got, want := out.String(), "router 10.0.0.1 [AS4242420001, United States, Test City, Example Owner]\n"; got != want {
 		t.Fatalf("runNaliMode() output = %q, want %q", got, want)
 	}
 }

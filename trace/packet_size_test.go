@@ -89,3 +89,30 @@ func TestDefaultPacketSizeMatchesMinimum(t *testing.T) {
 		t.Fatalf("DefaultPacketSize(TCPTrace, %v) = %d, want 64", ip, got)
 	}
 }
+
+func TestResolveProbePayloadSizeRange(t *testing.T) {
+	tests := []struct {
+		name           string
+		method         Method
+		ip             net.IP
+		maxPayloadSize int
+		minWant        int
+		maxWant        int
+		random         bool
+	}{
+		{name: "fixed IPv4 ICMP", method: ICMPTrace, ip: net.ParseIP("192.0.2.1"), maxPayloadSize: 24, minWant: 24, maxWant: 24},
+		{name: "random IPv4 ICMP", method: ICMPTrace, ip: net.ParseIP("192.0.2.1"), maxPayloadSize: 24, minWant: 0, maxWant: 24, random: true},
+		{name: "random IPv6 UDP", method: UDPTrace, ip: net.ParseIP("2001:db8::1"), maxPayloadSize: 16, minWant: 2, maxWant: 16, random: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for range 1000 {
+				got := resolveProbePayloadSize(tt.method, tt.ip, tt.maxPayloadSize, tt.random)
+				if got < tt.minWant || got > tt.maxWant {
+					t.Fatalf("resolveProbePayloadSize() = %d, want range [%d, %d]", got, tt.minWant, tt.maxWant)
+				}
+			}
+		})
+	}
+}

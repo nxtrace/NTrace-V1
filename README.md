@@ -205,9 +205,15 @@ Starting from this release, NextTrace is published in **three flavors** under th
 
 ### Manual Build
 
-Build from source with Go 1.26.5+ installed:
+Build from source with Go 1.27.1+ installed. Release-equivalent builds use
+`GOEXPERIMENT=nojsonv2`; the Go 1.27 default JSON runtime remains covered by CI,
+but its WebSocket encoding cost does not meet the release performance threshold.
+See the [JSON runtime ADR](docs/adr/0001-go127-json-runtime.md).
 
 ```bash
+export GOTOOLCHAIN=go1.27.1
+export GOEXPERIMENT=nojsonv2
+
 # Full (all features)
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
@@ -218,15 +224,18 @@ go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
 
-On macOS, source builds require Xcode Command Line Tools and cgo because TCP/UDP packet capture links against the system `libpcap`. For a native build, `go env CGO_ENABLED` must report `1`. If it reports `0`, remove any persistent override with `go env -u CGO_ENABLED`, ensure `xcode-select -p` succeeds, and build with `CGO_ENABLED=1`.
+On macOS, source builds require macOS 13.0 or later, Xcode Command Line Tools, and cgo because TCP/UDP packet capture links against the system `libpcap`. For a native build, `go env CGO_ENABLED` must report `1`. If it reports `0`, remove any persistent override with `go env -u CGO_ENABLED`, ensure `xcode-select -p` succeeds, and build with `CGO_ENABLED=1`.
 
 Cross-compile example:
 
 ```bash
 # Linux arm64, Tiny flavor
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+GOTOOLCHAIN=go1.27.1 GOEXPERIMENT=nojsonv2 \
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny_linux_arm64 -ldflags "-w -s" .
 ```
+
+Benchmark tooling is pinned in `go.mod`; compare saved results with `go tool benchstat before.txt after.txt`.
 
 The `tiny` and `ntr` flavors use **compile-time build tags** to exclude modules — this is not a runtime switch. You can verify with `go version -m <binary>` that `gin`, `globalping-cli`, and `github.com/natesales/q` are absent from `nexttrace-tiny` and `ntr`.
 
@@ -649,7 +658,7 @@ In MTR mode (`--mtr`, `-r`, `-w`, including `--raw`), `-i/--ttl-time` sets the *
 >
 > Note: `--mtr` cannot be used together with `--table`, `--classic`, `--json`, `--output`, `--output-default`, `--route-path`, `--from`, `--fast-trace`, `--file`, or `--deploy`.
 
-#### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`)
+#### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`, `DN42`)
 
 ##### LeoMoeAPI name migration
 
@@ -803,7 +812,7 @@ Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
                  [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
                  [--max-attempts <integer>] [--parallel-requests <integer>]
                  [-m|--max-hops <integer>] [-d|--data-provider
-                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip)]
+                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip|DN42|dn42)]
                  [--pow-provider (api.nxtrace.org|sakura)] [-n|--no-rdns]
                  [-a|--always-rdns] [-P|--route-path] [--dn42] [-o|--output
                  "<value>"] [-O|--output-default] [--table] [--raw]
@@ -858,7 +867,7 @@ Arguments:
   -d  --data-provider                Choose IP Geographic Data Provider
                                      [NextTrace-API, IP.SB, IPInfo, IPInsight,
                                      IP-API.com, IPInfoLocal, ipdb.one,
-                                     chunzhen, disable-geoip]. Default:
+                                     chunzhen, disable-geoip, DN42]. Default:
                                      NextTrace-API
       --pow-provider                 Choose PoW Provider for NextTrace API v3
                                      [api.nxtrace.org, sakura] For China

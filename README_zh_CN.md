@@ -206,9 +206,14 @@ Document Language: [English](README.md) | 简体中文
 
 ### 手动编译
 
-需要 Go 1.26.5+ 环境：
+需要 Go 1.27.1+ 环境。与正式发布一致的构建使用
+`GOEXPERIMENT=nojsonv2`；CI 仍覆盖 Go 1.27 默认 JSON 运行时，但其 WebSocket
+编码开销未达到发布性能门槛。详见 [JSON 运行时 ADR](docs/adr/0001-go127-json-runtime.md)。
 
 ```bash
+export GOTOOLCHAIN=go1.27.1
+export GOEXPERIMENT=nojsonv2
+
 # 完整版（所有功能）
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
@@ -219,15 +224,18 @@ go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 go build -tags flavor_ntr -trimpath -o dist/ntr -ldflags "-w -s" .
 ```
 
-macOS 源码编译需要 Xcode Command Line Tools 和 cgo，因为 TCP/UDP 抓包会链接系统 `libpcap`。原生编译时，`go env CGO_ENABLED` 必须输出 `1`；若输出 `0`，请用 `go env -u CGO_ENABLED` 清除持久化覆盖，确认 `xcode-select -p` 成功后，再以 `CGO_ENABLED=1` 编译。
+macOS 源码编译需要 macOS 13.0 或更高版本、Xcode Command Line Tools 和 cgo，因为 TCP/UDP 抓包会链接系统 `libpcap`。原生编译时，`go env CGO_ENABLED` 必须输出 `1`；若输出 `0`，请用 `go env -u CGO_ENABLED` 清除持久化覆盖，确认 `xcode-select -p` 成功后，再以 `CGO_ENABLED=1` 编译。
 
 交叉编译示例：
 
 ```bash
 # Linux arm64 精简版
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+GOTOOLCHAIN=go1.27.1 GOEXPERIMENT=nojsonv2 \
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny_linux_arm64 -ldflags "-w -s" .
 ```
+
+benchmark 工具已由 `go.mod` 固定版本；可用 `go tool benchstat before.txt after.txt` 比较保存的结果。
 
 `tiny` 和 `ntr` 版本通过 **编译期 build tags** 裁剪模块——不是运行时开关。可通过 `go version -m <binary>` 验证 `nexttrace-tiny` 和 `ntr` 中不包含 `gin`、`globalping-cli` 与 `github.com/natesales/q`。
 
@@ -641,7 +649,7 @@ raw stdout 契约仍严格保持 12 列。无限运行的 MTR 中，unreachable 
 >
 > 注意：`--mtr` 不可与 `--table`、`--classic`、`--json`、`--output`、`--output-default`、`--route-path`、`--from`、`--fast-trace`、`--file`、`--deploy` 同时使用。
 
-#### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`）
+#### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`, `DN42`）
 
 ##### LeoMoeAPI 名称迁移
 
@@ -779,7 +787,7 @@ Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
                  [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
                  [--max-attempts <integer>] [--parallel-requests <integer>]
                  [-m|--max-hops <integer>] [-d|--data-provider
-                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip)]
+                 (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip|DN42|dn42)]
                  [--pow-provider (api.nxtrace.org|sakura)] [-n|--no-rdns]
                  [-a|--always-rdns] [-P|--route-path] [--dn42] [-o|--output
                  "<value>"] [-O|--output-default] [--table] [--raw]
@@ -834,7 +842,7 @@ Arguments:
   -d  --data-provider                Choose IP Geographic Data Provider
                                      [NextTrace-API, IP.SB, IPInfo, IPInsight,
                                      IP-API.com, IPInfoLocal, ipdb.one,
-                                     chunzhen, disable-geoip]. Default:
+                                     chunzhen, disable-geoip, DN42]. Default:
                                      NextTrace-API
       --pow-provider                 Choose PoW Provider for NextTrace API v3
                                      [api.nxtrace.org, sakura] For China

@@ -40,6 +40,53 @@ func roundN(v float64, n int) float64 {
 	return math.Round(v*pow) / pow
 }
 
+func TestMTRAggregator_ZeroRTTBest(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		hops     []Hop
+		best     float64
+		avg      float64
+		received int
+	}{
+		{"zero_only", []Hop{mkHop(1, "127.0.0.1", 0)}, 0, 0, 1},
+		{"zero_then_positive", []Hop{mkHop(1, "127.0.0.1", 0), mkHop(1, "127.0.0.1", time.Millisecond)}, 0, 0.5, 2},
+		{"positive_then_zero", []Hop{mkHop(1, "127.0.0.1", time.Millisecond), mkHop(1, "127.0.0.1", 0)}, 0, 0.5, 2},
+		{"timeout_then_positive", []Hop{mkTimeoutHop(1), mkHop(1, "127.0.0.1", time.Millisecond)}, 1, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agg := NewMTRAggregator()
+			for _, hop := range tc.hops {
+				agg.Update(mkResult([]Hop{hop}), 1)
+			}
+			stats := agg.Snapshot()
+			if len(stats) != 1 {
+				t.Fatalf("stats = %+v, want one hop", stats)
+			}
+			got := stats[0]
+			if got.Best != tc.best || got.Avg != tc.avg || got.Received != tc.received {
+				t.Fatalf("Best/Avg/Received = %v/%v/%d, want %v/%v/%d", got.Best, got.Avg, got.Received, tc.best, tc.avg, tc.received)
+			}
+		})
+	}
+}
+
+func TestMTRAggregator_MigrateStats_PreservesZeroRTTBest(t *testing.T) {
+	agg := NewMTRAggregator()
+	agg.Update(mkResult(
+		[]Hop{mkHop(1, "127.0.0.1", time.Millisecond)},
+		[]Hop{mkHop(2, "127.0.0.1", 0)},
+	), 1)
+	agg.MigrateStats(2, 1, 0)
+	stats := agg.Snapshot()
+	if len(stats) != 1 {
+		t.Fatalf("stats = %+v, want one merged hop", stats)
+	}
+	got := stats[0]
+	if got.Best != 0 || got.Avg != 0.5 || got.Received != 2 {
+		t.Fatalf("merged Best/Avg/Received = %v/%v/%d, want 0/0.5/2", got.Best, got.Avg, got.Received)
+	}
+}
+
 func TestSinglePath(t *testing.T) {
 	agg := NewMTRAggregator()
 

@@ -2,8 +2,10 @@ package trace
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
@@ -159,6 +161,55 @@ func TestRunMTRRaw_ContextCancelStopsLoop(t *testing.T) {
 	if elapsed > 250*time.Millisecond {
 		t.Fatalf("cancel took unexpectedly long, elapsed=%v", elapsed)
 	}
+}
+
+func TestRunMTRRaw_RunRoundCancellationWaitsForCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		canceled := make(chan struct{})
+		releaseCleanup := make(chan struct{})
+		cleanupDone := make(chan struct{})
+		done := make(chan struct{})
+		var runErr error
+		go func() {
+			runErr = RunMTRRaw(ctx, ICMPTrace, Config{Context: context.Background()}, MTRRawOptions{
+				RunRound: func(_ Method, cfg Config) (*Result, error) {
+					defer close(cleanupDone)
+					<-cfg.Context.Done()
+					close(canceled)
+					<-releaseCleanup
+					return nil, cfg.Context.Err()
+				},
+			}, nil)
+			close(done)
+		}()
+		synctest.Wait()
+
+		cancel()
+		synctest.Wait()
+		select {
+		case <-canceled:
+		default:
+			t.Error("RunRound did not observe cancellation through cfg.Context")
+		}
+		select {
+		case <-done:
+			t.Errorf("RunMTRRaw returned before RunRound cleanup: %v", runErr)
+		default:
+		}
+
+		close(releaseCleanup)
+		<-done
+		if !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("RunMTRRaw error = %v, want context.Canceled", runErr)
+		}
+		select {
+		case <-cleanupDone:
+		default:
+			t.Fatal("RunMTRRaw returned without waiting for RunRound cleanup")
+		}
+	})
 }
 
 func TestRunMTRRaw_UsesRunRoundOverride(t *testing.T) {

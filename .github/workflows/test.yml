@@ -13,25 +13,36 @@ on:
       - main
     paths:
       - "**/*.go"
+      - "**/testdata/**"
       - "go.mod"
       - "go.sum"
+      - "default.pgo"
       - "nt_install.sh"
+      - ".cross_compile.sh"
       - "scripts/test_nt_install.sh"
+      - "scripts/perf/**"
       - ".github/workflows/*.yml"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - "**/*.go"
+      - "**/testdata/**"
       - "go.mod"
       - "go.sum"
+      - "default.pgo"
       - "nt_install.sh"
+      - ".cross_compile.sh"
       - "scripts/test_nt_install.sh"
+      - "scripts/perf/**"
       - ".github/workflows/*.yml"
   workflow_dispatch:
 
 jobs:
   test:
+    name: Default JSON (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      GOTOOLCHAIN: go1.27.1
     strategy:
       fail-fast: false
       matrix:
@@ -46,22 +57,26 @@ jobs:
       - name: Set up Go (built-in cache)
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.27.1'
           check-latest: true
           cache: true
 
       - name: Test with unix
         if: ${{ matrix.os != 'windows-latest' }}
         shell: bash
+        run: go test -v -covermode=count -coverprofile='coverage.out' ./...
+
+      - name: Test alternate flavors with unix
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
         run: |
-          sudo go env -w GOTOOLCHAIN=go1.26.5+auto
-          sudo go test -v -covermode=count -coverprofile='coverage.out' ./...
+          go test -tags flavor_tiny ./cmd ./server
+          go test -tags flavor_ntr ./cmd ./server
 
       - name: Verify q v0.19.12 adapter parity
         if: ${{ matrix.os == 'ubuntu-latest' }}
         shell: bash
         run: |
-          export GOTOOLCHAIN=go1.26.5+auto
           go mod download github.com/natesales/q@v0.19.12
           Q_SOURCE="$(go env GOMODCACHE)/github.com/natesales/q@v0.19.12"
           (cd "${Q_SOURCE}" && go build -trimpath -o "${RUNNER_TEMP}/q-v0.19.12" .)
@@ -76,8 +91,88 @@ jobs:
           sh -n nt_install.sh
           bash scripts/test_nt_install.sh
 
+      - name: Verify module state
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          go mod verify
+          go mod tidy -diff
+
+      - name: Run go vet
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: go vet ./...
+
+      - name: Test WebUI assets
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: node --test server/web/assets/*.test.cjs
+
+      - name: Check shell syntax
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          for script in .cross_compile.sh scripts/perf/*.sh; do
+            bash -n "${script}"
+          done
+
+      - name: Build all flavors on Linux
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          go build -buildvcs=false -trimpath -o "${RUNNER_TEMP}/nexttrace" .
+          go build -buildvcs=false -trimpath -tags flavor_tiny -o "${RUNNER_TEMP}/nexttrace-tiny" .
+          go build -buildvcs=false -trimpath -tags flavor_ntr -o "${RUNNER_TEMP}/ntr" .
+
       - name: Test with windows
         if: ${{ matrix.os == 'windows-latest' }}
+        run: go test -v -covermode=count -coverprofile="coverage.out" ./...
+
+      - name: Test tiny flavor with windows
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: go test -tags flavor_tiny ./cmd ./server
+
+      - name: Test ntr flavor with windows
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: go test -tags flavor_ntr ./cmd ./server
+
+  test-nojsonv2:
+    name: JSON compatibility (nojsonv2)
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: go1.27.1
+      GOEXPERIMENT: nojsonv2
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v7
+
+      - name: Set up Go (built-in cache)
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.1'
+          check-latest: true
+          cache: true
+
+      - name: Test with legacy JSON implementation
         run: |
-          go env -w GOTOOLCHAIN=go1.26.5+auto
-          go test -v -covermode=count -coverprofile="coverage.out" ./...
+          go test ./...
+          go test -tags flavor_tiny ./cmd ./server
+          go test -tags flavor_ntr ./cmd ./server
+
+  race:
+    name: Race detector (Ubuntu)
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: go1.27.1
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v7
+
+      - name: Set up Go (built-in cache)
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.1'
+          check-latest: true
+          cache: true
+
+      - name: Run race detector
+        run: go test -race -count=1 ./...

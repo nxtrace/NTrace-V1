@@ -1,0 +1,71 @@
+{
+  "iteration": 3,
+  "stats": [
+    {
+      "ttl": 1,
+      "host": "edge.example",
+      "ip": "192.0.2.1",
+      "loss_percent": 50,
+      "snt": 2,
+      "last_ms": 10,
+      "avg_ms": 10,
+      "best_ms": 10,
+      "wrst_ms": 10,
+      "stdev_ms": 0,
+      "mpls": [
+        "[MPLS: Lbl 100, TC 0, S 0, TTL 64]",
+        "[MPLS: Lbl 200, TC 0, S 1, TTL 63]"
+      ],
+      "received": 1
+    },
+    {
+      "ttl": 2,
+      "host": "core-a.example",
+      "ip": "198.51.100.1",
+      "loss_percent": 0,
+      "snt": 1,
+      "last_ms": 20,
+      "avg_ms": 20,
+      "best_ms": 20,
+      "wrst_ms": 20,
+      "stdev_ms": 0,
+      "received": 1
+    },
+    {
+      "ttl": 2,
+      "host": "core-b.example",
+      "ip": "198.51.100.2",
+      "loss_percent": 0,
+      "snt": 1,
+      "last_ms": 30,
+      "avg_ms": 30,
+      "best_ms": 30,
+      "wrst_ms": 30,
+      "stdev_ms": 0,
+      "received": 1
+    },
+    {
+      "ttl": 2,
+      "loss_percent": 100,
+      "snt": 1,
+      "last_ms": 0,
+      "avg_ms": 0,
+      "best_ms": 0,
+      "wrst_ms": 0,
+      "stdev_ms": 0,
+      "received": 0
+    },
+    {
+      "ttl": 3,
+      "ip": "2001:db8::3",
+      "loss_percent": 0,
+      "snt": 1,
+      "last_ms": 40,
+      "avg_ms": 40,
+      "best_ms": 40,
+      "wrst_ms": 40,
+      "stdev_ms": 0,
+      "received": 1
+    }
+  ]
+}

@@ -53,6 +53,10 @@ type ParamsFastTrace struct {
 	Dot             string
 	OutputPath      string
 	RuntimePrepared bool
+	DataProvider    string
+	IPGeoSource     ipgeo.Source
+	IPGeoDescriptor func() ipgeo.SourceDescriptor
+	DN42            bool
 }
 
 type IpListElement struct {
@@ -70,6 +74,38 @@ func resolveTraceMethod(traceMode trace.Method) trace.Method {
 	default:
 		return trace.ICMPTrace
 	}
+}
+
+func fastTraceGeoSource(params ParamsFastTrace) ipgeo.Source {
+	if params.IPGeoSource != nil {
+		return params.IPGeoSource
+	}
+	return trace.CachedGeoSource(ipgeo.GetSourceDescriptorWithGeoDNS(fastTraceDataProvider(params), params.Dot))
+}
+
+func fastTraceDataProvider(params ParamsFastTrace) string {
+	provider := strings.TrimSpace(params.DataProvider)
+	if provider == "" && params.DN42 {
+		return "DN42"
+	}
+	if provider == "" {
+		return ipgeo.NextTraceAPIProvider
+	}
+	return provider
+}
+
+func fastTraceDN42(params ParamsFastTrace) bool {
+	return params.DN42 || strings.EqualFold(strings.TrimSpace(params.DataProvider), "DN42")
+}
+
+func pinFastTraceGeoSource(params ParamsFastTrace) ParamsFastTrace {
+	if params.IPGeoSource != nil {
+		return params
+	}
+	descriptor := ipgeo.GetSourceDescriptorWithGeoDNS(fastTraceDataProvider(params), params.Dot)
+	params.IPGeoSource = trace.CachedGeoSource(descriptor)
+	params.IPGeoDescriptor = func() ipgeo.SourceDescriptor { return descriptor }
+	return params
 }
 
 func isContextStop(err error) bool {
@@ -125,7 +161,10 @@ var (
 )
 
 func openFastTraceWSIfNeeded(params ParamsFastTrace) func() {
-	if params.RuntimePrepared || ipgeo.NextTraceAPIV4TokenConfigured() {
+	provider := fastTraceDataProvider(params)
+	if params.RuntimePrepared ||
+		!ipgeo.IsNextTraceAPIProvider(provider) ||
+		ipgeo.NextTraceAPIV4TokenConfigured() {
 		return func() {}
 	}
 	w := initFastTraceWSFn(params.Context)
@@ -259,7 +298,8 @@ func buildFileTraceConfig(params ParamsFastTrace, tracerouteMethod trace.Method,
 		AlwaysWaitRDNS:   params.AlwaysWaitRDNS,
 		PacketInterval:   100,
 		TTLInterval:      500,
-		IPGeoSource:      ipgeo.GetSource(ipgeo.NextTraceAPIProvider),
+		IPGeoSource:      fastTraceGeoSource(params),
+		IPGeoDescriptor:  params.IPGeoDescriptor,
 		Timeout:          params.Timeout,
 		SrcAddr:          params.SrcAddr,
 		SourceDevice:     params.SrcDev,
@@ -267,6 +307,7 @@ func buildFileTraceConfig(params ParamsFastTrace, tracerouteMethod trace.Method,
 		RandomPacketSize: packetSizeSpec.Random,
 		TOS:              params.TOS,
 		Lang:             params.Lang,
+		DN42:             fastTraceDN42(params),
 	}, nil
 }
 
@@ -413,7 +454,8 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 		AlwaysWaitRDNS:   f.ParamsFastTrace.AlwaysWaitRDNS,
 		PacketInterval:   100,
 		TTLInterval:      500,
-		IPGeoSource:      ipgeo.GetSource(ipgeo.NextTraceAPIProvider),
+		IPGeoSource:      fastTraceGeoSource(f.ParamsFastTrace),
+		IPGeoDescriptor:  f.ParamsFastTrace.IPGeoDescriptor,
 		Timeout:          f.ParamsFastTrace.Timeout,
 		SrcAddr:          f.ParamsFastTrace.SrcAddr,
 		SourceDevice:     f.ParamsFastTrace.SrcDev,
@@ -421,6 +463,7 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 		RandomPacketSize: packetSizeSpec.Random,
 		TOS:              f.ParamsFastTrace.TOS,
 		Lang:             f.ParamsFastTrace.Lang,
+		DN42:             fastTraceDN42(f.ParamsFastTrace),
 	}
 	conf, err = normalizeFastTraceConfig(f.TracerouteMethod, conf)
 	if shouldStopFastTrace(err) {
@@ -447,6 +490,7 @@ func (f *FastTracer) tracert(location string, ispCollection ISPCollection) {
 }
 
 func FastTest(traceMode trace.Method, paramsFastTrace ParamsFastTrace) {
+	paramsFastTrace = pinFastTraceGeoSource(paramsFastTrace)
 	if paramsFastTrace.File != "" {
 		testFile(paramsFastTrace, traceMode)
 		return
@@ -476,6 +520,7 @@ func FastTest(traceMode trace.Method, paramsFastTrace ParamsFastTrace) {
 }
 
 func testFile(paramsFastTrace ParamsFastTrace, traceMode trace.Method) {
+	paramsFastTrace = pinFastTraceGeoSource(paramsFastTrace)
 	cleanupWS := openFastTraceWSIfNeeded(paramsFastTrace)
 	defer cleanupWS()
 

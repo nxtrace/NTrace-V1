@@ -1,6 +1,8 @@
 module github.com/nxtrace/NTrace-core
 
-go 1.26.5
+go 1.27.1
+
+tool golang.org/x/perf/cmd/benchstat
 
 require (
 	github.com/akamensky/argparse v1.4.0
@@ -13,8 +15,8 @@ require (
 	github.com/jedisct1/go-dnsstamps v0.0.0-20251112173516-191fc465df31
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/jsdelivr/globalping-cli v1.5.1
-	github.com/mattn/go-runewidth v0.0.27
-	github.com/miekg/dns v1.1.72
+	github.com/mattn/go-runewidth v0.0.28
+	github.com/miekg/dns v1.1.73
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/natesales/q v0.19.12
 	github.com/oschwald/maxminddb-golang v1.13.1
@@ -22,7 +24,7 @@ require (
 	github.com/rodaine/table v1.3.1
 	github.com/spf13/viper v1.21.0
 	github.com/sthorne/odoh-go v1.0.4
-	github.com/stretchr/testify v1.12.0
+	github.com/stretchr/testify v1.12.1
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635
 	github.com/tidwall/gjson v1.19.0
 	github.com/tsosunchia/powclient v0.3.0
@@ -36,6 +38,7 @@ require (
 
 require (
 	github.com/AdguardTeam/golibs v0.35.9 // indirect
+	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
 	github.com/ameshkov/dnsstamps v1.0.3 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
@@ -92,14 +95,14 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
-	golang.org/x/oauth2 v0.35.0 // indirect
+	golang.org/x/exp v0.0.0-20260812173653-3d80eb74bc5b // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/perf v0.0.0-20260825160852-19be9d8e6c70 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

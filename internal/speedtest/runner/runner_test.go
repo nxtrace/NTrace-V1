@@ -19,6 +19,24 @@ import (
 	"github.com/nxtrace/NTrace-core/internal/speedtest/result"
 )
 
+func TestSortCandidatesKeepsHealthyRTTAndStableOrder(t *testing.T) {
+	candidates := []candidate{
+		{IP: "192.0.2.1", Status: "degraded", RTTMs: 20},
+		{IP: "192.0.2.2", Status: "ok", RTTMs: 10},
+		{IP: "192.0.2.3", Status: "ok", RTTMs: 10},
+		{IP: "192.0.2.4", Status: "degraded", RTTMs: 5},
+	}
+
+	sortCandidates(candidates)
+
+	want := []string{"192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.1"}
+	for i, ip := range want {
+		if candidates[i].IP != ip {
+			t.Fatalf("Candidates[%d].IP = %q, want %q", i, candidates[i].IP, ip)
+		}
+	}
+}
+
 func TestResolveLocalBindIPPrefersExplicitSource(t *testing.T) {
 	ip, err := resolveLocalBindIP(net.ParseIP("1.1.1.1"), "127.0.0.1", "missing0")
 	if err != nil {

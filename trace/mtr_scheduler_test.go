@@ -20,6 +20,7 @@ import (
 type mockTTLProber struct {
 	mu       sync.Mutex
 	probeFn  func(ctx context.Context, ttl int) (mtrProbeResult, error)
+	resetFn  func() error
 	resetCnt int32
 	closeCnt int32
 	probeCnt int32
@@ -39,6 +40,9 @@ func (m *mockTTLProber) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, 
 
 func (m *mockTTLProber) Reset() error {
 	atomic.AddInt32(&m.resetCnt, 1)
+	if m.resetFn != nil {
+		return m.resetFn()
+	}
 	return nil
 }
 
@@ -86,6 +90,9 @@ func TestScheduler_ResultBuildersUseBoundedHopCount(t *testing.T) {
 			}
 			if rt.maxHops != test.want {
 				t.Fatalf("rt.maxHops = %d, want %d", rt.maxHops, test.want)
+			}
+			if got := rt.knownFinalTTL.Load(); got != -1 {
+				t.Fatalf("knownFinalTTL = %d, want -1", got)
 			}
 
 			if got := len(rt.timeoutProbeResult(test.want).Hops); got != test.want {
@@ -1080,6 +1087,9 @@ func TestScheduler_AsyncMetadataSnapshotsBeforeGeoCompletes(t *testing.T) {
 }
 
 func TestScheduler_AsyncMetadataDedupesAndCachesByIP(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
 	var lookupCount int32
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
@@ -1102,11 +1112,11 @@ func TestScheduler_AsyncMetadataDedupesAndCachesByIP(t *testing.T) {
 		FillGeo:          true,
 		AsyncMetadata:    true,
 		BaseConfig: Config{
-			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+			IPGeoSource: CachedGeoSource(geoCacheTestDescriptor(func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
 				atomic.AddInt32(&lookupCount, 1)
 				time.Sleep(50 * time.Millisecond)
 				return &ipgeo.IPGeoData{Asnumber: "64513"}, nil
-			},
+			})),
 			Timeout: time.Second,
 		},
 	}, nil, nil)
@@ -1389,8 +1399,15 @@ func TestScheduler_AsyncMetadataUsesGeoCacheWithoutSourceLookup(t *testing.T) {
 	t.Cleanup(ClearCaches)
 
 	const ip = "8.8.8.82"
-	geoCache.Store(ip, &ipgeo.IPGeoData{Asnumber: "CACHE"})
 	var lookupCount int32
+	geoSource := CachedGeoSource(geoCacheTestDescriptor(func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+		atomic.AddInt32(&lookupCount, 1)
+		return &ipgeo.IPGeoData{Asnumber: "CACHE"}, nil
+	}))
+	if _, err := geoSource(ip, time.Second, "", false); err != nil {
+		t.Fatalf("seed geo cache: %v", err)
+	}
+	atomic.StoreInt32(&lookupCount, 0)
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			return mtrProbeResult{
@@ -1413,11 +1430,8 @@ func TestScheduler_AsyncMetadataUsesGeoCacheWithoutSourceLookup(t *testing.T) {
 		FillGeo:          true,
 		AsyncMetadata:    true,
 		BaseConfig: Config{
-			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
-				atomic.AddInt32(&lookupCount, 1)
-				return nil, errors.New("should use cache")
-			},
-			Timeout: time.Second,
+			IPGeoSource: geoSource,
+			Timeout:     time.Second,
 		},
 	}, nil, nil)
 	if err != nil {
@@ -1583,6 +1597,121 @@ func TestScheduler_ResetCancelsMetadataGeneration(t *testing.T) {
 	if len(rt.metadataGeoInFlight) != 0 || len(rt.metadataHostInFlight) != 0 {
 		t.Fatalf("metadata in-flight after reset: geo=%d host=%d, want 0",
 			len(rt.metadataGeoInFlight), len(rt.metadataHostInFlight))
+	}
+}
+
+func TestScheduler_ResetRefreshesSourceAfterInvalidatingOldWork(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	var proberReset atomic.Bool
+	prober := &mockTTLProber{
+		resetFn: func() error {
+			proberReset.Store(true)
+			return nil
+		},
+	}
+	var sourceGeneration atomic.Int32
+	sourceGeneration.Store(1)
+	var sourceCalls atomic.Int32
+	var refreshCalls atomic.Int32
+	resetRequested := true
+	var rt *mtrSchedulerRuntime
+	var oldGenerationCtx context.Context
+
+	rt, err := newMTRSchedulerRuntime(context.Background(), prober, NewMTRAggregator(), mtrSchedulerConfig{
+		BeginHop:         1,
+		MaxHops:          1,
+		HopInterval:      time.Millisecond,
+		ParallelRequests: 1,
+		ProgressThrottle: time.Millisecond,
+		FillGeo:          true,
+		IsResetRequested: func() bool {
+			requested := resetRequested
+			resetRequested = false
+			return requested
+		},
+		BaseConfig: Config{
+			DN42: true,
+			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+				sourceCalls.Add(1)
+				if sourceGeneration.Load() == 1 {
+					return &ipgeo.IPGeoData{Asnumber: "OLD"}, nil
+				}
+				return &ipgeo.IPGeoData{Asnumber: "NEW"}, nil
+			},
+			RefreshIPGeoSource: func() {
+				refreshCalls.Add(1)
+				if oldGenerationCtx.Err() == nil {
+					t.Error("source refreshed before canceling the old metadata context")
+				}
+				if rt.generationCtx != oldGenerationCtx {
+					t.Error("new metadata context published before source refresh completed")
+				}
+				if proberReset.Load() {
+					t.Error("prober reset before source refresh")
+				}
+				sourceGeneration.Store(2)
+			},
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("newMTRSchedulerRuntime error: %v", err)
+	}
+	oldGenerationCtx = rt.generationCtx
+	rt.inFlight = 1
+	rt.states[1].inFlightCount = 1
+	rt.handleReset()
+
+	if oldGenerationCtx.Err() == nil {
+		t.Fatal("reset did not cancel the previous metadata generation")
+	}
+	if rt.generationCtx == oldGenerationCtx || rt.generationCtx.Err() != nil {
+		t.Fatal("reset did not publish a fresh metadata context after cleanup")
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("source refresh calls = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&prober.resetCnt); got != 1 {
+		t.Fatalf("prober reset calls = %d, want 1", got)
+	}
+
+	rt.processResult(mtrCompletedProbe{
+		ttl: 1,
+		gen: 0,
+		result: mtrProbeResult{
+			TTL:     1,
+			Success: true,
+			Addr:    &net.IPAddr{IP: net.ParseIP("172.20.0.4")},
+			RTT:     time.Millisecond,
+			Geo:     &ipgeo.IPGeoData{Asnumber: "STALE"},
+		},
+	})
+	if stats := rt.agg.Snapshot(); len(stats) != 0 {
+		t.Fatalf("old-generation probe survived reset: %+v", stats)
+	}
+	if got := sourceCalls.Load(); got != 0 {
+		t.Fatalf("old-generation probe triggered %d source calls, want 0", got)
+	}
+
+	rt.inFlight = 1
+	rt.states[1].inFlightCount = 1
+	rt.processResult(mtrCompletedProbe{
+		ttl: 1,
+		gen: rt.generation,
+		result: mtrProbeResult{
+			TTL:     1,
+			Success: true,
+			Addr:    &net.IPAddr{IP: net.ParseIP("172.20.0.4")},
+			RTT:     time.Millisecond,
+		},
+	})
+	stats := rt.agg.Snapshot()
+	if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "NEW" {
+		t.Fatalf("post-reset stats = %+v, want refreshed NEW metadata", stats)
+	}
+	if got := sourceCalls.Load(); got != 1 {
+		t.Fatalf("post-reset source calls = %d, want 1", got)
 	}
 }
 
@@ -1974,6 +2103,18 @@ func TestLookupMTRMetadataDN42BypassesRFCFilter(t *testing.T) {
 }
 
 func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T) {
+	ClearCaches()
+	t.Cleanup(ClearCaches)
+
+	var lookupCount atomic.Int32
+	slowSource := func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
+		if lookupCount.Add(1) == 1 {
+			time.Sleep(timeout)
+			return nil, context.DeadlineExceeded
+		}
+		return &ipgeo.IPGeoData{Asnumber: "64514"}, nil
+	}
+	descriptor := geoCacheTestDescriptor(slowSource)
 	prober := &mockTTLProber{
 		probeFn: func(_ context.Context, ttl int) (mtrProbeResult, error) {
 			return mtrProbeResult{
@@ -1985,8 +2126,9 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 		},
 	}
 
+	agg := NewMTRAggregator()
 	start := time.Now()
-	err := runMTRScheduler(context.Background(), prober, NewMTRAggregator(), mtrSchedulerConfig{
+	err := runMTRScheduler(context.Background(), prober, agg, mtrSchedulerConfig{
 		BeginHop:         1,
 		MaxHops:          1,
 		HopInterval:      time.Millisecond,
@@ -1996,11 +2138,10 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 		FillGeo:          true,
 		AsyncMetadata:    true,
 		BaseConfig: Config{
-			IPGeoSource: func(ip string, timeout time.Duration, lang string, maptrace bool) (*ipgeo.IPGeoData, error) {
-				time.Sleep(geoTimeoutForAttempt(0) + time.Second)
-				return &ipgeo.IPGeoData{Asnumber: "64514"}, nil
-			},
-			Timeout: 80 * time.Millisecond,
+			NumMeasurements: 1,
+			IPGeoSource:     slowSource,
+			IPGeoDescriptor: func() ipgeo.SourceDescriptor { return descriptor },
+			Timeout:         80 * time.Millisecond,
 		},
 	}, nil, nil)
 	if err != nil {
@@ -2013,7 +2154,14 @@ func TestScheduler_AsyncMetadataNaturalCompletionUsesBoundedContext(t *testing.T
 		t.Fatalf("runMTRScheduler elapsed = %s, want metadata timeout floor near %s", elapsed, floor)
 	}
 	if elapsed > floor+2*time.Second {
-		t.Fatalf("runMTRScheduler elapsed = %s, want async metadata bounded near slow source completion", elapsed)
+		t.Fatalf("runMTRScheduler elapsed = %s, want async metadata bounded near first timeout and immediate retry", elapsed)
+	}
+	if got := lookupCount.Load(); got != 2 {
+		t.Fatalf("geo lookup count = %d, want one timed-out attempt and one successful retry", got)
+	}
+	stats := agg.Snapshot()
+	if len(stats) != 1 || stats[0].Geo == nil || stats[0].Geo.Asnumber != "64514" {
+		t.Fatalf("final metadata = %+v, want successful retry before natural completion", stats)
 	}
 }
 

@@ -16,7 +16,7 @@ func FormatMTRRawLine(rec trace.MTRRawRecord) string {
 	}
 
 	rtt := ""
-	if rec.RTTMs > 0 {
+	if rec.RTTMs > 0 || (rec.Success && rec.RTTMs == 0) {
 		rtt = fmt.Sprintf("%.2f", rec.RTTMs)
 	}
 

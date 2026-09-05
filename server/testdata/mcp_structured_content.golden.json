@@ -1,0 +1,87 @@
+[
+  {
+    "tool": "nexttrace_traceroute",
+    "structured_content": {
+      "data_provider": "",
+      "duration_ms": 0,
+      "hops": null,
+      "language": "",
+      "parameters": {
+        "supported": null
+      },
+      "protocol": "icmp",
+      "resolved_ip": "93.184.216.34",
+      "stop_reason": {
+        "hop": 4,
+        "reason": "destination_reached"
+      },
+      "target": "example.com"
+    }
+  },
+  {
+    "tool": "nexttrace_mtr_report",
+    "structured_content": {
+      "duration_ms": 0,
+      "parameters": {
+        "supported": null
+      },
+      "path_end": {
+        "hop": 4,
+        "reason": "destination_reached"
+      },
+      "protocol": "icmp",
+      "resolved_ip": "93.184.216.34",
+      "stats": [
+        {
+          "avg_ms": 0,
+          "best_ms": 0,
+          "geo": {
+            "asnumber": "",
+            "city": "",
+            "city_en": "",
+            "country": "",
+            "country_en": "",
+            "district": "",
+            "domain": "",
+            "ip": "",
+            "isp": "",
+            "lat": 0,
+            "lng": 0,
+            "owner": "",
+            "prefix": "",
+            "prov": "",
+            "prov_en": "",
+            "router": {},
+            "source": "",
+            "whois": ""
+          },
+          "last_ms": 0,
+          "loss_percent": 0,
+          "received": 0,
+          "snt": 0,
+          "stdev_ms": 0,
+          "ttl": 1,
+          "wrst_ms": 0
+        }
+      ],
+      "target": "example.com"
+    }
+  },
+  {
+    "tool": "nexttrace_mtr_raw",
+    "structured_content": {
+      "duration_ms": 0,
+      "parameters": {
+        "supported": null
+      },
+      "path_end": {
+        "hop": 3,
+        "reason": "unreachable"
+      },
+      "protocol": "icmp",
+      "records": null,
+      "resolved_ip": "93.184.216.34",
+      "target": "example.com"
+    }
+  }
+]
