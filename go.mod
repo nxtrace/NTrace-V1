@@ -16,7 +16,7 @@ require (
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/jsdelivr/globalping-cli v1.5.1
 	github.com/mattn/go-runewidth v0.0.28
-	github.com/miekg/dns v1.1.72
+	github.com/miekg/dns v1.1.73
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/natesales/q v0.19.12
 	github.com/oschwald/maxminddb-golang v1.13.1
@@ -103,7 +103,6 @@ require (
 	golang.org/x/perf v0.0.0-20260825160852-19be9d8e6c70 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
