@@ -8,6 +8,8 @@ For every tool, respect the returned or documented `parameters.supported`, `para
 
 Deploy/MCP local probe limits are fixed: `max_hops <= 255`, effective `begin_hop` within `1..max_hops`, and `parallel_requests <= 256`. Normal traceroute and MTU allow at most 63 `queries` per hop; normal traceroute also allows at most 63 effective `max_attempts`, including `NEXTTRACE_MAXATTEMPTS` inheritance. Nonpositive values keep their existing defaults. Excessive values are rejected before DNS or probe initialization, not clamped. MTR ignores `queries` and `max_attempts`; its existing `max_per_hop` and `duration_ms` semantics remain unchanged. These limits do not change ordinary CLI execution.
 
+Deploy login bodies are limited to 8 KiB across JSON and form encodings; oversized bodies return HTTP 413 without a cookie. HTTP request headers must arrive within 5 seconds, the complete request within 30 seconds, and idle keep-alive connections expire after 60 seconds. These are input/idle deadlines, not MCP job durations; no global response write timeout is imposed.
+
 ## Tools
 
 ### `nexttrace_capabilities`

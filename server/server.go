@@ -95,7 +95,7 @@ func RunWithOptions(opts Options, onReady func(net.Addr)) error {
 		router.DELETE("/mcp", mcpHandler)
 	}
 
-	srv := &http.Server{Addr: listenAddr, Handler: router}
+	srv := newHTTPServer(listenAddr, router)
 	listener, err := listenHTTP(listenAddr)
 	if err != nil {
 		return err
@@ -120,6 +120,17 @@ func RunWithOptions(opts Options, onReady func(net.Addr)) error {
 	}
 
 	return nil
+}
+
+func newHTTPServer(listenAddr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr: listenAddr, Handler: handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		// Responses may contain long-running MCP/MTR jobs.
+		WriteTimeout: 0,
+	}
 }
 
 func listenHTTP(listenAddr string) (net.Listener, error) {
