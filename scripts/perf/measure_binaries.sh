@@ -6,15 +6,28 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CALLER_DIR="${PWD}"
 RESULT_NAME="${1:-$(git -C "${ROOT_DIR}" rev-parse --short HEAD)}"
 RESULT_DIR="${PERF_RESULT_DIR:-${ROOT_DIR}/.cache/perf}"
-BUILD_DIR="$(mktemp -d)"
 PERF_LDFLAGS="${PERF_LDFLAGS:--s -w -buildid=}"
+REMOVE_BUILD_DIR=true
+
+if [[ -n "${PERF_BINARY_DIR:-}" ]]; then
+  BUILD_DIR="${PERF_BINARY_DIR}"
+  if [[ "${BUILD_DIR}" != /* ]]; then
+    BUILD_DIR="${CALLER_DIR}/${BUILD_DIR}"
+  fi
+  mkdir -p "${BUILD_DIR}"
+  REMOVE_BUILD_DIR=false
+else
+  BUILD_DIR="$(mktemp -d)"
+fi
 
 if [[ "${RESULT_DIR}" != /* ]]; then
   RESULT_DIR="${CALLER_DIR}/${RESULT_DIR}"
 fi
 
 cleanup() {
-  rm -rf -- "${BUILD_DIR}"
+  if [[ "${REMOVE_BUILD_DIR}" == true ]]; then
+    rm -rf -- "${BUILD_DIR}"
+  fi
 }
 trap cleanup EXIT
 

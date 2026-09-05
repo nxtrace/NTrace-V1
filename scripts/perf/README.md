@@ -50,3 +50,37 @@ scripts/perf/measure_help_startup.sh go127 \
   nexttrace-tiny /path/to/nexttrace-tiny \
   ntr /path/to/ntr
 ```
+
+## Default PGO evaluation
+
+Generate a 30-second candidate profile from three equally timed deterministic
+workloads. They cover the protocol decoders, fake-prober MTR aggregation with a
+fake Geo provider and JSON output, and WebSocket JSON encode/decode:
+
+```sh
+scripts/perf/generate_pgo_profile.sh candidate
+```
+
+Compare `-pgo=off` with the candidate using ten one-second samples. The
+`workload` files contain only the three equally weighted profile workloads; the
+`guardrail` files contain the individual critical paths:
+
+```sh
+scripts/perf/run_pgo_benchmarks.sh pgo-off off
+scripts/perf/run_pgo_benchmarks.sh pgo-on .cache/perf/candidate.candidate.pgo
+go tool benchstat .cache/perf/pgo-off.workload.bench.txt .cache/perf/pgo-on.workload.bench.txt
+go tool benchstat .cache/perf/pgo-off.guardrail.bench.txt .cache/perf/pgo-on.guardrail.bench.txt
+```
+
+The scripts fix `GOEXPERIMENT=nojsonv2`, `GOMAXPROCS=10`, and seed `20260905`
+by default. If a threshold is crossed without statistical confidence, rerun
+both sides with `BENCH_COUNT=20`.
+
+Set `PERF_BINARY_DIR` to keep the exact binaries built by
+`measure_binaries.sh` for startup and RSS comparison:
+
+```sh
+GOFLAGS=-pgo=off PERF_BINARY_DIR=.cache/perf/pgo-off-bin scripts/perf/measure_binaries.sh pgo-off
+GOFLAGS=-pgo=$PWD/.cache/perf/candidate.candidate.pgo \
+  PERF_BINARY_DIR=.cache/perf/pgo-on-bin scripts/perf/measure_binaries.sh pgo-on
+```
