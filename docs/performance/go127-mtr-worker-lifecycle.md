@@ -23,7 +23,7 @@ CLI flags、输出、JSON schema、MTR 统计、协议包布局、导出 API 和
 | 项目 | 值 |
 | --- | --- |
 | parent | `74546d01fe4c50ae3da0dbd1215398017faf955e` |
-| benchmark/profile source head | `97439fe664934dbe00bdffb06bcb318759409fa1` |
+| exact measured code head | `7be9fe5812f17d8a4dd10f40d1c21210cc26e462` |
 | 主机 | Apple M5，10 核，32 GB 内存，AC 供电 |
 | 系统 | macOS 26.6.2，darwin/arm64 |
 | 工具链 | Go 1.27.1，`GOEXPERIMENT=nojsonv2` |
@@ -84,19 +84,21 @@ context 与 timeout。本轮保持该既有外部合同，不宣称能回收违�
 
 ## Benchmark
 
-parent/source head 先使用完整 Go 1.27.1 `nojsonv2` harness 各顺序运行 10 次。MTR 聚合器时间
-指标在长跑中出现约 1%--2% 的同向漂移，因此按门槛规则独立补到 20 次；最终结果如下：
+parent 与实现 head `97439fe` 先使用完整 Go 1.27.1 `nojsonv2` harness 各顺序运行 10 次。
+review 修复完成后，预编译 parent 与 exact head `7be9fe5` 的 trace test binary，并按奇偶轮交换
+先后顺序交替采样 20 次，避免长跑温度和执行顺序偏差。最终 exact-head 结果如下：
 
-| Benchmark | parent | source head | 变化 | B/op | allocs/op |
+| Benchmark | parent | exact head | benchstat | B/op | allocs/op |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| MTR Update 64x4 | 46.30 us | 46.61 us | +0.66% | 143,360 -> 143,360 | 834 -> 834 |
-| MTR Clone 64x4 | 438.6 ns | 437.0 ns | 不显著，`p=0.223` | 3,408 -> 3,408 | 4 -> 4 |
-| MTR Snapshot 64x4 | 6.472 us | 6.513 us | +0.63% | 49,152 -> 49,152 | 257 -> 257 |
-| MTR preview COW 64x4 | 12.15 us | 12.03 us | -0.96% | 97,008 -> 97,008 | 283 -> 283 |
-| geomean | 6.321 us | 6.320 us | -0.01% | 39,064 -> 39,064 | 124.8 -> 124.8 |
+| MTR Update 64x4 | 47.67 us | 48.05 us | 不显著，`p=0.529` | 143,360 -> 143,360 | 834 -> 834 |
+| MTR Clone 64x4 | 445.6 ns | 451.4 ns | 不显著，`p=0.387` | 3,408 -> 3,408 | 4 -> 4 |
+| MTR Snapshot 64x4 | 6.478 us | 6.654 us | 不显著，`p=0.242` | 49,152 -> 49,152 | 257 -> 257 |
+| MTR preview COW 64x4 | 12.16 us | 12.55 us | 不显著，`p=0.149` | 97,008 -> 97,008 | 283 -> 283 |
+| geomean | 6.396 us | 6.523 us | +1.98% | 39,064 -> 39,064 | 124.8 -> 124.8 |
 
-四项均在 1% 时间门槛内，分配完全不变。生命周期自身以取消、join、race 和 goroutine profile
-验证；现有 harness 没有执行真实网络 worker 生命周期的稳定微基准。
+四项在 20 次校准后均未检出显著时间差异，分配完全不变；geomean 只记录各项中位数的几何
+平均，不单独提供显著性判断。生命周期自身以取消、join、race 和 goroutine profile 验证；
+现有 harness 没有执行真实网络 worker 生命周期的稳定微基准。
 
 完整 harness 中未修改路径也出现纳秒级越线项，均补到 20 次：GeoFeed parse `+0.82%`、IPv4
 prefix-map `-5.89%`、MTU decoder 包级 geomean `+0.36%`、Geo HTTP client construct 无显著
@@ -107,24 +109,25 @@ miss 为 45.30 ns -> 46.26 ns（`+2.14%`），但 `trace/cache.go` 无 diff，`g
 
 ## Profile
 
-parent/source head 对相同 `BenchmarkMTRAggregatorSnapshot64TTL4Paths` 各采集 30 秒 CPU 与 heap
+parent/exact head 对相同 `BenchmarkMTRAggregatorSnapshot64TTL4Paths` 各采集 30 秒 CPU 与 heap
 profile：
 
-| 指标 | parent | source head |
+| 指标 | parent | exact head |
 | --- | ---: | ---: |
-| ns/op | 6.282 us | 6.292 us |
+| ns/op | 6.282 us | 6.694 us |
 | B/op | 49,152 | 49,152 |
 | allocs/op | 257 | 257 |
 
 两侧 CPU top 都由 Darwin runtime wait、GC 与系统调用构成，没有新增业务热点。heap alloc-space
-均全部归于 `trace.cloneMTRStats`；该 benchmark 不执行 session 生命周期，仅作全局交叉回归。
+均全部归于 `trace.cloneMTRStats`；profile 单次吞吐不用于性能门槛判断，该 benchmark 也不执行
+session 生命周期，仅作全局交叉回归。
 
 ## 产物大小与测试耗时
 
 Darwin arm64 产物使用 `-buildvcs=false -trimpath -ldflags '-s -w -buildid='`，并以相同
 UPX `--force-macos -9` 压缩：
 
-| Flavor | parent 未压缩 | source head 未压缩 | parent UPX | source head UPX |
+| Flavor | parent 未压缩 | exact head 未压缩 | parent UPX | exact head UPX |
 | --- | ---: | ---: | ---: | ---: |
 | nexttrace | 30,126,706 B | 30,143,250 B | 10,141,712 B | 10,141,712 B |
 | nexttrace-tiny | 11,050,018 B | 11,066,562 B | 4,259,856 B | 4,276,240 B |
@@ -133,8 +136,9 @@ UPX `--force-macos -9` 压缩：
 未压缩均增加 16,544 B；完整版 UPX 后不变，tiny/ntr UPX 后各增加 16,384 B。增长来自统一
 session 与 owner label 代码，没有新增依赖。
 
-同配置、预热缓存后的 `go test -count=1 ./...` 墙钟为 parent 24.21 秒、source head 23.87 秒；
-只记录完成成本，不解释为性能改善。
+同配置、预热缓存后的 `go test -count=1 ./...` 墙钟为 parent 24.21 秒、初始实现 head 23.87 秒；
+exact measured code head 另通过完整 default/nojsonv2、race 与跨平台门禁，只记录完成成本，不解释
+为性能改善。
 
 ## 平台风险与回退
 
