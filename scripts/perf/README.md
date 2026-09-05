@@ -53,9 +53,10 @@ scripts/perf/measure_help_startup.sh go127 \
 
 ## Default PGO evaluation
 
-Generate a 30-second candidate profile from three equally timed deterministic
-workloads. They cover the protocol decoders, fake-prober MTR aggregation with a
-fake Geo provider and JSON output, and WebSocket JSON encode/decode:
+Generate a 30-second candidate profile from one deterministic composite
+workload with three equally timed phases. It covers the protocol decoders,
+fake-prober MTR aggregation with a fake Geo provider and JSON output, and
+WebSocket JSON encode/decode:
 
 ```sh
 scripts/perf/generate_pgo_profile.sh candidate
