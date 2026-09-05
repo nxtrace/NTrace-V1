@@ -18,6 +18,7 @@ import (
 )
 
 func TestRESTTraceResponseGolden(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.JSON(http.StatusOK, traceResponse{

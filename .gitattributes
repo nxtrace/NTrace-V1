@@ -1,1 +1,2 @@
 *.golden.json text eol=lf
+*.golden.jsonl text eol=lf

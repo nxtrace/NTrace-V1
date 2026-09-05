@@ -7,6 +7,11 @@ if (( $# < 3 || $# % 2 == 0 )); then
   exit 2
 fi
 
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "error: startup and RSS measurement is supported on macOS only" >&2
+  exit 1
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CALLER_DIR="${PWD}"
 RESULT_NAME="$1"
