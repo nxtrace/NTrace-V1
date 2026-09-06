@@ -148,10 +148,13 @@ function Invoke-CommandWithTimeout {
     $stderrFile = "$OutFile.stderr"
     $scriptFile = "$OutFile.cmd"
     Remove-Item -Force -ErrorAction Ignore $OutFile, $stdoutFile, $stderrFile, $scriptFile
-    Set-Content -Path $scriptFile -Encoding Unicode -Value @(
+    # cmd.exe cannot execute UTF-16 batch files. Switch to UTF-8 before reading
+    # commands so paths containing non-ASCII characters also work.
+    [System.IO.File]::WriteAllLines($scriptFile, @(
         "@echo off"
+        "chcp 65001 >nul"
         $Command
-    )
+    ), [System.Text.UTF8Encoding]::new($false))
     $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/d", "/c", "`"$scriptFile`"" -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru -WindowStyle Hidden
     if (-not $proc.WaitForExit($Seconds * 1000)) {
         try {
