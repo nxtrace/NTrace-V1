@@ -6,6 +6,7 @@ const (
 	appBinName       = "nexttrace"
 	enableWebUI      = true
 	enableGlobalping = true
+	enableTraceroute = true
 	enableMTR        = true
 	enableMTU        = true
 	enableSpeed      = true

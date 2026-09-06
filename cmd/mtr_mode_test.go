@@ -1088,3 +1088,23 @@ func TestMTRInputParser_BracketedPasteCSISwallowed(t *testing.T) {
 		}
 	}
 }
+
+func TestMTRRawRetainsReportProbeDefault(t *testing.T) {
+	for _, tc := range []struct {
+		report, wide bool
+		want         int
+	}{
+		{false, false, 0},
+		{true, false, 10},
+		{false, true, 10},
+	} {
+		modes := deriveEffectiveMTRModes(true, tc.report, tc.wide, true)
+		if chooseMTRRunMode(modes.raw, modes.report) != mtrRunRaw {
+			t.Fatal("RAW should retain output precedence")
+		}
+		got, _ := deriveMTRProbeParams(modes.report, false, 3, false, 0)
+		if got != tc.want {
+			t.Fatalf("report=%v wide=%v: default probes=%d, want %d", tc.report, tc.wide, got, tc.want)
+		}
+	}
+}

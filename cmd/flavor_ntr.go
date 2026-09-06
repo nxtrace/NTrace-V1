@@ -6,6 +6,7 @@ const (
 	appBinName       = "ntr"
 	enableWebUI      = false
 	enableGlobalping = false
+	enableTraceroute = false
 	enableMTR        = true
 	enableMTU        = false
 	enableSpeed      = false

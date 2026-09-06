@@ -501,54 +501,61 @@ if (( ! IPV6_AVAILABLE )); then
   echo "ipv6_skip_reason=${IPV6_SKIP_REASON}"
 fi
 
-run_cmd icmp4_basic 'ICMP IPv4 basic trace' "\"${BIN}\" --no-color -q 1 -m 3 --timeout 1000 1.1.1.1"
-run_cmd tcp4_basic 'TCP IPv4 basic trace' "\"${BIN}\" --no-color -T -q 1 -m 3 --timeout 1000 1.1.1.1"
-run_cmd udp4_basic 'UDP IPv4 basic trace' "\"${BIN}\" --no-color -U -q 1 -m 3 --timeout 1000 1.1.1.1"
+run_cmd_check default_trace 'Default remains traditional traceroute' "\"${BIN}\" --no-color --data-provider disable-geoip -M -n -q 1 -m 1 --timeout 1000 1.1.1.1" 'hops max, .*ICMP mode' 'HOST:'
+run_cmd_check default_raw 'Bare RAW remains traditional' "\"${BIN}\" --no-color --raw --data-provider disable-geoip -M -n -q 1 -m 1 --timeout 1000 1.1.1.1" 'hops max, .*ICMP mode' 'HOST:'
+run_cmd_check traceroute_short 'Short traditional mode flag' "\"${BIN}\" -k --no-color --data-provider disable-geoip -M -n -q 1 -m 1 --timeout 1000 1.1.1.1" 'hops max, .*ICMP mode' 'HOST:'
+run_cmd_check traceroute_mtr_conflict 'Explicit modes conflict before probing' "\"${BIN}\" -k --mtr 1.1.1.1" 'cannot be combined' 'hops max|HOST:' '1'
+run_cmd icmp4_basic 'ICMP IPv4 basic trace' "\"${BIN}\" --traceroute --no-color -q 1 -m 3 --timeout 1000 1.1.1.1"
+run_cmd tcp4_basic 'TCP IPv4 basic trace' "\"${BIN}\" --traceroute --no-color -T -q 1 -m 3 --timeout 1000 1.1.1.1"
+run_cmd udp4_basic 'UDP IPv4 basic trace' "\"${BIN}\" --traceroute --no-color -U -q 1 -m 3 --timeout 1000 1.1.1.1"
 if (( IPV6_AVAILABLE )); then
-  run_cmd icmp6_basic 'ICMP IPv6 basic trace' "\"${BIN}\" --no-color -6 -q 1 -m 3 --timeout 1000 2606:4700:4700::1111"
-  run_cmd tcp6_basic 'TCP IPv6 basic trace' "\"${BIN}\" --no-color -6 -T -q 1 -m 3 --timeout 1000 2606:4700:4700::1111"
-  run_cmd udp6_basic 'UDP IPv6 basic trace' "\"${BIN}\" --no-color -6 -U -q 1 -m 3 --timeout 1000 2606:4700:4700::1111"
+  run_cmd icmp6_basic 'ICMP IPv6 basic trace' "\"${BIN}\" --traceroute --no-color -6 -q 1 -m 3 --timeout 1000 2606:4700:4700::1111"
+  run_cmd tcp6_basic 'TCP IPv6 basic trace' "\"${BIN}\" --traceroute --no-color -6 -T -q 1 -m 3 --timeout 1000 2606:4700:4700::1111"
+  run_cmd udp6_basic 'UDP IPv6 basic trace' "\"${BIN}\" --traceroute --no-color -6 -U -q 1 -m 3 --timeout 1000 2606:4700:4700::1111"
 else
   record_ipv6_skip icmp6_basic 'ICMP IPv6 basic trace'
   record_ipv6_skip tcp6_basic 'TCP IPv6 basic trace'
   record_ipv6_skip udp6_basic 'UDP IPv6 basic trace'
 fi
-run_cmd raw_output 'Raw hop rows' "\"${BIN}\" --no-color --raw -q 1 -m 2 --timeout 1000 1.1.1.1"
-run_cmd classic_output 'Classic printer' "\"${BIN}\" --no-color --classic -q 1 -m 2 --timeout 1000 1.1.1.1"
-run_cmd route_path 'Route-path summary' "\"${BIN}\" --no-color --route-path -q 1 -m 2 --timeout 1000 1.1.1.1"
-run_cmd provider_lang 'IP.SB + sakura + en' "\"${BIN}\" --no-color -q 1 -m 2 --timeout 1000 --data-provider IP.SB --pow-provider sakura --language en 1.1.1.1"
-run_cmd dot_resolver 'DoT resolver via aliyun' "\"${BIN}\" --no-color --dot-server aliyun -q 1 -m 1 --timeout 1000 ipv4.pek-4134.endpoint.nxtrace.org"
-run_cmd disable_geoip 'disable-geoip path' "\"${BIN}\" --no-color --data-provider disable-geoip -M -q 1 -m 2 --timeout 1000 1.1.1.1"
-run_cmd dn42_mode 'DN42 mode switch' "\"${BIN}\" --no-color --dn42 -q 1 -m 2 --timeout 1000 1.1.1.1"
-check_json_pure json_trace 'Traceroute JSON stdout purity' "\"${BIN}\" --no-color --json -q 1 -m 3 --timeout 1000 1.1.1.1"
+run_cmd raw_output 'Raw hop rows' "\"${BIN}\" --traceroute --no-color --raw -q 1 -m 2 --timeout 1000 1.1.1.1"
+run_cmd classic_output 'Classic printer' "\"${BIN}\" --traceroute --no-color --classic -q 1 -m 2 --timeout 1000 1.1.1.1"
+run_cmd route_path 'Route-path summary' "\"${BIN}\" --traceroute --no-color --route-path -q 1 -m 2 --timeout 1000 1.1.1.1"
+run_cmd provider_lang 'IP.SB + sakura + en' "\"${BIN}\" --traceroute --no-color -q 1 -m 2 --timeout 1000 --data-provider IP.SB --pow-provider sakura --language en 1.1.1.1"
+run_cmd dot_resolver 'DoT resolver via aliyun' "\"${BIN}\" --traceroute --no-color --dot-server aliyun -q 1 -m 1 --timeout 1000 ipv4.pek-4134.endpoint.nxtrace.org"
+run_cmd disable_geoip 'disable-geoip path' "\"${BIN}\" --traceroute --no-color --data-provider disable-geoip -M -q 1 -m 2 --timeout 1000 1.1.1.1"
+run_cmd dn42_mode 'DN42 mode switch' "\"${BIN}\" --traceroute --no-color --dn42 -q 1 -m 2 --timeout 1000 1.1.1.1"
+check_json_pure json_trace 'Traceroute JSON stdout purity' "\"${BIN}\" --traceroute --no-color --json -q 1 -m 3 --timeout 1000 1.1.1.1"
 check_json_pure json_mtu 'MTU JSON stdout purity' "\"${BIN}\" --no-color --mtu --json --timeout 1000 -q 1 -m 3 1.1.1.1"
-check_json_pure json_globalping 'Globalping JSON stdout purity' "\"${BIN}\" --no-color --json --from Germany -q 1 -m 3 --timeout 1000 1.1.1.1"
-check_no_clear_ansi table_non_tty 'Table output without clear-screen ANSI in non-TTY' "\"${BIN}\" --no-color --table -q 1 -m 2 --timeout 1000 1.1.1.1"
-check_output_file output_custom 'Custom output file path' "\"${BIN}\" --no-color -q 1 -m 2 --timeout 1000 -o \"${ART_ROOT}/custom.log\" 1.1.1.1" "${ART_ROOT}/custom.log"
-check_output_file output_default 'Default output file path' "TMPDIR=\"${DEFAULT_TMP_DIR}\" \"${BIN}\" --no-color -q 1 -m 2 --timeout 1000 -O 1.1.1.1" "${DEFAULT_LOG_PATH}"
+check_json_pure json_globalping 'Globalping JSON stdout purity' "\"${BIN}\" --traceroute --no-color --json --from Germany -q 1 -m 3 --timeout 1000 1.1.1.1"
+check_no_clear_ansi table_non_tty 'Table output without clear-screen ANSI in non-TTY' "\"${BIN}\" --traceroute --no-color --table -q 1 -m 2 --timeout 1000 1.1.1.1"
+check_output_file output_custom 'Custom output file path' "\"${BIN}\" --traceroute --no-color -q 1 -m 2 --timeout 1000 -o \"${ART_ROOT}/custom.log\" 1.1.1.1" "${ART_ROOT}/custom.log"
+check_output_file output_default 'Default output file path' "TMPDIR=\"${DEFAULT_TMP_DIR}\" \"${BIN}\" --traceroute --no-color -q 1 -m 2 --timeout 1000 -O 1.1.1.1" "${DEFAULT_LOG_PATH}"
 run_cmd mtu_text 'MTU text mode' "\"${BIN}\" --no-color --mtu --timeout 1000 -q 1 -m 3 1.1.1.1"
 check_mtu_tty_color mtu_tty_color 'MTU TTY colorized output' "\"${BIN}\" --mtu --timeout 1000 -q 1 -m 3 1.1.1.1"
 check_mtu_non_tty_plain mtu_non_tty_plain 'MTU non-TTY output has no ANSI' "\"${BIN}\" --mtu --timeout 1000 -q 1 -m 3 1.1.1.1"
 run_cmd mtr_report 'MTR report ICMP' "\"${BIN}\" --no-color -r -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1"
 run_cmd mtr_wide 'MTR wide + show-ips' "\"${BIN}\" --no-color -w --show-ips -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1"
 run_cmd mtr_raw 'MTR raw stream' "\"${BIN}\" --no-color -r --raw -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1"
-run_cmd fast_trace_file 'Fast trace via --file' "\"${BIN}\" --no-color --file \"${TARGETS}\" -q 1 -m 2 --timeout 1000"
+run_cmd fast_trace_file 'Fast trace via --file' "\"${BIN}\" --traceroute --no-color --file \"${TARGETS}\" -q 1 -m 2 --timeout 1000"
 run_cmd_check help_speed_main 'Main help exposes only top-level speed entry' "\"${BIN}\" --help" --speed --speed-provider
 run_cmd_check help_speed_detail 'Speed help is dedicated and detailed' "\"${BIN}\" --speed --help" --speed-provider 'hops max, .*ICMP mode'
 check_json_pure speed_apple_json 'Apple speed JSON path' "\"${BIN}\" --speed --json --no-metadata --non-interactive --max 64KiB --timeout 2000 --threads 2 --latency-count 2" '"provider":"apple"' '0,2'
 check_json_pure speed_cloudflare_json 'Cloudflare speed JSON path' "\"${BIN}\" --speed --speed-provider cloudflare --json --no-metadata --non-interactive --max 64KiB --timeout 2000 --threads 2 --latency-count 2" '"provider":"cloudflare"' '0,2'
-run_cmd tiny_smoke 'nexttrace-tiny smoke' "\"${TINY}\" --no-color -q 1 -m 2 --timeout 1000 1.1.1.1"
+run_cmd tiny_smoke 'nexttrace-tiny smoke' "\"${TINY}\" --traceroute --no-color -q 1 -m 2 --timeout 1000 1.1.1.1"
+run_cmd_check tiny_default 'Tiny default remains traditional' "\"${TINY}\" --no-color --data-provider disable-geoip -M -n -q 1 -m 1 --timeout 1000 1.1.1.1" 'hops max, .*ICMP mode' 'HOST:'
+run_cmd_check tiny_mtr_report 'Tiny finite MTR report' "\"${TINY}\" --no-color -r --data-provider disable-geoip -n -q 2 -i 300 --timeout 1000 -m 2 1.1.1.1" '^HOST:' 'hops max'
+run_cmd_check tiny_mtr_raw 'Tiny finite MTR RAW' "\"${TINY}\" --no-color --mtr --raw --data-provider disable-geoip -n -q 2 -i 300 --timeout 1000 -m 2 1.1.1.1" '^1\|' 'hops max'
 run_cmd ntr_report 'ntr report smoke' "\"${NTR}\" --no-color -r -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1"
 run_cmd_check tiny_speed_reject 'nexttrace-tiny rejects --speed' "\"${TINY}\" --speed" '--speed is not available' 'panic|goroutine [0-9]+|stack trace' '1'
 run_cmd_check ntr_speed_reject 'ntr rejects --speed' "\"${NTR}\" --speed" '--speed is not available' 'panic|goroutine [0-9]+|stack trace' '1'
 
-capture_psize_tos psize_tos_icmp4 'ICMPv4 psize/tos packet capture' '1.1.1.1' "\"${BIN}\" --no-color -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" 'tos 0x2e' 'length 84'
-capture_psize_tos psize_tos_udp4 'UDPv4 psize/tos packet capture' '1.1.1.1' "\"${BIN}\" --no-color -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" 'tos 0x2e' 'length 84'
-capture_psize_tos psize_tos_tcp4 'TCPv4 psize/tos packet capture' '1.1.1.1' "\"${BIN}\" --no-color -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" 'tos 0x2e' 'length 84'
+capture_psize_tos psize_tos_icmp4 'ICMPv4 psize/tos packet capture' '1.1.1.1' "\"${BIN}\" --traceroute --no-color -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" 'tos 0x2e' 'length 84'
+capture_psize_tos psize_tos_udp4 'UDPv4 psize/tos packet capture' '1.1.1.1' "\"${BIN}\" --traceroute --no-color -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" 'tos 0x2e' 'length 84'
+capture_psize_tos psize_tos_tcp4 'TCPv4 psize/tos packet capture' '1.1.1.1' "\"${BIN}\" --traceroute --no-color -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" 'tos 0x2e' 'length 84'
 if (( IPV6_AVAILABLE )); then
-  capture_psize_tos psize_tos_icmp6 'ICMPv6 psize/tos packet capture' '2606:4700:4700::1111' "\"${BIN}\" --no-color -6 -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" 'class 0x2e' 'payload length: 44'
-  capture_psize_tos psize_tos_udp6 'UDPv6 psize/tos packet capture' '2606:4700:4700::1111' "\"${BIN}\" --no-color -6 -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" 'class 0x2e' 'payload length: 44'
-  capture_psize_tos psize_tos_tcp6 'TCPv6 psize/tos packet capture' '2606:4700:4700::1111' "\"${BIN}\" --no-color -6 -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" 'class 0x2e' 'payload length: 44'
+  capture_psize_tos psize_tos_icmp6 'ICMPv6 psize/tos packet capture' '2606:4700:4700::1111' "\"${BIN}\" --traceroute --no-color -6 -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" 'class 0x2e' 'payload length: 44'
+  capture_psize_tos psize_tos_udp6 'UDPv6 psize/tos packet capture' '2606:4700:4700::1111' "\"${BIN}\" --traceroute --no-color -6 -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" 'class 0x2e' 'payload length: 44'
+  capture_psize_tos psize_tos_tcp6 'TCPv6 psize/tos packet capture' '2606:4700:4700::1111' "\"${BIN}\" --traceroute --no-color -6 -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" 'class 0x2e' 'payload length: 44'
 else
   record_ipv6_skip psize_tos_icmp6 'ICMPv6 psize/tos packet capture'
   record_ipv6_skip psize_tos_udp6 'UDPv6 psize/tos packet capture'

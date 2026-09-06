@@ -26,6 +26,10 @@
   </a>
 </p>
 
+## Default-mode migration: no earlier than 2027
+
+> **Downstream developers:** NextTrace will switch the default operating and display mode of `nexttrace` and `nexttrace-tiny` to MTR **no earlier than 2027**. Using `--raw` alone will switch to MTR RAW at the same time. Traditional traceroute and its RAW output will remain available through `-k/--traceroute`. Programs relying on today's behavior should adopt `--traceroute` or `--traceroute --raw` now. **This release does not change the default; the switching release will be announced separately.** `ntr` remains MTR-only.
+
 ## IAAS Sponsor
 
 <div style="text-align: center;">
@@ -185,10 +189,10 @@ Starting from this release, NextTrace is published in **three flavors** under th
 | DNS client (`-l` / `--dns`) |     ✅       |        —         |      —       |
 | CDN Speed (`--speed`) |         ✅         |        —         |      —       |
 | IP annotation (`--nali`) |       ✅       |        —         |      —       |
-| MTR TUI               |         ✅         |        —         | ✅ (default) |
-| MTR report (`-r`)     |         ✅         |        —         |      ✅      |
-| MTR wide (`-w`)       |         ✅         |        —         |      ✅      |
-| MTR raw (`--raw`)     |         ✅         |        —         |      ✅      |
+| MTR TUI               |         ✅         |        ✅         | ✅ (default) |
+| MTR report (`-r`)     |         ✅         |        ✅         |      ✅      |
+| MTR wide (`-w`)       |         ✅         |        ✅         |      ✅      |
+| MTR raw (`--raw`)     |         ✅         |        ✅         |      ✅      |
 | Globalping (`--from`) |         ✅         |        —         |      —       |
 | WebUI (`--deploy`) / MCP (`--deploy --mcp`) |        ✅         |        —         |      —       |
 | Fast Trace (`-F`)     |         ✅         |        ✅        |      —       |
@@ -200,7 +204,7 @@ Starting from this release, NextTrace is published in **three flavors** under th
 ### Feature Matrix
 
 - **`nexttrace`** — Full-featured build. Includes traceroute, the standalone DNS client and MTU modes, CDN speed test, IP annotation, MTR, Globalping, Fast Trace, WebUI, and deploy MCP.
-- **`nexttrace-tiny`** — Lightweight build. Keeps normal traceroute, standalone MTU, and Fast Trace. No DNS client / CDN speed test / IP annotation / MTR / Globalping / WebUI / MCP. Suitable for embedded or minimal environments.
+- **`nexttrace-tiny`** — Lightweight build. Keeps normal traceroute, standalone MTU, and Fast Trace. Includes optional MTR TUI, reports, and RAW. No DNS client / CDN speed test / IP annotation / Globalping / WebUI / MCP. Suitable for embedded or minimal environments.
 - **`ntr`** — MTR-focused build. Runs MTR TUI by default. No normal traceroute mode, standalone DNS client or `--mtu`, CDN speed test, IP annotation, Globalping, Fast Trace, WebUI, or MCP.
 
 ### Manual Build
@@ -217,7 +221,7 @@ export GOEXPERIMENT=nojsonv2
 # Full (all features)
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
-# Tiny (no DNS client, no MTR, no Globalping, no WebUI)
+# Tiny (optional MTR; no DNS client, no Globalping, no WebUI)
 go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 
 # NTR (MTR-only)
@@ -275,8 +279,10 @@ nexttrace http://example.com:8080/index.html?q=1
 # Table output (report mode): runs trace once and prints a final summary table
 nexttrace --table 1.0.0.1
 
-# Machine-readable output: stdout is a single JSON document
-nexttrace --raw 1.0.0.1
+# Machine-readable RAW output: pipe-delimited lines
+nexttrace --traceroute --raw 1.0.0.1
+
+# JSON output: stdout is a single JSON document
 nexttrace --json 1.0.0.1
 
 # Realtime trace output to a custom file
@@ -310,6 +316,45 @@ export NEXTTRACE_DISABLEMPLS=1
 Normal traceroute reports why it stopped: destination reached, a terminal unreachable response (including its marker), or the configured maximum hop count. `--json` keeps the existing top-level result shape and adds optional `StopReason` with lowercase nested fields `hop`, `reason`, `responses`, and `markers`; `responses` contains human-readable descriptions while `markers` contains machine-readable codes. Classic/raw/JSON modes do not receive an extra human-readable footer. `--output` writes the same plain stop line to the log without ANSI escapes.
 
 When multiple normal-trace output modes are selected, precedence is `--json` > `--table` > `--classic` > `--raw` > `--output` > realtime output. If a higher-priority mode overrides an explicit `--output` or `--output-default`, NextTrace reports that choice on stderr and does not create the ignored log file.
+
+#### Downstream migration and explicit traditional mode
+
+`-k/--traceroute` selects traditional traceroute in full and tiny builds; it is not an alias for the `--classic` layout. It supports existing traditional output formats, Fast Trace, and file targets; the full build also supports Globalping. Combining it with `--mtr/-t`, `--report/-r`, `--wide/-w`, or standalone DNS, MTU, speed, IP annotation, or deploy mode is an error.
+
+```bash
+nexttrace --traceroute example.com
+nexttrace -k example.com
+nexttrace --traceroute --raw example.com
+nexttrace --mtr --raw -q 10 example.com
+```
+
+| Invocation | Today | After the default switch |
+|---|---|---|
+| Target only | Traditional traceroute | MTR |
+| `--raw` | Traditional RAW | MTR RAW |
+| `--traceroute` | Traditional traceroute | Traditional traceroute |
+| `--traceroute --raw` | Traditional RAW | Traditional RAW |
+| `--json/--table/--classic/--output/--output-default/--route-path` | Traditional mode | Selects traditional mode automatically |
+
+Standalone entry points, Fast Trace, file targets, and Globalping (full build only) keep their workflows; `--json` in a standalone mode still belongs to that mode. Explicit MTR continues to reject traditional-only output formats.
+
+When `-q` is omitted, MTR TUI and `--mtr --raw` run continuously; `--report/-r` and `--wide/-w` default to 10 probes per hop, including when combined with `--raw`. Automation should set an explicit `-q`. In MTR, `-i` is the per-hop interval (default 1000ms) and `-z` is ignored. In traditional traceroute, `-q` defaults to 3 samples per hop, `-i` is the TTL-group interval (default 300ms), and `-z` is the packet interval (default 50ms).
+
+Do not distinguish the RAW modes by successful rows alone: traditional RAW uses 12 columns for success and preserves historical 8-column timeout rows; MTR RAW uses fixed 12-column data rows in a continuous event stream. Parsers must also honor each mode's existing information headers and stderr behavior. `NEXTTRACE_UNINTERRUPTED` retains its traditional loop behavior with `--traceroute --raw`.
+
+Bash wrappers supporting older releases can detect the capability before invoking a trace:
+
+```bash
+trace_mode=()
+nexttrace_help=$(nexttrace --help)
+if [[ "$nexttrace_help" == *"--traceroute"* ]]; then
+  trace_mode=(--traceroute)
+fi
+nexttrace "${trace_mode[@]}" --raw example.com
+```
+
+Omit the new flag on older releases. Do not retry a failed trace without the flag: that could run the measurement twice.
+
 
 PS: The route visualization module is an independent component, You can find its source code at [nxtrace/traceMap](https://github.com/nxtrace/traceMap).  
 The routing visualization function requires the geographical coordinates of each hop. It is currently available with NextTrace API, IPInfo, and IP-API.com.
@@ -524,7 +569,7 @@ export NO_COLOR=1
 
 | Flag | What it controls | Default / starting point | When to change it |
 | --- | --- | --- | --- |
-| `--queries` | Samples per hop in normal traceroute; explicit probe count per hop in MTR | traceroute: `3`; MTR report: `10` when omitted; MTR TUI/raw: unlimited when omitted | Raise to `5-10` on unstable paths |
+| `--queries` | Samples per hop in normal traceroute; explicit probe count per hop in MTR | traceroute: `3`; MTR report/wide (including RAW): `10` when omitted; otherwise MTR TUI/raw: unlimited when omitted | Raise to `5-10` on unstable paths |
 | `--max-attempts` | Hard cap on probe packets per hop | auto-sized from `--queries` | Raise on lossy links when replies arrive slowly |
 | `--parallel-requests` | Total in-flight probes across TTLs | `18` | Use `1` on multipath/load-balanced paths; keep `6-18` on stable links |
 | `--send-time` | Gap between packets inside one TTL group | `50ms` | Raise to `100-200ms` on rate-limited devices; ignored in MTR |
@@ -656,7 +701,7 @@ In MTR mode (`--mtr`, `-r`, `-w`, including `--raw`), `-i/--ttl-time` sets the *
 
 > Note: `--show-ips` only takes effect in MTR mode (`--mtr`, `-r`, `-w`); otherwise it is ignored.
 >
-> Note: `--mtr` cannot be used together with `--table`, `--classic`, `--json`, `--output`, `--output-default`, `--route-path`, `--from`, `--fast-trace`, `--file`, or `--deploy`.
+> Note: `--mtr` cannot be used together with `--traceroute`, `--table`, `--classic`, `--json`, `--output`, `--output-default`, `--route-path`, `--from`, `--fast-trace`, `--file`, or `--deploy`.
 
 #### `NextTrace` supports users to select their own IP API (currently supports: `NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`, `DN42`)
 
@@ -806,54 +851,51 @@ These q-compatible variables apply only to the standalone DNS client mode.
 
 ### For full usage list, please refer to the usage menu
 
+The following is full-build help on macOS; Windows also provides `--init` and `--icmp-mode`.
+
 ```shell
-Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
-                 [-U|--udp] [-l|--dns] [--speed] [--nali] [-F|--fast-trace]
-                 [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
-                 [--max-attempts <integer>] [--parallel-requests <integer>]
-                 [-m|--max-hops <integer>] [-d|--data-provider
+usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
+                 [--mtu] [-F|--fast-trace] [-p|--port <integer>] [-q|--queries
+                 <integer>] [--max-attempts <integer>] [--parallel-requests
+                 <integer>] [-m|--max-hops <integer>] [-d|--data-provider
                  (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip|DN42|dn42)]
                  [--pow-provider (api.nxtrace.org|sakura)] [-n|--no-rdns]
-                 [-a|--always-rdns] [-P|--route-path] [--dn42] [-o|--output
-                 "<value>"] [-O|--output-default] [--table] [--raw]
-                 [-j|--json] [-c|--classic] [-f|--first <integer>] [-M|--map]
-                 [-e|--disable-mpls] [-V|--version] [-x|--setup-api-v4-token]
+                 [-a|--always-rdns] [-k|--traceroute] [-P|--route-path]
+                 [-o|--output "<value>"] [-O|--output-default] [--table]
+                 [-j|--json] [-c|--classic] [--dn42] [--raw] [-f|--first
+                 <integer>] [-M|--map] [-e|--disable-mpls] [-V|--version]
+                 [-x|--setup-api-v4-token] [-l|--dns] [--speed] [--nali]
                  [-s|--source "<value>"] [--source-port <integer>] [-D|--dev
                  "<value>"] [--listen "<value>"] [--deploy-token "<value>"]
-                 [--mcp] [--deploy] [-z|--send-time <integer>]
-                 [-i|--ttl-time <integer>] [--timeout <integer>]
-                 [--psize <integer>] [--dot-server
+                 [--mcp] [--deploy] [-z|--send-time <integer>] [-i|--ttl-time
+                 <integer>] [--timeout <integer>] [--psize <integer>] [-Q|--tos
+                 <integer>] [--dot-server
                  (dnssb|aliyun|dnspod|google|cloudflare)] [-g|--language
                  (en|cn)] [-C|--no-color] [--from "<value>"] [-t|--mtr]
                  [-r|--report] [-w|--wide] [--show-ips] [-y|--ipinfo <integer>]
                  [--file "<value>"] [TARGET "<value>"]
 
+                 An open source visual route tracking CLI tool
+
 Arguments:
 
   -h  --help                         Print help information
-      --init                         Windows ONLY: Extract WinDivert runtime to
-                                     executable directory
-  -l  --dns                          Run DNS client mode. See `nexttrace --dns
-                                     --help` for details
-      --speed                        Run CDN speed test mode. See `nexttrace
-                                     --speed --help` for details
-      --nali                         Annotate IP literals in text using
-                                     NextTrace GeoIP data
   -4  --ipv4                         Use IPv4 only
   -6  --ipv6                         Use IPv6 only
   -T  --tcp                          Use TCP SYN for tracerouting (default
                                      dest-port is 80)
   -U  --udp                          Use UDP SYN for tracerouting (default
                                      dest-port is 33494)
+      --mtu                          Run standalone UDP path-MTU discovery mode
+                                     with streaming output and GeoIP/RDNS
   -F  --fast-trace                   One-Key Fast Trace to China ISPs
   -p  --port                         Set the destination port to use. With
                                      default of 80 for "tcp", 33494 for "udp"
-      --icmp-mode                    Windows ONLY: Choose the method to listen
-                                     for ICMP packets (1=Socket, 2=WinDivert;
-                                     0=Auto)
-  -q  --queries                      Latency samples per hop. Increase to 5-10
-                                     on unstable paths for a steadier view.
-                                     Default: 3
+  -q  --queries                      Traceroute: latency samples per hop
+                                     (default 3). MTR: max probes per hop. 0 =
+                                     unlimited in TUI/raw. When omitted: 10
+                                     with --report/--wide (including --raw),
+                                     otherwise unlimited
       --max-attempts                 Advanced: hard cap on probe packets per
                                      hop. Leave unset for auto sizing; raise on
                                      lossy links if --queries is not enough
@@ -877,28 +919,38 @@ Arguments:
                                      domain names
   -a  --always-rdns                  Always resolve IP addresses to their
                                      domain names
+  -k  --traceroute                   Use traditional traceroute mode; with
+                                     --raw, preserve traditional raw output
   -P  --route-path                   Print traceroute hop path by ASN and
                                      location
-      --dn42                         DN42 Mode
-  -o  --output                       Write trace result to FILE
-                                     (RealtimePrinter only)
-  -O  --output-default               Write trace result to the default log file
+  -o  --output                       Write realtime trace output and final stop
+                                     reason to FILE
+  -O  --output-default               Write realtime trace output and final stop
+                                     reason to the default log file
                                      (/tmp/trace.log)
       --table                        Output trace results as a final summary
                                      table (traceroute report mode)
-      --raw                          Machine-friendly output. With MTR
-                                     (--mtr/-r/-w), enables streaming raw event
-                                     mode
   -j  --json                         Output trace results as JSON
   -c  --classic                      Classic Output trace results like
                                      BestTrace
+      --dn42                         DN42 Mode
+      --raw                          Machine-friendly output; use --traceroute
+                                     --raw to preserve traditional raw output.
+                                     With MTR (--mtr/-r/-w), enables streaming
+                                     raw event mode
   -f  --first                        Start from the first_ttl hop (instead of
                                      1). Default: 1
   -M  --map                          Disable Print Trace Map
   -e  --disable-mpls                 Disable MPLS
   -V  --version                      Print version info and exit
   -x  --setup-api-v4-token           Store a session-only NextTrace API v4
-                                     token in a temporary file and exit
+                                     token in a temporary file
+  -l  --dns                          Run DNS client mode. See `nexttrace --dns
+                                     --help` for details
+      --speed                        Run CDN speed test mode. See `nexttrace
+                                     --speed --help` for details
+      --nali                         Annotate IP literals in text using
+                                     NextTrace GeoIP data
   -s  --source                       Use source address src_addr for outgoing
                                      packets
       --source-port                  Use source port src_port for outgoing
@@ -912,8 +964,7 @@ Arguments:
                                      127.0.0.1:30080)
       --deploy-token                 Set bearer token for --deploy
                                      WebUI/API/WebSocket/MCP access
-      --mcp                          Enable MCP endpoint under --deploy at
-                                     /mcp
+      --mcp                          Enable MCP endpoint under --deploy at /mcp
       --deploy                       Start the Gin powered web console
   -z  --send-time                    Advanced: per-packet gap [ms] inside the
                                      same TTL group. Lower is faster; raise to
@@ -929,10 +980,10 @@ Arguments:
                                      paths. Default: 1000
       --psize                        Probe packet size in bytes, inclusive IP
                                      and active probe headers. Default is the
-                                     minimum legal size for the chosen
-                                     protocol and IP family; raise for MTU or
+                                     minimum legal size for the chosen protocol
+                                     and IP family; raise for MTU or
                                      large-packet testing. Negative values
-                                     randomize each probe up to abs(value).
+                                     randomize each probe up to abs(value)
   -Q  --tos                          Set the IP type-of-service / traffic class
                                      value [0-255]. Default: 0
       --dot-server                   Use DoT Server for DNS Parse [dnssb,
