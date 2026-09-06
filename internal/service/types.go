@@ -56,13 +56,13 @@ type TraceRequest struct {
 	Target           string `json:"target" jsonschema:"Target domain, IP, or URL host to trace"`
 	Protocol         string `json:"protocol,omitempty" jsonschema:"Probe protocol: icmp, tcp, or udp"`
 	Port             int    `json:"port,omitempty" jsonschema:"Destination port for TCP/UDP probes"`
-	Queries          int    `json:"queries,omitempty" jsonschema:"Probe samples per hop"`
-	MaxHops          int    `json:"max_hops,omitempty" jsonschema:"Maximum TTL/hop count"`
+	Queries          int    `json:"queries,omitempty" jsonschema:"Probe samples per hop; maximum 63; nonpositive values use the default; ignored by MTR"`
+	MaxHops          int    `json:"max_hops,omitempty" jsonschema:"Maximum TTL/hop count; maximum 255; nonpositive values use the default"`
 	TimeoutMs        int    `json:"timeout_ms,omitempty" jsonschema:"Per-probe timeout in milliseconds"`
 	PacketSize       *int   `json:"packet_size,omitempty" jsonschema:"Packet size including IP and protocol headers"`
 	TOS              *int   `json:"tos,omitempty" jsonschema:"IPv4 TOS / IPv6 traffic class value 0-255"`
-	ParallelRequests int    `json:"parallel_requests,omitempty" jsonschema:"Maximum concurrent probes"`
-	BeginHop         int    `json:"begin_hop,omitempty" jsonschema:"First TTL to probe"`
+	ParallelRequests int    `json:"parallel_requests,omitempty" jsonschema:"Maximum concurrent probes; maximum 256; nonpositive values use the default"`
+	BeginHop         int    `json:"begin_hop,omitempty" jsonschema:"First TTL to probe; effective value must be within 1..max_hops; nonpositive values use the default"`
 	IPv4Only         bool   `json:"ipv4_only,omitempty" jsonschema:"Force IPv4 target resolution"`
 	IPv6Only         bool   `json:"ipv6_only,omitempty" jsonschema:"Force IPv6 target resolution"`
 	DataProvider     string `json:"data_provider,omitempty" jsonschema:"GeoIP provider name; use NextTrace-API for the official API"`
@@ -80,7 +80,7 @@ type TraceRequest struct {
 	ICMPMode         int    `json:"icmp_mode,omitempty" jsonschema:"Windows ICMP mode: 0 auto, 1 socket, 2 WinDivert"`
 	PacketInterval   int    `json:"packet_interval,omitempty" jsonschema:"Per-packet interval in milliseconds"`
 	TTLInterval      int    `json:"ttl_interval,omitempty" jsonschema:"TTL group interval in milliseconds"`
-	MaxAttempts      int    `json:"max_attempts,omitempty" jsonschema:"Hard cap on probe attempts per hop"`
+	MaxAttempts      int    `json:"max_attempts,omitempty" jsonschema:"Hard cap on probe attempts per hop; effective maximum 63 including environment defaults; ignored by MTR"`
 }
 
 type TraceResponse struct {
@@ -132,9 +132,9 @@ type MTRRawResponse struct {
 type MTUTraceRequest struct {
 	Target        string `json:"target" jsonschema:"Target domain or IP"`
 	Port          int    `json:"port,omitempty" jsonschema:"Destination UDP port"`
-	Queries       int    `json:"queries,omitempty" jsonschema:"Probe attempts per hop"`
-	MaxHops       int    `json:"max_hops,omitempty" jsonschema:"Maximum TTL/hop count"`
-	BeginHop      int    `json:"begin_hop,omitempty" jsonschema:"First TTL to probe"`
+	Queries       int    `json:"queries,omitempty" jsonschema:"Probe attempts per hop; maximum 63; nonpositive values use the default"`
+	MaxHops       int    `json:"max_hops,omitempty" jsonschema:"Maximum TTL/hop count; maximum 255; nonpositive values use the default"`
+	BeginHop      int    `json:"begin_hop,omitempty" jsonschema:"First TTL to probe; effective value must be within 1..max_hops; nonpositive values use the default"`
 	TimeoutMs     int    `json:"timeout_ms,omitempty" jsonschema:"Per-probe timeout in milliseconds"`
 	TTLIntervalMs int    `json:"ttl_interval_ms,omitempty" jsonschema:"TTL interval in milliseconds"`
 	IPv4Only      bool   `json:"ipv4_only,omitempty" jsonschema:"Force IPv4 target resolution"`

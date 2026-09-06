@@ -356,7 +356,7 @@ func serveTraceWebsocket(parent context.Context, conn traceWSConn) {
 		return
 	}
 
-	setup, statusCode, err := prepareTrace(session.ctx, req)
+	setup, statusCode, err := prepareWebsocketTrace(session.ctx, req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
@@ -405,6 +405,17 @@ func decodeWSInitRequest(message []byte) (traceRequest, error) {
 	var req traceRequest
 	err := json.Unmarshal(message, &req)
 	return req, err
+}
+
+func prepareWebsocketTrace(ctx context.Context, req traceRequest) (*traceExecution, int, error) {
+	// Only the WebSocket dispatcher executes these modes. REST always runs a
+	// normal trace, even when a client sends mode=mtr.
+	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	case "mtr", "continuous":
+		req.Queries = 1
+		req.MaxAttempts = 1
+	}
+	return prepareTrace(ctx, req)
 }
 
 func runSingleTrace(ctx context.Context, session *wsTraceSession, setup *traceExecution) {

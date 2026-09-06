@@ -50,6 +50,10 @@ func maybeRunSpeedModeWithAvailability(enabled bool, rawArgs []string, stdout, s
 		_, _ = fmt.Fprintf(stderr, "--speed is not available in %s; please use the full nexttrace build\n", appBinName)
 		return true, 1
 	}
+	if containsTracerouteFlag(rawArgs) {
+		_, _ = fmt.Fprintln(stderr, "--traceroute cannot be combined with --speed")
+		return true, 1
+	}
 	return true, runSpeedMode(rawArgs, stdout, stderr)
 }
 

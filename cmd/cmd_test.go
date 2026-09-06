@@ -894,6 +894,29 @@ func TestRegisterGlobalpingFlagWithAvailability_DisabledStillParses(t *testing.T
 	}
 }
 
+func TestGlobalpingAvailability(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, location := range []string{"", "tokyo", " "} {
+			parser := argparse.NewParser("nexttrace", "")
+			from := registerGlobalpingFlagWithAvailability(parser, enabled)
+			args := []string{"nexttrace"}
+			if location != "" {
+				args = append(args, "--from", location)
+			}
+			if err := parser.Parse(args); err != nil {
+				t.Fatal(err)
+			}
+			err := validateGlobalpingAvailability(*from, enabled)
+			if wantError := !enabled && location != ""; (err != nil) != wantError {
+				t.Fatalf("enabled=%v location=%q: error=%v", enabled, location, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "--from (Globalping) is not available") {
+				t.Fatalf("unexpected availability error: %v", err)
+			}
+		}
+	}
+}
+
 func TestRegisterWebUIFlagsWithAvailability_DisabledDoesNotRegister(t *testing.T) {
 	parser := argparse.NewParser("ntr", "")
 	flags := registerWebUIFlagsWithAvailability(parser, false)
@@ -1064,6 +1087,46 @@ func TestApplyTTLIntervalDefault(t *testing.T) {
 	}
 }
 
+func TestQueriesHelpDescribesModeSemantics(t *testing.T) {
+	help := buildQueriesHelp()
+	for _, want := range []string{"probes per hop", "unlimited", "TUI/raw", "10 with --report/--wide (including --raw)"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("queries help missing %q: %s", want, help)
+		}
+	}
+	if enableTraceroute && !strings.Contains(help, "Traceroute: latency samples per hop (default 3)") {
+		t.Fatalf("queries help missing traditional semantics: %s", help)
+	}
+	if !enableTraceroute && !strings.HasPrefix(help, "MTR only: max probes per hop.") {
+		t.Fatalf("queries help missing MTR-only semantics: %s", help)
+	}
+}
+
+func TestQueriesFlagDefaultsAndHelp(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		want     int
+		explicit bool
+	}{
+		{nil, 3, false},
+		{[]string{"-q", "0"}, 0, true},
+		{[]string{"--queries", "10"}, 10, true},
+	} {
+		parser := argparse.NewParser(appBinName, "")
+		queries := registerQueriesFlag(parser)
+		if err := parser.Parse(append([]string{appBinName}, tc.args...)); err != nil {
+			t.Fatal(err)
+		}
+		explicit, _, _, _ := detectExplicitProbeFlags(parser)
+		if *queries != tc.want || explicit != tc.explicit {
+			t.Fatalf("%v: queries=%d explicit=%v", tc.args, *queries, explicit)
+		}
+		if strings.Contains(parser.Usage(nil), "Default: 3") {
+			t.Fatal("queries help advertises an unconditional default")
+		}
+	}
+}
+
 func TestAdvancedHelpTextMentionsTuningGuidance(t *testing.T) {
 	parser := argparse.NewParser("ntr", "")
 	registerPacketIntervalFlag(parser)
@@ -1078,7 +1141,7 @@ func TestAdvancedHelpTextMentionsTuningGuidance(t *testing.T) {
 		"intercontinental",
 		"raise for MTU or",
 	}
-	if !defaultMTR {
+	if enableTraceroute {
 		wants = append(wants, "rate-limited links")
 	}
 	for _, want := range wants {
@@ -1303,7 +1366,7 @@ func TestResolvePacketSizeArg_DefaultsToProtocolMinimum(t *testing.T) {
 }
 
 func TestRegisterTracerouteOutputFlagsParsesOutputPath(t *testing.T) {
-	if defaultMTR {
+	if !enableTraceroute {
 		t.Skip("normal traceroute output flags are unavailable in the ntr flavor")
 	}
 	parser := argparse.NewParser("nexttrace", "")
@@ -1325,7 +1388,7 @@ func TestRegisterTracerouteOutputFlagsParsesOutputPath(t *testing.T) {
 }
 
 func TestRegisterTracerouteOutputFlagsParsesOutputDefault(t *testing.T) {
-	if defaultMTR {
+	if !enableTraceroute {
 		t.Skip("normal traceroute output flags are unavailable in the ntr flavor")
 	}
 	parser := argparse.NewParser("nexttrace", "")
