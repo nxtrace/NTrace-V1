@@ -713,6 +713,9 @@ finally {
     Pop-Location
 }
 
+# Exercise command-file decoding independently of network capabilities.
+Run-Cmd -Name "command_utf8_回归" -Note "UTF-8 batch path and command arguments" -Command "echo 回归编码" -SuccessPattern "(?m)^回归编码\r?$"
+
 $icmp4Capability = Get-CapabilityStatus -Name "icmp4" -Label "ICMPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*ICMP mode"
 $tcp4Capability = Get-CapabilityStatus -Name "tcp4" -Label "TCPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -T -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*TCP mode"
 $udp4Capability = Get-CapabilityStatus -Name "udp4" -Label "UDPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -U -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*UDP mode"
