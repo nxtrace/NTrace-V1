@@ -551,6 +551,13 @@ func registerGlobalpingFlagWithAvailability(parser *argparse.Parser, enabled boo
 	return parser.String("", "from", &argparse.Options{Help: "Run traceroute via Globalping (full build only; unavailable in this binary)"})
 }
 
+func validateGlobalpingAvailability(from string, enabled bool) error {
+	if from != "" && !enabled {
+		return fmt.Errorf("--from (Globalping) is not available in %s; please use the full nexttrace build", appBinName)
+	}
+	return nil
+}
+
 func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 	if enableMTR {
 		mtrMode := ptrBool(false)
@@ -1458,6 +1465,10 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, "-l/--dns must be the first argument")
 		os.Exit(1)
 	}
+	if err := validateGlobalpingAvailability(*from, enableGlobalping); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if *setupNextTraceAPIV4Token {
 		if err := runNextTraceAPIV4TokenSetup(nextTraceAPIV4TokenSetupOptions{
 			stdin:  os.Stdin,
@@ -1488,7 +1499,7 @@ func Execute() {
 		wide:       *wideMode,
 		raw:        *rawPrint,
 		traditional: *jsonPrint || *tablePrint || *classicPrint || *outputPath != "" ||
-			*outputDefault || *routePath || *fastTraceFlag || *file != "" || (enableGlobalping && *from != ""),
+			*outputDefault || *routePath || *fastTraceFlag || *file != "" || *from != "",
 		standalone: standalone,
 	}, defaultMTR)
 	if modeErr != nil {
@@ -1590,7 +1601,7 @@ func Execute() {
 			"output":        *outputPath != "",
 			"outputDefault": *outputDefault,
 			"routePath":     *routePath,
-			"from":          enableGlobalping && *from != "",
+			"from":          *from != "",
 			"fastTrace":     *fastTraceFlag,
 			"file":          *file != "",
 			"deploy":        enableWebUI && *deploy,

@@ -894,6 +894,29 @@ func TestRegisterGlobalpingFlagWithAvailability_DisabledStillParses(t *testing.T
 	}
 }
 
+func TestGlobalpingAvailability(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, location := range []string{"", "tokyo", " "} {
+			parser := argparse.NewParser("nexttrace", "")
+			from := registerGlobalpingFlagWithAvailability(parser, enabled)
+			args := []string{"nexttrace"}
+			if location != "" {
+				args = append(args, "--from", location)
+			}
+			if err := parser.Parse(args); err != nil {
+				t.Fatal(err)
+			}
+			err := validateGlobalpingAvailability(*from, enabled)
+			if wantError := !enabled && location != ""; (err != nil) != wantError {
+				t.Fatalf("enabled=%v location=%q: error=%v", enabled, location, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "--from (Globalping) is not available") {
+				t.Fatalf("unexpected availability error: %v", err)
+			}
+		}
+	}
+}
+
 func TestRegisterWebUIFlagsWithAvailability_DisabledDoesNotRegister(t *testing.T) {
 	parser := argparse.NewParser("ntr", "")
 	flags := registerWebUIFlagsWithAvailability(parser, false)
