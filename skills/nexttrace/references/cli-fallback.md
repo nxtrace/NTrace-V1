@@ -26,7 +26,7 @@ nexttrace --report example.com
 nexttrace --mtr --raw -q 5 example.com
 ```
 
-MTR raw stdout remains a fixed 12-column stream. Semantic unreachable diagnostics are written to stderr so stdout parsers remain compatible. In unbounded MTR, an unreachable edge is provisional and later transit evidence can reopen the path; use the final `path_end` from bounded structured output as the authoritative boundary.
+When `-q` is omitted, `--mtr --raw` runs continuously, while `--report/--wide` (including with `--raw`) defaults to 10 probes per hop. Set an explicit `-q` for bounded automation. MTR raw stdout remains a fixed 12-column stream. Semantic unreachable diagnostics are written to stderr so stdout parsers remain compatible. In unbounded MTR, an unreachable edge is provisional and later transit evidence can reopen the path; use the final `path_end` from bounded structured output as the authoritative boundary.
 
 ## MTU
 

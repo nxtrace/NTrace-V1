@@ -338,7 +338,7 @@ nexttrace --mtr --raw -q 10 example.com
 
 Standalone entry points, Fast Trace, file targets, and Globalping (full build only) keep their workflows; `--json` in a standalone mode still belongs to that mode. Explicit MTR continues to reject traditional-only output formats.
 
-MTR TUI/RAW runs continuously when `-q` is omitted; reports default to 10 probes per hop. Automation should set an explicit `-q`. In MTR, `-i` is the per-hop interval (default 1000ms) and `-z` is ignored. In traditional traceroute, `-q` defaults to 3 samples per hop, `-i` is the TTL-group interval (default 300ms), and `-z` is the packet interval (default 50ms).
+When `-q` is omitted, MTR TUI and `--mtr --raw` run continuously; `--report/-r` and `--wide/-w` default to 10 probes per hop, including when combined with `--raw`. Automation should set an explicit `-q`. In MTR, `-i` is the per-hop interval (default 1000ms) and `-z` is ignored. In traditional traceroute, `-q` defaults to 3 samples per hop, `-i` is the TTL-group interval (default 300ms), and `-z` is the packet interval (default 50ms).
 
 Do not distinguish the RAW modes by successful rows alone: traditional RAW uses 12 columns for success and preserves historical 8-column timeout rows; MTR RAW uses fixed 12-column data rows in a continuous event stream. Parsers must also honor each mode's existing information headers and stderr behavior. `NEXTTRACE_UNINTERRUPTED` retains its traditional loop behavior with `--traceroute --raw`.
 
@@ -569,7 +569,7 @@ export NO_COLOR=1
 
 | Flag | What it controls | Default / starting point | When to change it |
 | --- | --- | --- | --- |
-| `--queries` | Samples per hop in normal traceroute; explicit probe count per hop in MTR | traceroute: `3`; MTR report: `10` when omitted; MTR TUI/raw: unlimited when omitted | Raise to `5-10` on unstable paths |
+| `--queries` | Samples per hop in normal traceroute; explicit probe count per hop in MTR | traceroute: `3`; MTR report/wide (including RAW): `10` when omitted; otherwise MTR TUI/raw: unlimited when omitted | Raise to `5-10` on unstable paths |
 | `--max-attempts` | Hard cap on probe packets per hop | auto-sized from `--queries` | Raise on lossy links when replies arrive slowly |
 | `--parallel-requests` | Total in-flight probes across TTLs | `18` | Use `1` on multipath/load-balanced paths; keep `6-18` on stable links |
 | `--send-time` | Gap between packets inside one TTL group | `50ms` | Raise to `100-200ms` on rate-limited devices; ignored in MTR |
@@ -892,9 +892,10 @@ Arguments:
   -p  --port                         Set the destination port to use. With
                                      default of 80 for "tcp", 33494 for "udp"
   -q  --queries                      Traceroute: latency samples per hop
-                                     (default 3). MTR: max probes per hop;
-                                     TUI/raw defaults to 0 (unlimited),
-                                     --report defaults to 10 when omitted
+                                     (default 3). MTR: max probes per hop. 0 =
+                                     unlimited in TUI/raw. When omitted: 10
+                                     with --report/--wide (including --raw),
+                                     otherwise unlimited
       --max-attempts                 Advanced: hard cap on probe packets per
                                      hop. Leave unset for auto sizing; raise on
                                      lossy links if --queries is not enough

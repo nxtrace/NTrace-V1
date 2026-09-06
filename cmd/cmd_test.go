@@ -1066,7 +1066,7 @@ func TestApplyTTLIntervalDefault(t *testing.T) {
 
 func TestQueriesHelpDescribesModeSemantics(t *testing.T) {
 	help := buildQueriesHelp()
-	for _, want := range []string{"probes per hop", "unlimited", "TUI/raw", "--report defaults to 10 when omitted"} {
+	for _, want := range []string{"probes per hop", "unlimited", "TUI/raw", "10 with --report/--wide (including --raw)"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("queries help missing %q: %s", want, help)
 		}

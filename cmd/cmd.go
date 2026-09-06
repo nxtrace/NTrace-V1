@@ -404,10 +404,11 @@ func registerQueriesFlag(parser *argparse.Parser) *int {
 }
 
 func buildQueriesHelp() string {
-	if !enableTraceroute {
-		return "MTR only: max probes per hop. 0 = unlimited in TUI/raw; --report defaults to 10 when omitted. Start with 10-20 on unstable paths"
+	help := "MTR only: max probes per hop."
+	if enableTraceroute {
+		help = "Traceroute: latency samples per hop (default 3). MTR: max probes per hop."
 	}
-	return "Traceroute: latency samples per hop (default 3). MTR: max probes per hop; TUI/raw defaults to 0 (unlimited), --report defaults to 10 when omitted"
+	return help + " 0 = unlimited in TUI/raw. When omitted: 10 with --report/--wide (including --raw), otherwise unlimited"
 }
 
 func buildMaxAttemptsHelp() string {

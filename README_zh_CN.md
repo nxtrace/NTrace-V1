@@ -335,7 +335,7 @@ nexttrace --mtr --raw -q 10 example.com
 
 独立功能入口以及 Fast Trace、文件目标和 Globalping（仅完整版）保持各自工作流；独立模式中的 `--json` 仍属于该模式。显式 MTR 与传统专用格式的冲突规则不变。
 
-MTR TUI/RAW 在未指定 `-q` 时持续运行，report 默认每跳 10 次；自动化调用应设置明确的 `-q`。MTR 中 `-i` 是每跳探测间隔（默认 1000ms），`-z` 被忽略；传统 traceroute 中 `-q` 默认每跳 3 次，`-i` 是 TTL 组间隔（默认 300ms），`-z` 是包间隔（默认 50ms）。
+未指定 `-q` 时，MTR TUI 和 `--mtr --raw` 持续运行；`--report/-r`、`--wide/-w` 默认每跳 10 次，与 `--raw` 组合时也一样；自动化调用应设置明确的 `-q`。MTR 中 `-i` 是每跳探测间隔（默认 1000ms），`-z` 被忽略；传统 traceroute 中 `-q` 默认每跳 3 次，`-i` 是 TTL 组间隔（默认 300ms），`-z` 是包间隔（默认 50ms）。
 
 两种 RAW 不能只按成功行的列数区分：传统 RAW 成功行 12 列、超时行保留历史 8 列；MTR RAW 的数据行固定 12 列，并持续逐事件输出。解析器还需遵守各模式现有的信息头和 stderr 规则。`NEXTTRACE_UNINTERRUPTED` 配合 `--traceroute --raw` 时继续保留传统循环行为。
 
@@ -560,7 +560,7 @@ export NO_COLOR=1
 
 | 参数 | 控制内容 | 默认值 / 起步建议 | 什么时候调 |
 | --- | --- | --- | --- |
-| `--queries` | 常规 traceroute 的每跳采样数；MTR 中显式指定每跳探测次数 | traceroute: `3`；MTR report: 未指定时 `10`；MTR TUI/raw: 未指定时无限 | 链路抖动大时可升到 `5-10` |
+| `--queries` | 常规 traceroute 的每跳采样数；MTR 中显式指定每跳探测次数 | traceroute: `3`；MTR report/wide（含 RAW）: 未指定时 `10`；其他 MTR TUI/raw: 未指定时无限 | 链路抖动大时可升到 `5-10` |
 | `--max-attempts` | 每跳最大发包上限 | 默认按 `--queries` 自动推导 | 丢包严重、回包慢时增大 |
 | `--parallel-requests` | 跨 TTL 的总并发 in-flight 探测数 | `18` | 多路径/负载均衡链路用 `1`；稳定链路一般 `6-18` |
 | `--send-time` | 同一 TTL 组内相邻探测包间隔 | `50ms` | 设备限速时升到 `100-200ms`；MTR 下忽略 |
@@ -867,9 +867,10 @@ Arguments:
   -p  --port                         Set the destination port to use. With
                                      default of 80 for "tcp", 33494 for "udp"
   -q  --queries                      Traceroute: latency samples per hop
-                                     (default 3). MTR: max probes per hop;
-                                     TUI/raw defaults to 0 (unlimited),
-                                     --report defaults to 10 when omitted
+                                     (default 3). MTR: max probes per hop. 0 =
+                                     unlimited in TUI/raw. When omitted: 10
+                                     with --report/--wide (including --raw),
+                                     otherwise unlimited
       --max-attempts                 Advanced: hard cap on probe packets per
                                      hop. Leave unset for auto sizing; raise on
                                      lossy links if --queries is not enough
