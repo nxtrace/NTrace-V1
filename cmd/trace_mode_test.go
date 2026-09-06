@@ -162,3 +162,22 @@ func TestEarlyModesRejectTracerouteBeforeExecution(t *testing.T) {
 		t.Fatal("interpreted positional argument as flag")
 	}
 }
+
+func TestEarlyModesRejectTracerouteBeforeTerminator(t *testing.T) {
+	for _, flag := range []string{"-k", "--traceroute"} {
+		var out, errOut bytes.Buffer
+		handled, code := maybeRunDNSModeWithAvailability(true, []string{"--dns", flag, "--", "example.com"}, &out, &errOut, func([]string, io.Writer, io.Writer) int {
+			t.Fatal("DNS runner called")
+			return 0
+		})
+		if !handled || code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "cannot be combined") {
+			t.Fatalf("DNS: %v/%d stdout %q stderr %q", handled, code, out.String(), errOut.String())
+		}
+		out.Reset()
+		errOut.Reset()
+		handled, code = maybeRunSpeedModeWithAvailability(true, []string{"--speed", flag, "--", "example.com"}, &out, &errOut)
+		if !handled || code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "cannot be combined") {
+			t.Fatalf("speed: %v/%d stdout %q stderr %q", handled, code, out.String(), errOut.String())
+		}
+	}
+}

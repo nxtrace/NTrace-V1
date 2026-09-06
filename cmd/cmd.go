@@ -399,7 +399,7 @@ func buildQueriesHelp() string {
 	if !enableTraceroute {
 		return "MTR only: max probes per hop. 0 = unlimited in TUI/raw; --report defaults to 10 when omitted. Start with 10-20 on unstable paths"
 	}
-	return "Latency samples per hop. Increase to 5-10 on unstable paths for a steadier view"
+	return "Traceroute: latency samples per hop (default 3). MTR: max probes per hop; TUI/raw defaults to 0 (unlimited), --report defaults to 10 when omitted"
 }
 
 func buildMaxAttemptsHelp() string {

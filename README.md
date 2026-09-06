@@ -279,8 +279,10 @@ nexttrace http://example.com:8080/index.html?q=1
 # Table output (report mode): runs trace once and prints a final summary table
 nexttrace --table 1.0.0.1
 
-# Machine-readable output: stdout is a single JSON document
+# Machine-readable RAW output: pipe-delimited lines
 nexttrace --traceroute --raw 1.0.0.1
+
+# JSON output: stdout is a single JSON document
 nexttrace --json 1.0.0.1
 
 # Realtime trace output to a custom file
@@ -317,7 +319,7 @@ When multiple normal-trace output modes are selected, precedence is `--json` > `
 
 #### Downstream migration and explicit traditional mode
 
-`-k/--traceroute` selects traditional traceroute in full and tiny builds; it is not an alias for the `--classic` layout. It supports existing traditional output formats, Fast Trace, file targets, and Globalping. Combining it with `--mtr/-t`, `--report/-r`, `--wide/-w`, or standalone DNS, MTU, speed, IP annotation, or deploy mode is an error.
+`-k/--traceroute` selects traditional traceroute in full and tiny builds; it is not an alias for the `--classic` layout. It supports existing traditional output formats, Fast Trace, and file targets; the full build also supports Globalping. Combining it with `--mtr/-t`, `--report/-r`, `--wide/-w`, or standalone DNS, MTU, speed, IP annotation, or deploy mode is an error.
 
 ```bash
 nexttrace --traceroute example.com
@@ -334,7 +336,7 @@ nexttrace --mtr --raw -q 10 example.com
 | `--traceroute --raw` | Traditional RAW | Traditional RAW |
 | `--json/--table/--classic/--output/--output-default/--route-path` | Traditional mode | Selects traditional mode automatically |
 
-Standalone entry points, Fast Trace, file targets, and Globalping keep their workflows; `--json` in a standalone mode still belongs to that mode. Explicit MTR continues to reject traditional-only output formats.
+Standalone entry points, Fast Trace, file targets, and Globalping (full build only) keep their workflows; `--json` in a standalone mode still belongs to that mode. Explicit MTR continues to reject traditional-only output formats.
 
 MTR TUI/RAW runs continuously when `-q` is omitted; reports default to 10 probes per hop. Automation should set an explicit `-q`. In MTR, `-i` is the per-hop interval (default 1000ms) and `-z` is ignored. In traditional traceroute, `-q` defaults to 3 samples per hop, `-i` is the TTL-group interval (default 300ms), and `-z` is the packet interval (default 50ms).
 
@@ -889,8 +891,10 @@ Arguments:
   -F  --fast-trace                   One-Key Fast Trace to China ISPs
   -p  --port                         Set the destination port to use. With
                                      default of 80 for "tcp", 33494 for "udp"
-  -q  --queries                      Latency samples per hop. Increase to 5-10
-                                     on unstable paths for a steadier view.
+  -q  --queries                      Traceroute: latency samples per hop
+                                     (default 3). MTR: max probes per hop;
+                                     TUI/raw defaults to 0 (unlimited),
+                                     --report defaults to 10 when omitted.
                                      Default: 3
       --max-attempts                 Advanced: hard cap on probe packets per
                                      hop. Leave unset for auto sizing; raise on

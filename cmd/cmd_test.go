@@ -1064,6 +1064,18 @@ func TestApplyTTLIntervalDefault(t *testing.T) {
 	}
 }
 
+func TestQueriesHelpDescribesModeSemantics(t *testing.T) {
+	help := buildQueriesHelp()
+	for _, want := range []string{"probes per hop", "unlimited", "TUI/raw", "--report defaults to 10 when omitted"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("queries help missing %q: %s", want, help)
+		}
+	}
+	if enableTraceroute && !strings.Contains(help, "Traceroute: latency samples per hop (default 3)") {
+		t.Fatalf("queries help missing traditional semantics: %s", help)
+	}
+}
+
 func TestAdvancedHelpTextMentionsTuningGuidance(t *testing.T) {
 	parser := argparse.NewParser("ntr", "")
 	registerPacketIntervalFlag(parser)

@@ -279,8 +279,10 @@ nexttrace http://example.com:8080/index.html?q=1
 # 表格输出（报告模式）：运行一次探测后打印最终汇总表格
 nexttrace --table 1.0.0.1
 
-# 机器可读输出：stdout 只包含一个 JSON 文档
+# 机器可读 RAW 输出：竖线分隔的数据行
 nexttrace --traceroute --raw 1.0.0.1
+
+# JSON 输出：stdout 只包含一个 JSON 文档
 nexttrace --json 1.0.0.1
 
 # 将实时 traceroute 输出写入自定义文件
@@ -314,7 +316,7 @@ export NEXTTRACE_DISABLEMPLS=1
 
 #### 下游迁移与显式传统模式
 
-`-k/--traceroute` 在完整版和 tiny 中选择传统 traceroute；它不是 `--classic` 排版的别名。可与现有传统输出格式、Fast Trace、文件目标和 Globalping 组合。与 `--mtr/-t`、`--report/-r`、`--wide/-w` 或独立 DNS、MTU、测速、IP 标注、deploy 模式同用会报错。
+`-k/--traceroute` 在完整版和 tiny 中选择传统 traceroute；它不是 `--classic` 排版的别名。可与现有传统输出格式、Fast Trace 和文件目标组合；完整版还可与 Globalping 组合。与 `--mtr/-t`、`--report/-r`、`--wide/-w` 或独立 DNS、MTU、测速、IP 标注、deploy 模式同用会报错。
 
 ```bash
 nexttrace --traceroute example.com
@@ -331,7 +333,7 @@ nexttrace --mtr --raw -q 10 example.com
 | `--traceroute --raw` | 传统 RAW | 传统 RAW |
 | `--json/--table/--classic/--output/--output-default/--route-path` | 传统模式 | 自动选择传统模式 |
 
-独立功能入口以及 Fast Trace、文件目标和 Globalping 保持各自工作流；独立模式中的 `--json` 仍属于该模式。显式 MTR 与传统专用格式的冲突规则不变。
+独立功能入口以及 Fast Trace、文件目标和 Globalping（仅完整版）保持各自工作流；独立模式中的 `--json` 仍属于该模式。显式 MTR 与传统专用格式的冲突规则不变。
 
 MTR TUI/RAW 在未指定 `-q` 时持续运行，report 默认每跳 10 次；自动化调用应设置明确的 `-q`。MTR 中 `-i` 是每跳探测间隔（默认 1000ms），`-z` 被忽略；传统 traceroute 中 `-q` 默认每跳 3 次，`-i` 是 TTL 组间隔（默认 300ms），`-z` 是包间隔（默认 50ms）。
 
@@ -864,8 +866,10 @@ Arguments:
   -F  --fast-trace                   One-Key Fast Trace to China ISPs
   -p  --port                         Set the destination port to use. With
                                      default of 80 for "tcp", 33494 for "udp"
-  -q  --queries                      Latency samples per hop. Increase to 5-10
-                                     on unstable paths for a steadier view.
+  -q  --queries                      Traceroute: latency samples per hop
+                                     (default 3). MTR: max probes per hop;
+                                     TUI/raw defaults to 0 (unlimited),
+                                     --report defaults to 10 when omitted.
                                      Default: 3
       --max-attempts                 Advanced: hard cap on probe packets per
                                      hop. Leave unset for auto sizing; raise on
