@@ -167,15 +167,15 @@ function Invoke-CommandWithTimeout {
     else {
         $exitCode = $proc.ExitCode
     }
-    $stdoutText = if (Test-Path $stdoutFile) { Get-Content -Raw -Path $stdoutFile } else { "" }
-    $stderrText = if (Test-Path $stderrFile) { Get-Content -Raw -Path $stderrFile } else { "" }
+    $stdoutText = if (Test-Path $stdoutFile) { Get-Content -Raw -Encoding UTF8 -Path $stdoutFile } else { "" }
+    $stderrText = if (Test-Path $stderrFile) { Get-Content -Raw -Encoding UTF8 -Path $stderrFile } else { "" }
     if ($MergeStreams) {
-        Set-Content -Path $OutFile -Value ($stdoutText + $stderrText)
+        Set-Content -Path $OutFile -Encoding UTF8 -Value ($stdoutText + $stderrText)
         Remove-Item -Force -ErrorAction Ignore $stdoutFile, $stderrFile
     }
     else {
-        Set-Content -Path $OutFile -Value $stdoutText
-        Set-Content -Path $stderrFile -Value $stderrText
+        Set-Content -Path $OutFile -Encoding UTF8 -Value $stdoutText
+        Set-Content -Path $stderrFile -Encoding UTF8 -Value $stderrText
     }
     Remove-Item -Force -ErrorAction Ignore $scriptFile
     return $exitCode
@@ -405,7 +405,7 @@ function Check-JsonPure {
     $rc = Invoke-CommandWithTimeout -Command $Command -OutFile $out -MergeStreams $false -Seconds 180
     $content = if (Test-Path $out) { Get-Content -Raw -Path $out } else { "" }
     $stderrFile = "$out.stderr"
-    $stderrContent = if (Test-Path $stderrFile) { Get-Content -Raw -Path $stderrFile } else { "" }
+    $stderrContent = if (Test-Path $stderrFile) { Get-Content -Raw -Encoding UTF8 -Path $stderrFile } else { "" }
     $powLogPattern = '(?m)^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} pow token fetch failed: .*(\r?\n)?'
     if ($content -match "request failed - please try again later" -or $stderrContent -match "request failed - please try again later") {
         Write-Record $Name SKIP "$Note; external service unavailable"
@@ -714,7 +714,9 @@ finally {
 }
 
 # Exercise command-file decoding independently of network capabilities.
-Run-Cmd -Name "command_utf8_回归" -Note "UTF-8 batch path and command arguments" -Command "echo 回归编码" -SuccessPattern "(?m)^回归编码\r?$"
+# Use code points so Windows PowerShell 5.1 can read this BOM-less script too.
+$unicodeProbe = -join ([char[]](0x56DE, 0x5F52, 0x7F16, 0x7801))
+Run-Cmd -Name "command_utf8_$unicodeProbe" -Note "UTF-8 batch path and command arguments" -Command "echo $unicodeProbe" -SuccessPattern "(?m)^$unicodeProbe\r?$"
 
 $icmp4Capability = Get-CapabilityStatus -Name "icmp4" -Label "ICMPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*ICMP mode"
 $tcp4Capability = Get-CapabilityStatus -Name "tcp4" -Label "TCPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -T -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*TCP mode"
