@@ -1074,6 +1074,34 @@ func TestQueriesHelpDescribesModeSemantics(t *testing.T) {
 	if enableTraceroute && !strings.Contains(help, "Traceroute: latency samples per hop (default 3)") {
 		t.Fatalf("queries help missing traditional semantics: %s", help)
 	}
+	if !enableTraceroute && !strings.HasPrefix(help, "MTR only: max probes per hop.") {
+		t.Fatalf("queries help missing MTR-only semantics: %s", help)
+	}
+}
+
+func TestQueriesFlagDefaultsAndHelp(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		want     int
+		explicit bool
+	}{
+		{nil, 3, false},
+		{[]string{"-q", "0"}, 0, true},
+		{[]string{"--queries", "10"}, 10, true},
+	} {
+		parser := argparse.NewParser(appBinName, "")
+		queries := registerQueriesFlag(parser)
+		if err := parser.Parse(append([]string{appBinName}, tc.args...)); err != nil {
+			t.Fatal(err)
+		}
+		explicit, _, _, _ := detectExplicitProbeFlags(parser)
+		if *queries != tc.want || explicit != tc.explicit {
+			t.Fatalf("%v: queries=%d explicit=%v", tc.args, *queries, explicit)
+		}
+		if strings.Contains(parser.Usage(nil), "Default: 3") {
+			t.Fatal("queries help advertises an unconditional default")
+		}
+	}
 }
 
 func TestAdvancedHelpTextMentionsTuningGuidance(t *testing.T) {

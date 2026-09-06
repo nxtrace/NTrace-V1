@@ -869,8 +869,7 @@ Arguments:
   -q  --queries                      Traceroute: latency samples per hop
                                      (default 3). MTR: max probes per hop;
                                      TUI/raw defaults to 0 (unlimited),
-                                     --report defaults to 10 when omitted.
-                                     Default: 3
+                                     --report defaults to 10 when omitted
       --max-attempts                 Advanced: hard cap on probe packets per
                                      hop. Leave unset for auto sizing; raise on
                                      lossy links if --queries is not enough

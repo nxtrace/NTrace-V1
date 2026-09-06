@@ -395,6 +395,14 @@ func registerDataProviderFlag(parser *argparse.Parser) *string {
 	})
 }
 
+func registerQueriesFlag(parser *argparse.Parser) *int {
+	queries := parser.Int("q", "queries", &argparse.Options{Help: buildQueriesHelp()})
+	// Keep the traditional fallback without argparse advertising it for every mode.
+	// MTR applies its own defaults when this flag was not explicitly parsed.
+	*queries = 3
+	return queries
+}
+
 func buildQueriesHelp() string {
 	if !enableTraceroute {
 		return "MTR only: max probes per hop. 0 = unlimited in TUI/raw; --report defaults to 10 when omitted. Start with 10-20 on unstable paths"
@@ -1373,7 +1381,7 @@ func Execute() {
 	fastTraceFlag := registerFastTraceFlag(parser)
 	port := parser.Int("p", "port", &argparse.Options{Help: "Set the destination port to use. With default of 80 for \"tcp\", 33494 for \"udp\""})
 	icmpMode := registerICMPModeFlag(parser)
-	numMeasurements := parser.Int("q", "queries", &argparse.Options{Default: 3, Help: buildQueriesHelp()})
+	numMeasurements := registerQueriesFlag(parser)
 	maxAttempts := parser.Int("", "max-attempts", &argparse.Options{Help: buildMaxAttemptsHelp()})
 	parallelRequests := parser.Int("", "parallel-requests", &argparse.Options{Default: 18, Help: buildParallelRequestsHelp()})
 	maxHops := parser.Int("m", "max-hops", &argparse.Options{Default: 30, Help: "Set the max number of hops (max TTL to be reached)"})
