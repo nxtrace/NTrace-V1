@@ -53,7 +53,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\regression\windows.ps1 -Artif
 
 - 构建当前仓库的 `nexttrace`、`nexttrace-tiny`、`ntr`
 - 先跑 `go test ./...`
-- 再跑完整回归
+- 再跑完整回归，包括 `-k/--traceroute`、默认模式保持不变，以及 tiny 的有限 MTR report/RAW
+- 传统输出用例显式使用 `--traceroute`，默认行为另有独立用例
 - 输出：
   - `summary.tsv`
   - `artifacts/`

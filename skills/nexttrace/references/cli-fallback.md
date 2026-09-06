@@ -7,11 +7,13 @@ Fallback must preserve explicit user inputs: `target`, `protocol`, `port`, `sour
 ## Local Traceroute
 
 ```bash
-nexttrace example.com
-nexttrace --tcp -p 443 example.com
-nexttrace --udp -p 33494 example.com
-nexttrace --json example.com
+nexttrace --traceroute example.com
+nexttrace --traceroute --tcp -p 443 example.com
+nexttrace --traceroute --udp -p 33494 example.com
+nexttrace --traceroute --json example.com
 ```
+
+Full and tiny builds support `-k/--traceroute` and optional MTR. Their default remains traditional traceroute in this release; the default and bare `--raw` will switch to MTR no earlier than 2027, in a separately announced release. Use `--traceroute --raw` to pin traditional RAW (12-column success rows, historical 8-column timeout rows). Detect `--traceroute` in `--help` before using it with older binaries; do not retry failed probes with different mode flags. Explicit traditional mode conflicts with MTR/report/wide and standalone DNS/MTU/speed/nali/deploy modes.
 
 JSON includes optional `StopReason` with lowercase nested fields `hop`, `reason`, `responses`, and `markers`. `responses` contains human-readable descriptions; `markers` contains machine-readable codes. Use `reason` as the reachability conclusion; do not compare the last hop IP with the target.
 

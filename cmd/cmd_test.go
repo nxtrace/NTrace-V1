@@ -1078,7 +1078,7 @@ func TestAdvancedHelpTextMentionsTuningGuidance(t *testing.T) {
 		"intercontinental",
 		"raise for MTU or",
 	}
-	if !defaultMTR {
+	if enableTraceroute {
 		wants = append(wants, "rate-limited links")
 	}
 	for _, want := range wants {
@@ -1303,7 +1303,7 @@ func TestResolvePacketSizeArg_DefaultsToProtocolMinimum(t *testing.T) {
 }
 
 func TestRegisterTracerouteOutputFlagsParsesOutputPath(t *testing.T) {
-	if defaultMTR {
+	if !enableTraceroute {
 		t.Skip("normal traceroute output flags are unavailable in the ntr flavor")
 	}
 	parser := argparse.NewParser("nexttrace", "")
@@ -1325,7 +1325,7 @@ func TestRegisterTracerouteOutputFlagsParsesOutputPath(t *testing.T) {
 }
 
 func TestRegisterTracerouteOutputFlagsParsesOutputDefault(t *testing.T) {
-	if defaultMTR {
+	if !enableTraceroute {
 		t.Skip("normal traceroute output flags are unavailable in the ntr flavor")
 	}
 	parser := argparse.NewParser("nexttrace", "")

@@ -6,7 +6,8 @@ const (
 	appBinName       = "nexttrace-tiny"
 	enableWebUI      = false
 	enableGlobalping = false
-	enableMTR        = false
+	enableTraceroute = true
+	enableMTR        = true
 	enableMTU        = true
 	enableSpeed      = false
 	enableNali       = false

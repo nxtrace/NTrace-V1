@@ -710,20 +710,20 @@ finally {
     Pop-Location
 }
 
-$icmp4Capability = Get-CapabilityStatus -Name "icmp4" -Label "ICMPv4 tracing" -Command "`"$Bin`" --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*ICMP mode"
-$tcp4Capability = Get-CapabilityStatus -Name "tcp4" -Label "TCPv4 tracing" -Command "`"$Bin`" --no-color -T -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*TCP mode"
-$udp4Capability = Get-CapabilityStatus -Name "udp4" -Label "UDPv4 tracing" -Command "`"$Bin`" --no-color -U -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*UDP mode"
+$icmp4Capability = Get-CapabilityStatus -Name "icmp4" -Label "ICMPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*ICMP mode"
+$tcp4Capability = Get-CapabilityStatus -Name "tcp4" -Label "TCPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -T -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*TCP mode"
+$udp4Capability = Get-CapabilityStatus -Name "udp4" -Label "UDPv4 tracing" -Command "`"$Bin`" --traceroute --no-color -U -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern "hops max, .*UDP mode"
 $mtrCapability = Get-CapabilityStatus -Name "mtr" -Label "MTR ICMP tracing" -Command "`"$Bin`" --no-color -r -q 1 -i 300 --timeout 1000 -m 2 1.1.1.1" -SuccessPattern "(?m)^HOST:"
 $mtuCapability = Get-CapabilityStatus -Name "mtu" -Label "MTU tracing" -Command "`"$Bin`" --no-color --mtu --timeout 1000 -q 1 -m 1 1.1.1.1" -SuccessPattern "Path MTU:"
-$globalpingCapability = Get-CapabilityStatus -Name "globalping" -Label "Globalping tracing" -Command "`"$Bin`" --no-color --json --from Germany -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern '^\s*\{'
+$globalpingCapability = Get-CapabilityStatus -Name "globalping" -Label "Globalping tracing" -Command "`"$Bin`" --traceroute --no-color --json --from Germany -q 1 -m 1 --timeout 1000 1.1.1.1" -SuccessPattern '^\s*\{'
 $speedCapability = Get-CapabilityStatus -Name "speed" -Label "speed mode" -Command "`"$Bin`" --speed --help" -SuccessPattern "--speed-provider"
 $tinyCliCapability = Get-CapabilityStatus -Name "tiny_cli" -Label "nexttrace-tiny CLI" -Command "`"$Tiny`" --help" -SuccessPattern "--help"
 $ntrCliCapability = Get-CapabilityStatus -Name "ntr_cli" -Label "ntr CLI" -Command "`"$Ntr`" --help" -SuccessPattern "--help"
 
 if ($IPv6Available) {
-    $icmp6Capability = Get-CapabilityStatus -Name "icmp6" -Label "ICMPv6 tracing" -Command "`"$Bin`" --no-color -6 -q 1 -m 1 --timeout 1000 2606:4700:4700::1111" -SuccessPattern "hops max, .*ICMP mode"
-    $tcp6Capability = Get-CapabilityStatus -Name "tcp6" -Label "TCPv6 tracing" -Command "`"$Bin`" --no-color -6 -T -q 1 -m 1 --timeout 1000 2606:4700:4700::1111" -SuccessPattern "hops max, .*TCP mode"
-    $udp6Capability = Get-CapabilityStatus -Name "udp6" -Label "UDPv6 tracing" -Command "`"$Bin`" --no-color -6 -U -q 1 -m 1 --timeout 1000 2606:4700:4700::1111" -SuccessPattern "hops max, .*UDP mode"
+    $icmp6Capability = Get-CapabilityStatus -Name "icmp6" -Label "ICMPv6 tracing" -Command "`"$Bin`" --traceroute --no-color -6 -q 1 -m 1 --timeout 1000 2606:4700:4700::1111" -SuccessPattern "hops max, .*ICMP mode"
+    $tcp6Capability = Get-CapabilityStatus -Name "tcp6" -Label "TCPv6 tracing" -Command "`"$Bin`" --traceroute --no-color -6 -T -q 1 -m 1 --timeout 1000 2606:4700:4700::1111" -SuccessPattern "hops max, .*TCP mode"
+    $udp6Capability = Get-CapabilityStatus -Name "udp6" -Label "UDPv6 tracing" -Command "`"$Bin`" --traceroute --no-color -6 -U -q 1 -m 1 --timeout 1000 2606:4700:4700::1111" -SuccessPattern "hops max, .*UDP mode"
 }
 else {
     $icmp6Capability = [pscustomobject]@{ Supported = $false; Reason = $IPv6Reason }
@@ -731,47 +731,54 @@ else {
     $udp6Capability = [pscustomobject]@{ Supported = $false; Reason = $IPv6Reason }
 }
 
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "icmp4_basic" "ICMP IPv4 basic trace" "`"$Bin`" --no-color -q 1 -m 3 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
-Run-CmdIfSupported $tcp4Capability.Supported $tcp4Capability.Reason "tcp4_basic" "TCP IPv4 basic trace" "`"$Bin`" --no-color -T -q 1 -m 3 --timeout 1000 1.1.1.1" "hops max, .*TCP mode"
-Run-CmdIfSupported $udp4Capability.Supported $udp4Capability.Reason "udp4_basic" "UDP IPv4 basic trace" "`"$Bin`" --no-color -U -q 1 -m 3 --timeout 1000 1.1.1.1" "hops max, .*UDP mode"
-Run-CmdIfSupported $icmp6Capability.Supported $icmp6Capability.Reason "icmp6_basic" "ICMP IPv6 basic trace" "`"$Bin`" --no-color -6 -q 1 -m 3 --timeout 1000 2606:4700:4700::1111" "hops max, .*ICMP mode"
-Run-CmdIfSupported $tcp6Capability.Supported $tcp6Capability.Reason "tcp6_basic" "TCP IPv6 basic trace" "`"$Bin`" --no-color -6 -T -q 1 -m 3 --timeout 1000 2606:4700:4700::1111" "hops max, .*TCP mode"
-Run-CmdIfSupported $udp6Capability.Supported $udp6Capability.Reason "udp6_basic" "UDP IPv6 basic trace" "`"$Bin`" --no-color -6 -U -q 1 -m 3 --timeout 1000 2606:4700:4700::1111" "hops max, .*UDP mode"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "raw_output" "Raw hop rows" "`"$Bin`" --no-color --raw -q 1 -m 2 --timeout 1000 1.1.1.1" "(?m)^1\|"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "classic_output" "Classic printer" "`"$Bin`" --no-color --classic -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "route_path" "Route-path summary" "`"$Bin`" --no-color --route-path -q 1 -m 2 --timeout 1000 1.1.1.1" "Route-Path|hops max, .*ICMP mode"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "provider_lang" "IP.SB + sakura + en" "`"$Bin`" --no-color -q 1 -m 2 --timeout 1000 --data-provider IP.SB --pow-provider sakura --language en 1.1.1.1" "hops max, .*ICMP mode"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "dot_resolver" "DoT resolver via aliyun" "`"$Bin`" --no-color --dot-server aliyun -q 1 -m 1 --timeout 1000 ipv4.pek-4134.endpoint.nxtrace.org" "hops max, .*ICMP mode"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "disable_geoip" "disable-geoip path" "`"$Bin`" --no-color --data-provider disable-geoip -M -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "dn42_mode" "DN42 mode switch" "`"$Bin`" --no-color --dn42 -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
-Check-JsonPureIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "json_trace" "Traceroute JSON stdout purity" "`"$Bin`" --no-color --json -q 1 -m 3 --timeout 1000 1.1.1.1"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "default_trace" "Default remains traditional" "`"$Bin`" --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "default_raw" "Bare RAW remains traditional" "`"$Bin`" --raw --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "traceroute_short" "Short traditional flag" "`"$Bin`" -k --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported -Supported $true -Reason "" -Name "traceroute_mtr_conflict" -Note "Explicit modes conflict before probing" -Command "`"$Bin`" -k --mtr 1.1.1.1" -SuccessPattern "cannot be combined" -ForbiddenPattern "hops max|HOST:" -AllowedExitCodes @(1)
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "icmp4_basic" "ICMP IPv4 basic trace" "`"$Bin`" --traceroute --no-color -q 1 -m 3 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $tcp4Capability.Supported $tcp4Capability.Reason "tcp4_basic" "TCP IPv4 basic trace" "`"$Bin`" --traceroute --no-color -T -q 1 -m 3 --timeout 1000 1.1.1.1" "hops max, .*TCP mode"
+Run-CmdIfSupported $udp4Capability.Supported $udp4Capability.Reason "udp4_basic" "UDP IPv4 basic trace" "`"$Bin`" --traceroute --no-color -U -q 1 -m 3 --timeout 1000 1.1.1.1" "hops max, .*UDP mode"
+Run-CmdIfSupported $icmp6Capability.Supported $icmp6Capability.Reason "icmp6_basic" "ICMP IPv6 basic trace" "`"$Bin`" --traceroute --no-color -6 -q 1 -m 3 --timeout 1000 2606:4700:4700::1111" "hops max, .*ICMP mode"
+Run-CmdIfSupported $tcp6Capability.Supported $tcp6Capability.Reason "tcp6_basic" "TCP IPv6 basic trace" "`"$Bin`" --traceroute --no-color -6 -T -q 1 -m 3 --timeout 1000 2606:4700:4700::1111" "hops max, .*TCP mode"
+Run-CmdIfSupported $udp6Capability.Supported $udp6Capability.Reason "udp6_basic" "UDP IPv6 basic trace" "`"$Bin`" --traceroute --no-color -6 -U -q 1 -m 3 --timeout 1000 2606:4700:4700::1111" "hops max, .*UDP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "raw_output" "Raw hop rows" "`"$Bin`" --traceroute --no-color --raw -q 1 -m 2 --timeout 1000 1.1.1.1" "(?m)^1\|"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "classic_output" "Classic printer" "`"$Bin`" --traceroute --no-color --classic -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "route_path" "Route-path summary" "`"$Bin`" --traceroute --no-color --route-path -q 1 -m 2 --timeout 1000 1.1.1.1" "Route-Path|hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "provider_lang" "IP.SB + sakura + en" "`"$Bin`" --traceroute --no-color -q 1 -m 2 --timeout 1000 --data-provider IP.SB --pow-provider sakura --language en 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "dot_resolver" "DoT resolver via aliyun" "`"$Bin`" --traceroute --no-color --dot-server aliyun -q 1 -m 1 --timeout 1000 ipv4.pek-4134.endpoint.nxtrace.org" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "disable_geoip" "disable-geoip path" "`"$Bin`" --traceroute --no-color --data-provider disable-geoip -M -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "dn42_mode" "DN42 mode switch" "`"$Bin`" --traceroute --no-color --dn42 -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Check-JsonPureIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "json_trace" "Traceroute JSON stdout purity" "`"$Bin`" --traceroute --no-color --json -q 1 -m 3 --timeout 1000 1.1.1.1"
 Check-JsonPureIfSupported $mtuCapability.Supported $mtuCapability.Reason "json_mtu" "MTU JSON stdout purity" "`"$Bin`" --no-color --mtu --json --timeout 1000 -q 1 -m 3 1.1.1.1"
-Check-JsonPureIfSupported $globalpingCapability.Supported $globalpingCapability.Reason "json_globalping" "Globalping JSON stdout purity" "`"$Bin`" --no-color --json --from Germany -q 1 -m 3 --timeout 1000 1.1.1.1"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "table_non_tty" "Table output smoke" "`"$Bin`" --no-color --table -q 1 -m 2 --timeout 1000 1.1.1.1" "(?m)^Hop\s+IP\s+Latency"
-Check-OutputFileIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "output_custom" "Custom output file path" "`"$Bin`" --no-color -q 1 -m 2 --timeout 1000 -o `"$ArtifactsRoot\custom.log`" 1.1.1.1" (Join-Path $ArtifactsRoot "custom.log")
-Check-OutputFileIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "output_default" "Default output file path" "set TEMP=$DefaultTmp && set TMP=$DefaultTmp && `"$Bin`" --no-color -q 1 -m 2 --timeout 1000 -O 1.1.1.1" $DefaultLog
+Check-JsonPureIfSupported $globalpingCapability.Supported $globalpingCapability.Reason "json_globalping" "Globalping JSON stdout purity" "`"$Bin`" --traceroute --no-color --json --from Germany -q 1 -m 3 --timeout 1000 1.1.1.1"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "table_non_tty" "Table output smoke" "`"$Bin`" --traceroute --no-color --table -q 1 -m 2 --timeout 1000 1.1.1.1" "(?m)^Hop\s+IP\s+Latency"
+Check-OutputFileIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "output_custom" "Custom output file path" "`"$Bin`" --traceroute --no-color -q 1 -m 2 --timeout 1000 -o `"$ArtifactsRoot\custom.log`" 1.1.1.1" (Join-Path $ArtifactsRoot "custom.log")
+Check-OutputFileIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "output_default" "Default output file path" "set TEMP=$DefaultTmp && set TMP=$DefaultTmp && `"$Bin`" --traceroute --no-color -q 1 -m 2 --timeout 1000 -O 1.1.1.1" $DefaultLog
 Run-CmdIfSupported $mtuCapability.Supported $mtuCapability.Reason "mtu_text" "MTU text mode" "`"$Bin`" --no-color --mtu --timeout 1000 -q 1 -m 3 1.1.1.1" "Path MTU:"
 Write-Record mtu_tty_color SKIP "MTU TTY colorized output; no portable Windows PTY capture in this script"
 Run-CmdIfSupported $mtuCapability.Supported $mtuCapability.Reason "mtu_non_tty_plain" "MTU non-TTY output has no ANSI" "`"$Bin`" --mtu --timeout 1000 -q 1 -m 3 1.1.1.1" "Path MTU:" "\x1b\[[0-9;]*[A-Za-z]"
 Run-CmdIfSupported $mtrCapability.Supported $mtrCapability.Reason "mtr_report" "MTR report ICMP" "`"$Bin`" --no-color -r -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1" "(?m)^HOST:"
 Run-CmdIfSupported $mtrCapability.Supported $mtrCapability.Reason "mtr_wide" "MTR wide + show-ips" "`"$Bin`" --no-color -w --show-ips -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1" "(?m)^HOST:"
 Run-CmdIfSupported $mtrCapability.Supported $mtrCapability.Reason "mtr_raw" "MTR raw stream" "`"$Bin`" --no-color -r --raw -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1" "(?m)^1\|"
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "fast_trace_file" "Fast trace via --file" "`"$Bin`" --no-color --file `"$Targets`" -q 1 -m 2 --timeout 1000" "traceroute to "
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "fast_trace_file" "Fast trace via --file" "`"$Bin`" --traceroute --no-color --file `"$Targets`" -q 1 -m 2 --timeout 1000" "traceroute to "
 Run-CmdIfSupported -Supported $speedCapability.Supported -Reason $speedCapability.Reason -Name "help_speed_main" -Note "Main help exposes only top-level speed entry" -Command "`"$Bin`" --help" -SuccessPattern "--speed" -ForbiddenPattern "--speed-provider"
 Run-CmdIfSupported -Supported $speedCapability.Supported -Reason $speedCapability.Reason -Name "help_speed_detail" -Note "Speed help is dedicated and detailed" -Command "`"$Bin`" --speed --help" -SuccessPattern "--speed-provider" -ForbiddenPattern "hops max, .*ICMP mode"
 Check-JsonPureIfSupported -Supported $speedCapability.Supported -Reason $speedCapability.Reason -Name "speed_apple_json" -Note "Apple speed JSON path" -Command "`"$Bin`" --speed --json --no-metadata --non-interactive --max 64KiB --timeout 2000 --threads 2 --latency-count 2" -ExpectedJsonPattern '"provider":"apple"' -AllowedExitCodes @(0, 2)
 Check-JsonPureIfSupported -Supported $speedCapability.Supported -Reason $speedCapability.Reason -Name "speed_cloudflare_json" -Note "Cloudflare speed JSON path" -Command "`"$Bin`" --speed --speed-provider cloudflare --json --no-metadata --non-interactive --max 64KiB --timeout 2000 --threads 2 --latency-count 2" -ExpectedJsonPattern '"provider":"cloudflare"' -AllowedExitCodes @(0, 2)
-Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "tiny_smoke" "nexttrace-tiny smoke" "`"$Tiny`" --no-color -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "tiny_smoke" "nexttrace-tiny smoke" "`"$Tiny`" --traceroute --no-color -q 1 -m 2 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "tiny_default" "Tiny default remains traditional" "`"$Tiny`" --no-color -q 1 -m 1 --timeout 1000 1.1.1.1" "hops max, .*ICMP mode"
+Run-CmdIfSupported $mtrCapability.Supported $mtrCapability.Reason "tiny_mtr_report" "Tiny finite MTR report" "`"$Tiny`" --no-color -r --data-provider disable-geoip -n -q 2 -i 300 --timeout 1000 -m 2 1.1.1.1" "(?m)^HOST:"
+Run-CmdIfSupported $mtrCapability.Supported $mtrCapability.Reason "tiny_mtr_raw" "Tiny finite MTR RAW" "`"$Tiny`" --no-color --mtr --raw --data-provider disable-geoip -n -q 2 -i 300 --timeout 1000 -m 2 1.1.1.1" "(?m)^1\|"
 Run-CmdIfSupported $mtrCapability.Supported $mtrCapability.Reason "ntr_report" "ntr report smoke" "`"$Ntr`" --no-color -r -q 2 -i 300 --timeout 1000 -m 4 1.1.1.1" "(?m)^HOST:"
 Run-CmdIfSupported -Supported $tinyCliCapability.Supported -Reason $tinyCliCapability.Reason -Name "tiny_speed_reject" -Note "nexttrace-tiny rejects --speed" -Command "`"$Tiny`" --speed" -SuccessPattern "--speed is not available" -ForbiddenPattern "panic|goroutine [0-9]+|stack trace" -AllowedExitCodes @(1)
 Run-CmdIfSupported -Supported $ntrCliCapability.Supported -Reason $ntrCliCapability.Reason -Name "ntr_speed_reject" -Note "ntr rejects --speed" -Command "`"$Ntr`" --speed" -SuccessPattern "--speed is not available" -ForbiddenPattern "panic|goroutine [0-9]+|stack trace" -AllowedExitCodes @(1)
 
-Check-PacketCaptureIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "psize_tos_icmp4" "ICMPv4 psize/tos packet capture" "`"$Bin`" --no-color -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" "1.1.1.1" "host 1.1.1.1" "Differentiated Services Field: 0x2e" "Total Length: 84"
-Check-PacketCaptureIfSupported $udp4Capability.Supported $udp4Capability.Reason "psize_tos_udp4" "UDPv4 psize/tos packet capture" "`"$Bin`" --no-color -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" "1.1.1.1" "host 1.1.1.1" "Differentiated Services Field: 0x2e" "Total Length: 84"
-Check-PacketCaptureIfSupported $tcp4Capability.Supported $tcp4Capability.Reason "psize_tos_tcp4" "TCPv4 psize/tos packet capture" "`"$Bin`" --no-color -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" "1.1.1.1" "host 1.1.1.1" "Differentiated Services Field: 0x2e" "Total Length: 84"
-Check-PacketCaptureIfSupported $icmp6Capability.Supported $icmp6Capability.Reason "psize_tos_icmp6" "ICMPv6 psize/tos packet capture" "`"$Bin`" --no-color -6 -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" "2606:4700:4700::1111" "host 2606:4700:4700::1111" "Traffic Class: 0x2e" "Payload Length: 44"
-Check-PacketCaptureIfSupported $udp6Capability.Supported $udp6Capability.Reason "psize_tos_udp6" "UDPv6 psize/tos packet capture" "`"$Bin`" --no-color -6 -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" "2606:4700:4700::1111" "host 2606:4700:4700::1111" "Traffic Class: 0x2e" "Payload Length: 44"
-Check-PacketCaptureIfSupported $tcp6Capability.Supported $tcp6Capability.Reason "psize_tos_tcp6" "TCPv6 psize/tos packet capture" "`"$Bin`" --no-color -6 -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" "2606:4700:4700::1111" "host 2606:4700:4700::1111" "Traffic Class: 0x2e" "Payload Length: 44"
+Check-PacketCaptureIfSupported $icmp4Capability.Supported $icmp4Capability.Reason "psize_tos_icmp4" "ICMPv4 psize/tos packet capture" "`"$Bin`" --traceroute --no-color -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" "1.1.1.1" "host 1.1.1.1" "Differentiated Services Field: 0x2e" "Total Length: 84"
+Check-PacketCaptureIfSupported $udp4Capability.Supported $udp4Capability.Reason "psize_tos_udp4" "UDPv4 psize/tos packet capture" "`"$Bin`" --traceroute --no-color -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" "1.1.1.1" "host 1.1.1.1" "Differentiated Services Field: 0x2e" "Total Length: 84"
+Check-PacketCaptureIfSupported $tcp4Capability.Supported $tcp4Capability.Reason "psize_tos_tcp4" "TCPv4 psize/tos packet capture" "`"$Bin`" --traceroute --no-color -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 1.1.1.1" "1.1.1.1" "host 1.1.1.1" "Differentiated Services Field: 0x2e" "Total Length: 84"
+Check-PacketCaptureIfSupported $icmp6Capability.Supported $icmp6Capability.Reason "psize_tos_icmp6" "ICMPv6 psize/tos packet capture" "`"$Bin`" --traceroute --no-color -6 -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" "2606:4700:4700::1111" "host 2606:4700:4700::1111" "Traffic Class: 0x2e" "Payload Length: 44"
+Check-PacketCaptureIfSupported $udp6Capability.Supported $udp6Capability.Reason "psize_tos_udp6" "UDPv6 psize/tos packet capture" "`"$Bin`" --traceroute --no-color -6 -U -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" "2606:4700:4700::1111" "host 2606:4700:4700::1111" "Traffic Class: 0x2e" "Payload Length: 44"
+Check-PacketCaptureIfSupported $tcp6Capability.Supported $tcp6Capability.Reason "psize_tos_tcp6" "TCPv6 psize/tos packet capture" "`"$Bin`" --traceroute --no-color -6 -T -q 1 -m 1 --timeout 1000 --psize 84 -Q 46 2606:4700:4700::1111" "2606:4700:4700::1111" "host 2606:4700:4700::1111" "Traffic Class: 0x2e" "Payload Length: 44"
 
 $deployBaseUrl = $null
 $deployLog = Join-Path $ArtifactsDir "deploy_server.txt"

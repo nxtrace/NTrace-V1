@@ -26,6 +26,10 @@
   </a>
 </p>
 
+## 默认模式迁移公告：最早于 2027 年
+
+> **下游开发者请注意：** NextTrace 将最早于 2027 年将 `nexttrace` 和 `nexttrace-tiny` 的默认运行与显示模式切换为 MTR，单独使用 `--raw` 时也将切换为 MTR RAW。传统 traceroute 及其 RAW 输出将继续通过 `-k/--traceroute` 提供。依赖当前行为的程序应提前使用 `--traceroute` 或 `--traceroute --raw`。**本次版本尚未切换默认模式，具体切换版本将另行公告。** `ntr` 继续作为 MTR 专用版。
+
 ## IAAS Sponsor
 
 <div style="text-align: center;">
@@ -186,10 +190,10 @@ Document Language: [English](README.md) | 简体中文
 | DNS 客户端（`-l` / `--dns`） |       ✅           |        —         |     —      |
 | CDN 测速（`--speed`）   |          ✅           |        —         |     —      |
 | IP 文本标注（`--nali`） |          ✅           |        —         |     —      |
-| MTR TUI                 |          ✅           |        —         | ✅（默认） |
-| MTR 报告（`-r`）        |          ✅           |        —         |     ✅     |
-| MTR 宽报告（`-w`）      |          ✅           |        —         |     ✅     |
-| MTR 原始输出（`--raw`） |          ✅           |        —         |     ✅     |
+| MTR TUI                 |          ✅           |        ✅         | ✅（默认） |
+| MTR 报告（`-r`）        |          ✅           |        ✅         |     ✅     |
+| MTR 宽报告（`-w`）      |          ✅           |        ✅         |     ✅     |
+| MTR 原始输出（`--raw`） |          ✅           |        ✅         |     ✅     |
 | Globalping（`--from`）  |          ✅           |        —         |     —      |
 | WebUI（`--deploy`）/ MCP（`--deploy --mcp`） |          ✅           |        —         |     —      |
 | 快速跟踪（`-F`）        |          ✅           |        ✅        |     —      |
@@ -201,7 +205,7 @@ Document Language: [English](README.md) | 简体中文
 ### 功能对比
 
 - **`nexttrace`** — 完整版。包含 traceroute、独立 DNS 客户端与 MTU 模式、CDN 测速、IP 文本标注、MTR、Globalping、Fast Trace、WebUI（`--deploy`）与 MCP（`--deploy --mcp`）。
-- **`nexttrace-tiny`** — 精简版。保留常规 traceroute、独立 MTU 和 Fast Trace；不含 DNS 客户端 / CDN 测速 / IP 文本标注 / MTR / Globalping / WebUI / MCP。适合嵌入式或极简环境。
+- **`nexttrace-tiny`** — 精简版。保留常规 traceroute、独立 MTU 和 Fast Trace；包含可选 MTR TUI、报告和 RAW；不含 DNS 客户端 / CDN 测速 / IP 文本标注 / Globalping / WebUI / MCP。适合嵌入式或极简环境。
 - **`ntr`** — MTR 专用版。默认启动 MTR TUI。不含常规 traceroute、独立 DNS 客户端或 `--mtu`、CDN 测速、IP 文本标注、Globalping、Fast Trace、WebUI 或 MCP。
 
 ### 手动编译
@@ -217,7 +221,7 @@ export GOEXPERIMENT=nojsonv2
 # 完整版（所有功能）
 go build -trimpath -o dist/nexttrace -ldflags "-w -s" .
 
-# 精简版（无 DNS 客户端、无 MTR、无 Globalping、无 WebUI）
+# 精简版（含可选 MTR，无 DNS 客户端、无 Globalping、无 WebUI）
 go build -tags flavor_tiny -trimpath -o dist/nexttrace-tiny -ldflags "-w -s" .
 
 # MTR 专用版
@@ -276,7 +280,7 @@ nexttrace http://example.com:8080/index.html?q=1
 nexttrace --table 1.0.0.1
 
 # 机器可读输出：stdout 只包含一个 JSON 文档
-nexttrace --raw 1.0.0.1
+nexttrace --traceroute --raw 1.0.0.1
 nexttrace --json 1.0.0.1
 
 # 将实时 traceroute 输出写入自定义文件
@@ -307,6 +311,45 @@ export NEXTTRACE_DISABLEMPLS=1
 普通 traceroute 会报告停止原因：到达目标、收到终止性的 unreachable 响应（含 marker），或达到配置的最大跳数。`--json` 保持既有顶层结果结构，并新增可选 `StopReason`；其嵌套字段固定为小写 `hop`、`reason`、`responses`、`markers`，其中 `responses` 是人类可读描述，`markers` 是机器可读代码。classic/raw/JSON 不追加人类可读 footer；`--output` 会把同一停止原因以无 ANSI 的纯文本写入日志。
 
 普通 traceroute 同时指定多个输出模式时，优先级为 `--json` > `--table` > `--classic` > `--raw` > `--output` > 实时输出。高优先级模式覆盖显式 `--output` 或 `--output-default` 时，NextTrace 会在 stderr 说明该选择，且不会创建被忽略的日志文件。
+
+#### 下游迁移与显式传统模式
+
+`-k/--traceroute` 在完整版和 tiny 中选择传统 traceroute；它不是 `--classic` 排版的别名。可与现有传统输出格式、Fast Trace、文件目标和 Globalping 组合。与 `--mtr/-t`、`--report/-r`、`--wide/-w` 或独立 DNS、MTU、测速、IP 标注、deploy 模式同用会报错。
+
+```bash
+nexttrace --traceroute example.com
+nexttrace -k example.com
+nexttrace --traceroute --raw example.com
+nexttrace --mtr --raw -q 10 example.com
+```
+
+| 调用 | 当前 | 默认切换后 |
+|---|---|---|
+| 仅目标地址 | 传统 traceroute | MTR |
+| `--raw` | 传统 RAW | MTR RAW |
+| `--traceroute` | 传统 traceroute | 传统 traceroute |
+| `--traceroute --raw` | 传统 RAW | 传统 RAW |
+| `--json/--table/--classic/--output/--output-default/--route-path` | 传统模式 | 自动选择传统模式 |
+
+独立功能入口以及 Fast Trace、文件目标和 Globalping 保持各自工作流；独立模式中的 `--json` 仍属于该模式。显式 MTR 与传统专用格式的冲突规则不变。
+
+MTR TUI/RAW 在未指定 `-q` 时持续运行，report 默认每跳 10 次；自动化调用应设置明确的 `-q`。MTR 中 `-i` 是每跳探测间隔（默认 1000ms），`-z` 被忽略；传统 traceroute 中 `-q` 默认每跳 3 次，`-i` 是 TTL 组间隔（默认 300ms），`-z` 是包间隔（默认 50ms）。
+
+两种 RAW 不能只按成功行的列数区分：传统 RAW 成功行 12 列、超时行保留历史 8 列；MTR RAW 的数据行固定 12 列，并持续逐事件输出。解析器还需遵守各模式现有的信息头和 stderr 规则。`NEXTTRACE_UNINTERRUPTED` 配合 `--traceroute --raw` 时继续保留传统循环行为。
+
+需兼容旧版本的 Bash 包装脚本可在调用前检测能力：
+
+```bash
+trace_mode=()
+nexttrace_help=$(nexttrace --help)
+if [[ "$nexttrace_help" == *"--traceroute"* ]]; then
+  trace_mode=(--traceroute)
+fi
+nexttrace "${trace_mode[@]}" --raw example.com
+```
+
+旧版本不添加新参数；不要在探测失败后去掉参数自动重试，以免重复发起探测。
+
 
 PS: 路由可视化的绘制模块为独立模块，具体代码可在 [nxtrace/traceMap](https://github.com/nxtrace/traceMap) 查看  
 路由可视化功能需要每个 Hop 的地理位置坐标，目前支持搭配 NextTrace API、IPInfo 和 IP-API.com 使用。
@@ -647,7 +690,7 @@ raw stdout 契约仍严格保持 12 列。无限运行的 MTR 中，unreachable 
 
 > 注意：`--show-ips` 仅在 MTR 模式（`--mtr`、`-r`、`-w`）生效，其他模式会忽略。
 >
-> 注意：`--mtr` 不可与 `--table`、`--classic`、`--json`、`--output`、`--output-default`、`--route-path`、`--from`、`--fast-trace`、`--file`、`--deploy` 同时使用。
+> 注意：`--mtr` 不可与 `--traceroute`、`--table`、`--classic`、`--json`、`--output`、`--output-default`、`--route-path`、`--from`、`--fast-trace`、`--file`、`--deploy` 同时使用。
 
 #### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`, `DN42`）
 
@@ -781,51 +824,46 @@ NextTrace 当前会读取下列环境变量。对于 `NEXTTRACE_*` 布尔开关�
 
 ### 全部用法详见 Usage 菜单
 
+以下为 macOS 完整版的帮助输出；Windows 还提供 `--init` 和 `--icmp-mode`。
+
 ```shell
-Usage: nexttrace [-h|--help] [--init] [-4|--ipv4] [-6|--ipv6] [-T|--tcp]
-                 [-U|--udp] [-l|--dns] [--speed] [--nali] [-F|--fast-trace]
-                 [-p|--port <integer>] [--icmp-mode <integer>] [-q|--queries <integer>]
-                 [--max-attempts <integer>] [--parallel-requests <integer>]
-                 [-m|--max-hops <integer>] [-d|--data-provider
+usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
+                 [--mtu] [-F|--fast-trace] [-p|--port <integer>] [-q|--queries
+                 <integer>] [--max-attempts <integer>] [--parallel-requests
+                 <integer>] [-m|--max-hops <integer>] [-d|--data-provider
                  (IP.SB|ip.sb|IPInfo|ipinfo|IPInsight|ipinsight|IPAPI.com|ip-api.com|IPInfoLocal|ipinfolocal|chunzhen|NextTrace-API|ipdb.one|disable-geoip|DN42|dn42)]
                  [--pow-provider (api.nxtrace.org|sakura)] [-n|--no-rdns]
-                 [-a|--always-rdns] [-P|--route-path] [--dn42] [-o|--output
-                 "<value>"] [-O|--output-default] [--table] [--raw]
-                 [-j|--json] [-c|--classic] [-f|--first <integer>] [-M|--map]
-                 [-e|--disable-mpls] [-V|--version] [-x|--setup-api-v4-token]
+                 [-a|--always-rdns] [-k|--traceroute] [-P|--route-path]
+                 [-o|--output "<value>"] [-O|--output-default] [--table]
+                 [-j|--json] [-c|--classic] [--dn42] [--raw] [-f|--first
+                 <integer>] [-M|--map] [-e|--disable-mpls] [-V|--version]
+                 [-x|--setup-api-v4-token] [-l|--dns] [--speed] [--nali]
                  [-s|--source "<value>"] [--source-port <integer>] [-D|--dev
                  "<value>"] [--listen "<value>"] [--deploy-token "<value>"]
-                 [--mcp] [--deploy] [-z|--send-time <integer>]
-                 [-i|--ttl-time <integer>] [--timeout <integer>]
-                 [--psize <integer>] [--dot-server
+                 [--mcp] [--deploy] [-z|--send-time <integer>] [-i|--ttl-time
+                 <integer>] [--timeout <integer>] [--psize <integer>] [-Q|--tos
+                 <integer>] [--dot-server
                  (dnssb|aliyun|dnspod|google|cloudflare)] [-g|--language
                  (en|cn)] [-C|--no-color] [--from "<value>"] [-t|--mtr]
                  [-r|--report] [-w|--wide] [--show-ips] [-y|--ipinfo <integer>]
                  [--file "<value>"] [TARGET "<value>"]
 
+                 An open source visual route tracking CLI tool
+
 Arguments:
 
   -h  --help                         Print help information
-      --init                         Windows ONLY: Extract WinDivert runtime to
-                                     executable directory
-  -l  --dns                          Run DNS client mode. See `nexttrace --dns
-                                     --help` for details
-      --speed                        Run CDN speed test mode. See `nexttrace
-                                     --speed --help` for details
-      --nali                         Annotate IP literals in text using
-                                     NextTrace GeoIP data
   -4  --ipv4                         Use IPv4 only
   -6  --ipv6                         Use IPv6 only
   -T  --tcp                          Use TCP SYN for tracerouting (default
                                      dest-port is 80)
   -U  --udp                          Use UDP SYN for tracerouting (default
                                      dest-port is 33494)
+      --mtu                          Run standalone UDP path-MTU discovery mode
+                                     with streaming output and GeoIP/RDNS
   -F  --fast-trace                   One-Key Fast Trace to China ISPs
   -p  --port                         Set the destination port to use. With
                                      default of 80 for "tcp", 33494 for "udp"
-      --icmp-mode                    Windows ONLY: Choose the method to listen
-                                     for ICMP packets (1=Socket, 2=WinDivert;
-                                     0=Auto)
   -q  --queries                      Latency samples per hop. Increase to 5-10
                                      on unstable paths for a steadier view.
                                      Default: 3
@@ -852,28 +890,38 @@ Arguments:
                                      domain names
   -a  --always-rdns                  Always resolve IP addresses to their
                                      domain names
+  -k  --traceroute                   Use traditional traceroute mode; with
+                                     --raw, preserve traditional raw output
   -P  --route-path                   Print traceroute hop path by ASN and
                                      location
-      --dn42                         DN42 Mode
-  -o  --output                       Write trace result to FILE
-                                     (RealtimePrinter only)
-  -O  --output-default               Write trace result to the default log file
+  -o  --output                       Write realtime trace output and final stop
+                                     reason to FILE
+  -O  --output-default               Write realtime trace output and final stop
+                                     reason to the default log file
                                      (/tmp/trace.log)
       --table                        Output trace results as a final summary
                                      table (traceroute report mode)
-      --raw                          Machine-friendly output. With MTR
-                                     (--mtr/-r/-w), enables streaming raw event
-                                     mode
   -j  --json                         Output trace results as JSON
   -c  --classic                      Classic Output trace results like
                                      BestTrace
+      --dn42                         DN42 Mode
+      --raw                          Machine-friendly output; use --traceroute
+                                     --raw to preserve traditional raw output.
+                                     With MTR (--mtr/-r/-w), enables streaming
+                                     raw event mode
   -f  --first                        Start from the first_ttl hop (instead of
                                      1). Default: 1
   -M  --map                          Disable Print Trace Map
   -e  --disable-mpls                 Disable MPLS
   -V  --version                      Print version info and exit
   -x  --setup-api-v4-token           Store a session-only NextTrace API v4
-                                     token in a temporary file and exit
+                                     token in a temporary file
+  -l  --dns                          Run DNS client mode. See `nexttrace --dns
+                                     --help` for details
+      --speed                        Run CDN speed test mode. See `nexttrace
+                                     --speed --help` for details
+      --nali                         Annotate IP literals in text using
+                                     NextTrace GeoIP data
   -s  --source                       Use source address src_addr for outgoing
                                      packets
       --source-port                  Use source port src_port for outgoing
@@ -887,8 +935,7 @@ Arguments:
                                      127.0.0.1:30080)
       --deploy-token                 Set bearer token for --deploy
                                      WebUI/API/WebSocket/MCP access
-      --mcp                          Enable MCP endpoint under --deploy at
-                                     /mcp
+      --mcp                          Enable MCP endpoint under --deploy at /mcp
       --deploy                       Start the Gin powered web console
   -z  --send-time                    Advanced: per-packet gap [ms] inside the
                                      same TTL group. Lower is faster; raise to
@@ -904,10 +951,10 @@ Arguments:
                                      paths. Default: 1000
       --psize                        Probe packet size in bytes, inclusive IP
                                      and active probe headers. Default is the
-                                     minimum legal size for the chosen
-                                     protocol and IP family; raise for MTU or
+                                     minimum legal size for the chosen protocol
+                                     and IP family; raise for MTU or
                                      large-packet testing. Negative values
-                                     randomize each probe up to abs(value).
+                                     randomize each probe up to abs(value)
   -Q  --tos                          Set the IP type-of-service / traffic class
                                      value [0-255]. Default: 0
       --dot-server                   Use DoT Server for DNS Parse [dnssb,

@@ -38,6 +38,12 @@
 
 ### 常规 traceroute 路径
 
+- `-k/--traceroute`：完整版和 tiny 显式选择传统模式；配合 `--raw` 保留传统 RAW。与显式 MTR/report/wide 及独立 DNS/MTU/speed/nali/deploy 模式冲突。
+- 完整版和 tiny 当前仍默认传统 traceroute，已公告最早于 2027 年切换默认模式与单独 RAW 到 MTR；具体版本另行公告，不按日期自动切换。
+- tiny 已开放可选 MTR TUI/report/wide/RAW；ntr 仍是 MTR 专用版，不注册 `--traceroute`。
+- `enableTraceroute` 控制传统参数能力，`defaultMTR` 只控制未明确选择模式时的默认值；不可再用默认模式决定传统参数是否注册。
+- `cmd/trace_mode.go` 集中解析模式；未来默认 MTR 时，传统专用格式和 Fast Trace/文件目标/Globalping 保持传统路径，独立模式中的共享格式参数由各自入口解释。
+
 - `--table`：现在是"最终汇总表"模式（一次探测完成后输出汇总表），不再是旧的异步 table 刷新模式。
 - `--route-path`：仍由 `reporter.New(...).Print()` 负责（与 MTR report 无关）。
 

@@ -368,7 +368,7 @@ func registerInitFlag(parser *argparse.Parser) *bool {
 }
 
 func registerFastTraceFlag(parser *argparse.Parser) *bool {
-	if !defaultMTR {
+	if enableTraceroute {
 		return parser.Flag("F", "fast-trace", &argparse.Options{Help: "One-Key Fast Trace to China ISPs"})
 	}
 	return ptrBool(false)
@@ -396,7 +396,7 @@ func registerDataProviderFlag(parser *argparse.Parser) *string {
 }
 
 func buildQueriesHelp() string {
-	if defaultMTR {
+	if !enableTraceroute {
 		return "MTR only: max probes per hop. 0 = unlimited in TUI/raw; --report defaults to 10 when omitted. Start with 10-20 on unstable paths"
 	}
 	return "Latency samples per hop. Increase to 5-10 on unstable paths for a steadier view"
@@ -431,7 +431,11 @@ func buildTOSHelp() string {
 }
 
 func registerTracerouteOutputFlags(parser *argparse.Parser) tracerouteOutputFlags {
-	if !defaultMTR {
+	return registerTracerouteOutputFlagsWithAvailability(parser, enableTraceroute)
+}
+
+func registerTracerouteOutputFlagsWithAvailability(parser *argparse.Parser, enabled bool) tracerouteOutputFlags {
+	if enabled {
 		return tracerouteOutputFlags{
 			routePath:     parser.Flag("P", "route-path", &argparse.Options{Help: "Print traceroute hop path by ASN and location"}),
 			outputPath:    parser.String("o", "output", &argparse.Options{Help: "Write realtime trace output and final stop reason to FILE"}),
@@ -473,19 +477,19 @@ func registerWebUIFlagsWithAvailability(parser *argparse.Parser, enabled bool) w
 }
 
 func registerPacketIntervalFlag(parser *argparse.Parser) *int {
-	if !defaultMTR {
+	if enableTraceroute {
 		return parser.Int("z", "send-time", &argparse.Options{Default: defaultPacketIntervalMs, Help: buildPacketIntervalHelp()})
 	}
 	return ptrInt(defaultPacketIntervalMs)
 }
 
 func buildRawHelp() string {
-	rawHelp := "Machine-friendly output"
+	if !enableTraceroute {
+		return "MTR streaming raw event output"
+	}
+	rawHelp := "Machine-friendly output; use --traceroute --raw to preserve traditional raw output"
 	if enableMTR {
 		mtrFlags := "--mtr/-r/-w"
-		if defaultMTR {
-			mtrFlags = "-r/-w"
-		}
 		rawHelp += ". With MTR (" + mtrFlags + "), enables streaming raw event mode"
 	}
 	return rawHelp
@@ -495,7 +499,7 @@ func buildTTLIntervalHelp() string {
 	if !enableMTR {
 		return "Advanced: TTL-group interval [ms] in normal traceroute. 100-300ms is usually safe; lower is faster but may trigger rate limits"
 	}
-	if defaultMTR {
+	if !enableTraceroute {
 		return "Advanced: per-hop probe interval [ms] in MTR mode. 500-1000ms is a good starting point; omitted defaults to 1000ms"
 	}
 	return "Advanced: TTL-group interval [ms] in normal traceroute. In MTR mode (--mtr/-r/-w, including --raw), this becomes per-hop probe interval. 500-1000ms is a good MTR starting range"
@@ -521,7 +525,7 @@ func applyTTLIntervalDefault(ttlInterval *int, ttlTimeExplicit, effectiveMTR boo
 }
 
 func registerDisableMaptraceFlag(parser *argparse.Parser) *bool {
-	if !defaultMTR {
+	if enableTraceroute {
 		return parser.Flag("M", "map", &argparse.Options{Help: "Disable Print Trace Map"})
 	}
 	return ptrBool(true)
@@ -540,8 +544,8 @@ func registerGlobalpingFlagWithAvailability(parser *argparse.Parser, enabled boo
 
 func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 	if enableMTR {
-		mtrMode := ptrBool(true)
-		if !defaultMTR {
+		mtrMode := ptrBool(false)
+		if enableTraceroute {
 			mtrMode = parser.Flag("t", "mtr", &argparse.Options{Help: "Enable MTR (My Traceroute) continuous probing mode"})
 		}
 		return mtrCLIFlags{
@@ -562,7 +566,7 @@ func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 }
 
 func registerFileFlag(parser *argparse.Parser) *string {
-	if !defaultMTR {
+	if enableTraceroute {
 		return parser.String("", "file", &argparse.Options{Help: "Read IP Address or domain name from file"})
 	}
 	return ptrStr("")
@@ -1378,6 +1382,7 @@ func Execute() {
 		Help: "Choose PoW Provider for NextTrace API v3 [api.nxtrace.org, sakura] For China mainland users, please use sakura"})
 	norDNS := parser.Flag("n", "no-rdns", &argparse.Options{Help: "Do not resolve IP addresses to their domain names"})
 	alwaysrDNS := parser.Flag("a", "always-rdns", &argparse.Options{Help: "Always resolve IP addresses to their domain names"})
+	tracerouteMode := registerTracerouteFlag(parser)
 	outputFlags := registerTracerouteOutputFlags(parser)
 	routePath := outputFlags.routePath
 	outputPath := outputFlags.outputPath
@@ -1421,7 +1426,7 @@ func Execute() {
 	// ── Globalping flag (full only) ──
 	from := registerGlobalpingFlag(parser)
 
-	// ── MTR flags (full & ntr only) ──
+	// ── MTR flags (all flavors) ──
 	mtrFlags := registerMTRFlags(parser)
 	mtrMode := mtrFlags.mtrMode
 	reportMode := mtrFlags.reportMode
@@ -1429,7 +1434,7 @@ func Execute() {
 	showIPs := mtrFlags.showIPs
 	ipInfoMode := mtrFlags.ipInfoMode
 
-	// ── File: hidden in ntr (conflicts with default MTR mode) ──
+	// ── File: hidden in MTR-only ntr ──
 	file := registerFileFlag(parser)
 	str := parser.StringPositional(&argparse.Options{Help: "Trace target: IPv4 address (e.g. 8.8.8.8), IPv6 address (e.g. 2001:db8::1), domain name (e.g. example.com), or URL (e.g. https://example.com)"})
 
@@ -1458,7 +1463,29 @@ func Execute() {
 	defer stop()
 	util.SrcDev = ""
 
-	mtrModes := deriveEffectiveMTRModes(*mtrMode, *reportMode, *wideMode, *rawPrint)
+	standalone := ""
+	switch {
+	case *mtuMode:
+		standalone = "--mtu"
+	case *naliMode:
+		standalone = "--nali"
+	case *deploy:
+		standalone = "--deploy"
+	}
+	mtrModes, modeErr := resolveTraceModes(traceModeOptions{
+		traceroute: *tracerouteMode,
+		mtr:        *mtrMode,
+		report:     *reportMode,
+		wide:       *wideMode,
+		raw:        *rawPrint,
+		traditional: *jsonPrint || *tablePrint || *classicPrint || *outputPath != "" ||
+			*outputDefault || *routePath || *fastTraceFlag || *file != "" || (enableGlobalping && *from != ""),
+		standalone: standalone,
+	}, defaultMTR)
+	if modeErr != nil {
+		fmt.Fprintln(os.Stderr, modeErr)
+		os.Exit(1)
+	}
 	if *naliMode {
 		applyColorMode(*noColor)
 		if maybePrintVersion(*ver) {
