@@ -2,8 +2,9 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/nxtrace/NTrace-core/printer"
 	"strings"
+
+	"github.com/nxtrace/NTrace-core/printer"
 )
 
 func containsMTRColumnsFlag(args []string) bool {

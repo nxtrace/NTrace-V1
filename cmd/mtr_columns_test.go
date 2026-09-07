@@ -5,12 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/akamensky/argparse"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akamensky/argparse"
 )
 
 func TestMTRColumnsModeContract(t *testing.T) {

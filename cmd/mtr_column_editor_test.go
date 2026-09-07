@@ -112,8 +112,8 @@ func TestMTRColumnEditorEscapePasteAndLimit(t *testing.T) {
 
 func TestMTRKeyLoopCancelWhileReadBlocked(t *testing.T) {
 	r, w := io.Pipe()
-	defer r.Close()
-	defer w.Close()
+	defer func() { _ = r.Close() }()
+	defer func() { _ = w.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	u := newMTRUI(cancel, 0)
 	done := make(chan struct{})

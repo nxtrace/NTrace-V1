@@ -110,15 +110,14 @@ func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 			if frameEditor.Active != pasteEnabled {
 				pasteEnabled = frameEditor.Active
 				if pasteEnabled {
-					fmt.Fprint(os.Stdout, "\033[?2004h")
+					_, _ = fmt.Fprint(os.Stdout, "\033[?2004h")
 				} else {
-					fmt.Fprint(os.Stdout, "\033[?2004l")
+					_, _ = fmt.Fprint(os.Stdout, "\033[?2004l")
 				}
 			}
 			render(n, stats)
 		})
 		defer stopRedraw()
-
 	} else {
 		onSnapshot = func(iteration int, stats []trace.MTRHopStat) {
 			printer.MTRTablePrinterWithColumns(stats, iteration, ui.CurrentDisplayMode(), ui.CurrentNameMode(), lang, showIPs, columns)

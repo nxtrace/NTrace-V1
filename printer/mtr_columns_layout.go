@@ -2,12 +2,13 @@ package printer
 
 import (
 	"fmt"
-	"github.com/fatih/color"
-	"github.com/nxtrace/NTrace-core/trace"
-	"github.com/rodaine/table"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/fatih/color"
+	"github.com/nxtrace/NTrace-core/trace"
+	"github.com/rodaine/table"
 )
 
 // MTRColumnEditor is an immutable frame snapshot supplied by the TUI controller.

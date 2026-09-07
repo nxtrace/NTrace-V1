@@ -38,7 +38,7 @@ func maybeRunDNSModeWithAvailability(
 		return true, 1
 	}
 	if containsMTRColumnsFlag(rawArgs) {
-		fmt.Fprintln(stderr, "--mtr-columns cannot be combined with a standalone mode")
+		_, _ = fmt.Fprintln(stderr, "--mtr-columns cannot be combined with a standalone mode")
 		return true, 2
 	}
 	return true, runner(rawArgs[1:], stdout, stderr)

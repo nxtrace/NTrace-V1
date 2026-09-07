@@ -2,10 +2,11 @@ package printer
 
 import (
 	"fmt"
-	"github.com/nxtrace/NTrace-core/trace"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nxtrace/NTrace-core/trace"
 )
 
 func TestMTRColumnContract(t *testing.T) {

@@ -379,7 +379,7 @@ func mtrTUIRenderWithWidth(w io.Writer, header MTRTUIHeader, stats []trace.MTRHo
 		tuiLine(&b, "%s", buildMTRTUITitleLine(header, lo.termWidth))
 		tuiLine(&b, "%s", mtrTUIStatusText(header.Status))
 		renderMTRColumnEditor(&b, header.ColumnEditor, lo.termWidth)
-		fmt.Fprint(w, b.String())
+		_, _ = fmt.Fprint(w, b.String())
 		return
 	}
 	if header.Columns != nil && !header.HistoryMode {

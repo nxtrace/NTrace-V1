@@ -3,13 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/nxtrace/NTrace-core/printer"
 	"io"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/nxtrace/NTrace-core/printer"
 	"golang.org/x/term"
 )
 
@@ -453,7 +453,6 @@ func (u *mtrUI) readKeysLoop(ctx context.Context, input io.Reader) {
 			}
 		}
 	}
-
 }
 
 // ConsumeRestartRequest 原子读取并清除重置请求标志。
