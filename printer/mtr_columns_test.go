@@ -150,6 +150,9 @@ func TestMTRColumnsDistinguishesEmptyAndUnknownEntries(t *testing.T) {
 }
 
 func TestMTRDefaultControlsFitTerminal(t *testing.T) {
+	old := color.NoColor
+	color.NoColor = true
+	t.Cleanup(func() { color.NoColor = old })
 	for _, width := range []int{24, 40, 60, 80, 120, 160, 200} {
 		for _, history := range []bool{false, true} {
 			line := buildMTRTUIControlsLine(MTRTUIHeader{HistoryMode: history}, width)
@@ -170,10 +173,16 @@ func TestMTRDefaultControlsFitTerminal(t *testing.T) {
 }
 
 func TestMTRDefaultControlsMeasureVisibleColorWidth(t *testing.T) {
-	old := color.NoColor
-	color.NoColor = false
-	t.Cleanup(func() { color.NoColor = old })
+	oldKey, oldStatus := mtrTUIKeyHiColor, mtrTUIStatusColor
+	t.Cleanup(func() { mtrTUIKeyHiColor, mtrTUIStatusColor = oldKey, oldStatus })
+	key, status := color.New(color.FgHiWhite), color.New(color.FgHiYellow, color.Bold)
+	key.EnableColor()
+	status.EnableColor()
+	mtrTUIKeyHiColor, mtrTUIStatusColor = key.SprintFunc(), status.SprintFunc()
 	line := buildMTRTUIControlsLine(MTRTUIHeader{}, 120)
+	if !strings.Contains(line, "\x1b[") {
+		t.Fatalf("expected colored controls: %q", line)
+	}
 	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(line, "")
 	if displayWidth(plain) > 120 || !strings.Contains(plain, "D-history(off)") {
 		t.Fatalf("colored controls: %q", line)
