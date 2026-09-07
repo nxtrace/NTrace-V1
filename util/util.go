@@ -420,6 +420,15 @@ func lookupIPs(ctx context.Context, resolver hostLookupResolver, host string) ([
 	return ips, nil
 }
 
+// ResolveTargetIPs returns all target addresses without prompting or printing.
+// The caller owns the deadline. Target DoT failures do not fall back to DNS.
+func ResolveTargetIPs(ctx context.Context, host, dotServer string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	return lookupIPs(ctx, domainResolverFactory(dotServer), host)
+}
+
 func filterByFamily(ips []net.IP, ipVersion string) []net.IP {
 	if ipVersion == "all" {
 		return ips
@@ -513,7 +522,7 @@ func DomainLookUpWithContext(ctx context.Context, host string, ipVersion string,
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, dnsLookupTimeout)
 
-	ips, err := lookupIPs(lookupCtx, domainResolverFactory(dotServer), host)
+	ips, err := ResolveTargetIPs(lookupCtx, host, dotServer)
 	cancel()
 	if err != nil {
 		return nil, err

@@ -186,6 +186,7 @@ Document Language: [English](README.md) | 简体中文
 | 功能                    | `nexttrace`（完整版） | `nexttrace-tiny` |   `ntr`    |
 | ----------------------- | :-------------------: | :--------------: | :--------: |
 | 常规 traceroute         |          ✅           |        ✅        |     —      |
+| 环境自检（`--doctor`） | ✅ | ✅ | ✅ |
 | 独立 MTU（`--mtu`）     |          ✅           |        ✅        |     —      |
 | DNS 客户端（`-l` / `--dns`） |       ✅           |        —         |     —      |
 | CDN 测速（`--speed`）   |          ✅           |        —         |     —      |
@@ -201,6 +202,27 @@ Document Language: [English](README.md) | 简体中文
 | 二进制名                |      `nexttrace`      | `nexttrace-tiny` |   `ntr`    |
 
 > **注意：** `APT (nexttrace-debs)` 与 `Homebrew tap (nxtrace/nexttrace)` 目前提供 **Full**（`nexttrace`）、**Tiny**（`nexttrace-tiny`）和 **NTR**（`ntr`）三种包；`homebrew-core`、AUR、Scoop 等其它包管理器目前仍仅提供 **完整版**（`nexttrace`）。
+
+### 探测环境自检
+
+```sh
+nexttrace --doctor example.com
+nexttrace --doctor --tcp --port 443 example.com
+nexttrace-tiny --doctor -6 ::1
+ntr --doctor --dev eth0 example.com
+```
+
+`--doctor` 输出纯文本诊断报告后退出，分别列出请求配置、目标解析与源地址选择、系统路由预测及实际后端初始化结果。自检不发送探测包、不读取捕获流量、不访问 GeoIP/API 服务，也不验证目标可达性；DNS/DoT 解析可能访问网络。
+
+三个版本均支持。可用参数限于 `--ipv4`/`--ipv6`、`--tcp`/`--udp`、`--port`、`--source`、`--source-port`、`--dev`、`--tos`、`--dot-server`、`--timeout`、`--language`、`--no-color`、Windows 的 `--icmp-mode` 及对应短参数，详见 `--doctor --help`。目标仅接受域名或 IP，不接受 URL 和带区域后缀的 IPv6 地址。其他运行模式、JSON/RAW/文件输出及无关探测参数不能与自检组合。
+
+默认使用 ICMP、中文文本，每项网络检查超时为 5000ms。多个解析候选全部列出，自动选择首个符合地址族的地址，不进行交互选择。目标 DoT 失败不回退系统 DNS。单项失败后继续独立检查；报告写入 stdout，参数与报告写入错误写入 stderr。报告包含目标、源地址和接口信息，不包含 token 或代理凭据。
+
+路由查询分别使用 Linux netlink、macOS 路由 socket 和 Windows `GetBestRoute2`，无法确认的信息显示“未知”。macOS/Windows 的预测不能覆盖全部协议、端口、源策略或 TOS 条件，报告会列明限制。socket 或过滤器初始化成功仅代表该步骤成功，不代表实际出口、收发能力或 TOS 生效。网络等待设有超时；原生同步初始化调用不承诺可被强制取消。
+
+Windows 的 `--dev` 仅用于源地址选择，不能表述为设备绑定已验证。所有 WinDivert 自检使用 `NO_INSTALL`，不解压或安装驱动，不执行 `--init`。驱动尚未安装时标记为未验证，因为普通探测可能自动安装；Socket 备选结果单独报告。后端名称以实际构建架构为准，目前 WinDivert 探测路径编译于 Windows amd64。
+
+退出码：**0** 必要检查完成且无失败；**1** 存在明确失败；**2** 参数错误；**3** 必要检查未能确认；**130/143** 收到 SIGINT/SIGTERM。目标可达性未验证本身不会导致退出码 3。
 
 ### 功能对比
 

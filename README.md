@@ -185,6 +185,7 @@ Starting from this release, NextTrace is published in **three flavors** under th
 | Feature               | `nexttrace` (Full) | `nexttrace-tiny` |    `ntr`     |
 | --------------------- | :----------------: | :--------------: | :----------: |
 | Normal traceroute     |         ✅         |        ✅        |      —       |
+| Environment check (`--doctor`) | ✅ | ✅ | ✅ |
 | Standalone MTU (`--mtu`) |      ✅         |        ✅        |      —       |
 | DNS client (`-l` / `--dns`) |     ✅       |        —         |      —       |
 | CDN Speed (`--speed`) |         ✅         |        —         |      —       |
@@ -316,6 +317,27 @@ export NEXTTRACE_DISABLEMPLS=1
 Normal traceroute reports why it stopped: destination reached, a terminal unreachable response (including its marker), or the configured maximum hop count. `--json` keeps the existing top-level result shape and adds optional `StopReason` with lowercase nested fields `hop`, `reason`, `responses`, and `markers`; `responses` contains human-readable descriptions while `markers` contains machine-readable codes. Classic/raw/JSON modes do not receive an extra human-readable footer. `--output` writes the same plain stop line to the log without ANSI escapes.
 
 When multiple normal-trace output modes are selected, precedence is `--json` > `--table` > `--classic` > `--raw` > `--output` > realtime output. If a higher-priority mode overrides an explicit `--output` or `--output-default`, NextTrace reports that choice on stderr and does not create the ignored log file.
+
+#### Probe environment check
+
+```sh
+nexttrace --doctor example.com
+nexttrace --doctor --tcp --port 443 --language en example.com
+nexttrace-tiny --doctor -6 ::1
+ntr --doctor --dev eth0 example.com
+```
+
+`--doctor` generates a plain-text report and exits without tracing. It separates requested settings, DNS/source selection, system route predictions, and actual local backend initialization. It does not send probe packets, read captured traffic, query GeoIP/API services, or verify target reachability. DNS/DoT queries can use the network.
+
+All three builds support `--doctor`. Options are limited to `--ipv4`/`--ipv6`, `--tcp`/`--udp`, `--port`, `--source`, `--source-port`, `--dev`, `--tos`, `--dot-server`, `--timeout`, `--language`, `--no-color`, and Windows `--icmp-mode`, plus their listed short aliases. Use `--doctor --help` for details. The target must be a domain or IP literal; URLs and IPv6 zone suffixes are not accepted. Doctor is incompatible with other execution modes, JSON/RAW/file output, and unrelated probe options.
+
+The default is ICMP, Chinese text, and 5000 ms per network check. Multiple DNS candidates are listed; the first matching the requested family is selected without prompting. Target DoT failures do not fall back to system DNS. A failed check does not prevent independent checks from completing. The report goes to stdout; usage and output-write errors go to stderr. Reports include target/source/interface addresses, but no token or proxy credentials.
+
+Route queries use Linux netlink, macOS routing sockets, and Windows `GetBestRoute2`. Unavailable information remains unknown. macOS/Windows route predictions cannot express all protocol, port, source-policy or TOS constraints; the report states these limits. Opening a socket or capture filter does not establish actual egress, successful packet delivery, or TOS application. Network waits have deadlines; synchronous native initialization calls have no forced-cancellation guarantee.
+
+On Windows, `--dev` selects a source address; it does not prove device binding. Every doctor WinDivert open uses `NO_INSTALL`: it does not unpack/install a driver or run `--init`. A not-yet-installed driver is reported as unverified, since ordinary tracing may install it. Socket alternatives are reported separately. The reported backend follows the build architecture; WinDivert probe paths are currently compiled for Windows amd64.
+
+Exit codes: **0** required checks completed without failure, **1** definite check failure, **2** invalid arguments, **3** required evidence incomplete, **130/143** interrupted by SIGINT/SIGTERM. Unverified target reachability alone does not make the exit code 3.
 
 #### Downstream migration and explicit traditional mode
 

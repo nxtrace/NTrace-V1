@@ -17,8 +17,8 @@ func (t *tokenData) BaseOrDefault(def string) string {
 }
 
 var token = tokenData{
-	ipinsight:    util.GetEnvDefault("NEXTTRACE_IPINSIGHT_TOKEN", ""),
-	ipinfo:       util.GetEnvDefault("NEXTTRACE_IPINFO_TOKEN", ""),
+	ipinsight:    util.GetSecretEnvDefault("NEXTTRACE_IPINSIGHT_TOKEN", ""),
+	ipinfo:       util.GetSecretEnvDefault("NEXTTRACE_IPINFO_TOKEN", ""),
 	baseUrl:      util.GetEnvDefault("NEXTTRACE_IPAPI_BASE", ""),
 	nextTraceAPI: "NextTraceDemo",
 }

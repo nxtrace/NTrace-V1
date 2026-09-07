@@ -35,11 +35,15 @@ func (s *TCPSpec) sourceDeviceUnsupportedErr() error {
 }
 
 func (s *TCPSpec) InitTCP() error {
+	return s.initTCP(0)
+}
+
+func (s *TCPSpec) initTCP(extraFlags uint64) error {
 	if err := s.sourceDeviceUnsupportedErr(); err != nil {
 		return err
 	}
 
-	handle, err := OpenWinDivertHandle("false", 0)
+	handle, err := OpenWinDivertHandle("false", extraFlags)
 	if err != nil {
 		return fmt.Errorf("%s: %w", formatWinDivertRequiredError("Windows TCP 探测", err), err)
 	}

@@ -73,6 +73,18 @@ jobs:
           go test -tags flavor_tiny ./cmd ./server
           go test -tags flavor_ntr ./cmd ./server
 
+      - name: Doctor native loopback route smoke
+        env:
+          NEXTTRACE_DOCTOR_INTEGRATION: '1'
+        run: go test ./internal/doctor -run '^TestNativeLoopbackRoute$' -count=1
+
+      - name: Doctor privileged backend smoke
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          go test -c -o "${RUNNER_TEMP}/doctor-backend.test" ./trace/internal
+          sudo env NEXTTRACE_DOCTOR_BACKEND_INTEGRATION=1 "${RUNNER_TEMP}/doctor-backend.test" -test.run '^TestDoctorNativeBackend$' -test.v
+
       - name: Verify q v0.19.12 adapter parity
         if: ${{ matrix.os == 'ubuntu-latest' }}
         shell: bash
