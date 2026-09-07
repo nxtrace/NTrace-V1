@@ -430,6 +430,7 @@ func formatMTRGeoData(data *ipgeo.IPGeoData) string {
 
 // MTRReportOptions 控制报告输出细节。
 type MTRReportOptions struct {
+	Columns   []MTRColumn
 	StartTime time.Time
 	SrcHost   string
 	Wide      bool
@@ -457,6 +458,10 @@ func MTRReportPrint(stats []trace.MTRHopStat, opts MTRReportOptions) {
 	fmt.Printf("Start: %s\n", opts.StartTime.Format("2006-01-02T15:04:05-0700"))
 
 	hosts, hostColW := prepareMTRReportHosts(stats, opts, lang)
+	if opts.Columns != nil {
+		printMTRSelectedReport(stats, opts, hosts, hostColW)
+		return
+	}
 	printMTRReportHeader(opts, hostColW)
 	printMTRReportRows(stats, hosts, hostColW)
 }

@@ -1119,6 +1119,7 @@ func maybeRunMTRMode(
 	dataOrigin string,
 	showIPs bool,
 	ipInfoMode int,
+	columns ...printer.MTRColumn,
 ) bool {
 	if !modes.mtr {
 		return false
@@ -1136,13 +1137,13 @@ func maybeRunMTRMode(
 	case mtrRunRaw:
 		err = runMTRRaw(method, conf, mtrHopIntervalMs, mtrMaxPerHop, dataOrigin)
 	case mtrRunReport:
-		err = runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs)
+		err = runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs, columns...)
 	default:
 		if ipInfoMode < 0 || ipInfoMode > 4 {
 			fmt.Fprintf(os.Stderr, "--ipinfo/-y 必须在 0-4 范围内，当前值: %d\n", ipInfoMode)
 			os.Exit(1)
 		}
-		err = runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode)
+		err = runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode, columns...)
 	}
 	// Mode-local defers restore the terminal and close listeners before exit.
 	exitOnTraceRunError(err)
@@ -1547,7 +1548,6 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, columnsErr)
 		os.Exit(2)
 	}
-	_ = mtrColumns // Connected to human printers in the layout change.
 	if mtrModes.mtr && *jsonPrint {
 		if maybePrintVersion(*ver) {
 			return
@@ -1946,7 +1946,7 @@ func Execute() {
 	)
 	conf.Context = rootCtx
 
-	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode) {
+	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode, mtrColumns...) {
 		return
 	}
 	if err := writeIgnoredTraceOutputWarning(os.Stderr, outputMode, resolvedOutputPath); err != nil {

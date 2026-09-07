@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +29,12 @@ const (
 
 // MTRTUIHeader 包含帧顶部显示的元信息。
 type MTRTUIHeader struct {
-	Target    string
-	StartTime time.Time
-	Status    MTRTUIStatus
-	Iteration int
+	Columns      []MTRColumn // nil preserves the original metrics layout
+	ColumnEditor MTRColumnEditor
+	Target       string
+	StartTime    time.Time
+	Status       MTRTUIStatus
+	Iteration    int
 	// 以下为 v2 新增字段
 	Domain   string // 用户输入的域名（可为空）
 	TargetIP string // 解析后的目标 IP
@@ -125,11 +128,7 @@ func tuiPrefixWidthForMaxTTL(maxTTL int) int {
 // sntWidthForMax returns the display width needed for the given max Snt value.
 // Minimum is tuiSntDefault (3).
 func sntWidthForMax(maxSnt int) int {
-	w := tuiSntDefault
-	for v := 1000; maxSnt >= v; v *= 10 {
-		w++
-	}
-	return w
+	return max(tuiSntDefault, len(strconv.Itoa(maxSnt)))
 }
 
 func computeLayout(termWidth, prefixW, sntHint int) mtrTUILayout {
@@ -377,13 +376,20 @@ func mtrTUIRenderWithWidth(w io.Writer, header MTRTUIHeader, stats []trace.MTRHo
 
 	writeMTRTUIFramePrefix(&b)
 	renderMTRTUIHeader(&b, header, lo.termWidth)
+	if header.ColumnEditor.Active {
+		renderMTRColumnEditor(&b, header.ColumnEditor, lo.termWidth)
+	}
 	if header.HistoryMode {
 		renderMTRTUIHistory(&b, header, stats, lo.termWidth)
 		fmt.Fprint(w, b.String())
 		return
 	}
-	renderDualHeader(&b, lo)
-	renderMTRTUIRows(&b, header, stats, lo)
+	if header.Columns != nil {
+		renderMTRSelectedColumns(&b, header, stats, lo.termWidth)
+	} else {
+		renderDualHeader(&b, lo)
+		renderMTRTUIRows(&b, header, stats, lo)
+	}
 	fmt.Fprint(w, b.String())
 }
 
@@ -515,6 +521,7 @@ func buildMTRTUIControlsLine(header MTRTUIHeader, termWidth int) string {
 func buildMTRTUIKeyItems(header MTRTUIHeader) []string {
 	items := []string{
 		mtrTUIKeyHiColor("Q") + "uit",
+		mtrTUIKeyHiColor("O") + "-columns",
 		mtrTUIKeyHiColor("P") + "ause",
 		mtrTUIKeyHiColor("Space") + "-resume",
 		mtrTUIKeyHiColor("R") + "eset",
@@ -1062,7 +1069,7 @@ func truncateStr(s string, maxLen int) string {
 func MTRTUIPrinter(target, domain, targetIP, version string, startTime time.Time,
 	srcHost, srcIP, lang string, apiInfo func() string, showIPs bool,
 	isPaused func() bool, displayMode func() int, nameMode func() int, isMPLSDisabled func() bool,
-	isHistoryMode func() bool, historyChartMode func() int, historySnapshot func(time.Time) []MTRHistoryTTL) func(iteration int, stats []trace.MTRHopStat) {
+	isHistoryMode func() bool, historyChartMode func() int, historySnapshot func(time.Time) []MTRHistoryTTL, columnState ...func() ([]MTRColumn, MTRColumnEditor)) func(iteration int, stats []trace.MTRHopStat) {
 	var apiInfoMu sync.Mutex
 	var cachedAPIInfo string
 	var cachedAPIInfoAt time.Time
@@ -1113,7 +1120,14 @@ func MTRTUIPrinter(target, domain, targetIP, version string, startTime time.Time
 			history = historySnapshot(now)
 		}
 		headerAPIInfo := getAPIInfo()
+		var columns []MTRColumn
+		var editor MTRColumnEditor
+		if len(columnState) > 0 && columnState[0] != nil {
+			columns, editor = columnState[0]()
+		}
 		MTRTUIRender(os.Stdout, MTRTUIHeader{
+			Columns:          columns,
+			ColumnEditor:     editor,
 			Target:           target,
 			StartTime:        startTime,
 			Status:           status,
