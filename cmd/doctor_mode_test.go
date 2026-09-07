@@ -59,6 +59,8 @@ func TestDoctorProcessDoesNotDiscloseCredentials(t *testing.T) {
 	c.Env = append(os.Environ(), "NTRACE_DOCTOR_TEST_PROCESS=1", "NEXTTRACE_DEBUG=1",
 		"NEXTTRACE_TOKEN=doctor-test-secret-1", "NEXTTRACE_DEPLOY_TOKEN=doctor-test-secret-2",
 		"GLOBALPING_TOKEN=doctor-test-secret-3", "NEXTTRACE_API_V4_TOKEN=doctor-test-secret-4",
+		"NEXTTRACE_IPINSIGHT_TOKEN=doctor-test-secret-6", "NEXTTRACE_IPINFO_TOKEN=doctor-test-secret-7",
+		"IPDBONE_API_ID=doctor-test-secret-8", "IPDBONE_API_KEY=doctor-test-secret-9",
 		"NEXTTRACE_PROXY=http://doctor-test-user:doctor-test-secret-5@127.0.0.1:9")
 	out, err := c.CombinedOutput()
 	if err != nil {

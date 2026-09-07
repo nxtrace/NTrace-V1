@@ -39,8 +39,8 @@ type IPDBOneConfig struct {
 func GetDefaultConfig() *IPDBOneConfig {
 	return &IPDBOneConfig{
 		BaseURL: util.GetEnvDefault("IPDBONE_BASE_URL", "https://api.ipdb.one"),
-		ApiID:   util.GetEnvDefault("IPDBONE_API_ID", ""),
-		ApiKey:  util.GetEnvDefault("IPDBONE_API_KEY", ""),
+		ApiID:   util.GetSecretEnvDefault("IPDBONE_API_ID", ""),
+		ApiKey:  util.GetSecretEnvDefault("IPDBONE_API_KEY", ""),
 	}
 }
 
