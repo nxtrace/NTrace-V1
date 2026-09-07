@@ -51,6 +51,29 @@ func TestRequestsMTRJSONRoutesSyntaxErrors(t *testing.T) {
 	}
 }
 
+func TestMTRJSONHelpAndVersion(t *testing.T) {
+	for _, flag := range []string{"--help", "-h", "--version", "-V"} {
+		t.Run(flag, func(t *testing.T) {
+			args := []string{"-test.run=^TestMTRJSONCLIProcess$", "--", "--json", flag}
+			if enableTraceroute {
+				args = append(args, "--mtr")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			process := exec.CommandContext(ctx, os.Args[0], args...)
+			process.Env = append(os.Environ(), "NTRACE_TEST_MTR_JSON_PROCESS=1")
+			var stdout, stderr bytes.Buffer
+			process.Stdout, process.Stderr = &stdout, &stderr
+			if err := process.Run(); err != nil || stdout.Len() == 0 || stderr.Len() != 0 {
+				t.Fatalf("%s: error=%v stdout=%s stderr=%s", flag, err, stdout.String(), stderr.String())
+			}
+			if (flag == "--help" || flag == "-h") && !strings.Contains(stdout.String(), "usage:") {
+				t.Fatalf("missing help output: %s", stdout.String())
+			}
+		})
+	}
+}
+
 func TestMTRJSONStreamRecordsAndPathChanges(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(t.Context())
 	defer cancel(nil)
