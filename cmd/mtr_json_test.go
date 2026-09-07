@@ -70,6 +70,9 @@ func TestMTRJSONHelpAndVersion(t *testing.T) {
 			if (flag == "--help" || flag == "-h") && !strings.Contains(stdout.String(), "usage:") {
 				t.Fatalf("missing help output: %s", stdout.String())
 			}
+			if (flag == "--version" || flag == "-V") && !strings.Contains(stdout.String(), "NextTrace CopyRight") {
+				t.Fatalf("missing version command output: %s", stdout.String())
+			}
 		})
 	}
 }
