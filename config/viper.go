@@ -78,19 +78,19 @@ func InitConfigWithWriter(w io.Writer) error {
 	if err := viper.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
 		if errors.As(err, &notFound) {
-			fmt.Fprintln(w, "未能找到配置文件，我们将在您的运行目录为您创建 nt_config.yaml 默认配置")
+			_, _ = fmt.Fprintln(w, "未能找到配置文件，我们将在您的运行目录为您创建 nt_config.yaml 默认配置")
 			if err := viper.SafeWriteConfigAs("./nt_config.yaml"); err != nil {
-				fmt.Fprintln(w, "创建默认配置文件失败:", err)
+				_, _ = fmt.Fprintln(w, "创建默认配置文件失败:", err)
 				return err
 			}
 			if err := viper.ReadInConfig(); err != nil {
-				fmt.Fprintln(w, "加载默认配置失败:", err)
+				_, _ = fmt.Fprintln(w, "加载默认配置失败:", err)
 				return err
 			}
 			return nil
 		}
 
-		fmt.Fprintln(w, "加载配置文件失败:", err)
+		_, _ = fmt.Fprintln(w, "加载配置文件失败:", err)
 		return err
 	}
 	return nil
