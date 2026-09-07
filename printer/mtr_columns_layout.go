@@ -16,9 +16,22 @@ type MTRColumnEditor struct {
 }
 
 func renderMTRColumnEditor(b *strings.Builder, editor MTRColumnEditor, width int) {
-	for _, line := range []string{"L=Loss S=Snt R=Received N=Last", "A=Avg B=Best W=Wrst V=StDev", "Enter: apply  Esc: cancel", "Backspace: delete  Ctrl-U: clear"} {
-		tuiLine(b, "%s", truncateByDisplayWidth(line, width))
+	var line string
+	for _, word := range strings.Fields("L=Loss S=Snt R=Received N=Last A=Avg B=Best W=Wrst V=StDev") {
+		if line != "" && len(line)+1+len(word) > width {
+			tuiLine(b, "%s", line)
+			line = ""
+		}
+		if line != "" {
+			line += " "
+		}
+		line += word
 	}
+	tuiLine(b, "%s", truncateByDisplayWidth(line, width))
+	for _, help := range []string{"Enter: apply Esc: cancel", "Backspace: delete", "Ctrl-U: clear"} {
+		tuiLine(b, "%s", truncateByDisplayWidth(help, width))
+	}
+
 	prefix := "Columns: "
 	available := max(1, width-len(prefix)-1)
 	draft := editor.Draft

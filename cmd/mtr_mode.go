@@ -16,6 +16,7 @@ import (
 	"github.com/nxtrace/NTrace-core/printer"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
+	"golang.org/x/term"
 )
 
 const defaultMTRInternalTTLIntervalMs = 0
@@ -61,11 +62,15 @@ func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 
 	// 初始化 TUI 控制器
 	ui := newMTRUI(cancel, initialDisplayMode)
+	ui.columns = append([]printer.MTRColumn(nil), columns...)
 	ui.Enter()
 	defer ui.Leave()
 
 	// 按键读取协程（非 TTY 时内部 no-op）
-	go ui.ReadKeysLoop(ctx)
+	keysCtx, stopKeys := context.WithCancel(ctx)
+	keysDone := make(chan struct{})
+	go func() { defer close(keysDone); ui.ReadKeysLoop(keysCtx) }()
+	defer func() { stopKeys(); <-keysDone }()
 
 	startTime := time.Now()
 	target := conf.DstIP.String()
@@ -92,10 +97,28 @@ func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 	var onSnapshot trace.MTROnSnapshot
 	if ui.IsTTY() {
 		opts.IsPaused = ui.IsPaused
-		onSnapshot = printer.MTRTUIPrinter(target, domain, target, config.Version, startTime,
+		var frameColumns []printer.MTRColumn
+		var frameEditor printer.MTRColumnEditor
+		render := printer.MTRTUIPrinter(target, domain, target, config.Version, startTime,
 			srcHost, srcIP, lang, func() string { return buildAPIInfo(dataOrigin) }, showIPs, ui.IsPaused,
 			ui.CurrentDisplayMode, ui.CurrentNameMode, ui.IsMPLSDisabled,
-			ui.IsHistoryMode, ui.CurrentHistoryChartMode, history.Snapshot, func() ([]printer.MTRColumn, printer.MTRColumnEditor) { return columns, printer.MTRColumnEditor{} })
+			ui.IsHistoryMode, ui.CurrentHistoryChartMode, history.Snapshot, func() ([]printer.MTRColumn, printer.MTRColumnEditor) { return frameColumns, frameEditor })
+		pasteEnabled := false
+		var stopRedraw func()
+		onSnapshot, stopRedraw = startMTRRedraw(ui.redraw, func() (int, int) { w, h, _ := term.GetSize(int(os.Stdout.Fd())); return w, h }, func(n int, stats []trace.MTRHopStat) {
+			frameColumns, frameEditor = ui.columnSnapshot()
+			if frameEditor.Active != pasteEnabled {
+				pasteEnabled = frameEditor.Active
+				if pasteEnabled {
+					fmt.Fprint(os.Stdout, "\033[?2004h")
+				} else {
+					fmt.Fprint(os.Stdout, "\033[?2004l")
+				}
+			}
+			render(n, stats)
+		})
+		defer stopRedraw()
+
 	} else {
 		onSnapshot = func(iteration int, stats []trace.MTRHopStat) {
 			printer.MTRTablePrinterWithColumns(stats, iteration, ui.CurrentDisplayMode(), ui.CurrentNameMode(), lang, showIPs, columns)

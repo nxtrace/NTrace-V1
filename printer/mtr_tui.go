@@ -375,10 +375,14 @@ func mtrTUIRenderWithWidth(w io.Writer, header MTRTUIHeader, stats []trace.MTRHo
 	var b strings.Builder
 
 	writeMTRTUIFramePrefix(&b)
-	renderMTRTUIHeader(&b, header, lo.termWidth)
 	if header.ColumnEditor.Active {
+		tuiLine(&b, "%s", buildMTRTUITitleLine(header, lo.termWidth))
+		tuiLine(&b, "%s", mtrTUIStatusText(header.Status))
 		renderMTRColumnEditor(&b, header.ColumnEditor, lo.termWidth)
+		fmt.Fprint(w, b.String())
+		return
 	}
+	renderMTRTUIHeader(&b, header, lo.termWidth)
 	if header.HistoryMode {
 		renderMTRTUIHistory(&b, header, stats, lo.termWidth)
 		fmt.Fprint(w, b.String())
