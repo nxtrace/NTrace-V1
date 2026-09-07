@@ -130,6 +130,14 @@ jobs:
           go build -o "${RUNNER_TEMP}/nexttrace-mtr-columns" .
           sudo python3 scripts/test_mtr_columns_pty.py "${RUNNER_TEMP}/nexttrace-mtr-columns"
 
+      - name: MTR column editor ConPTY smoke
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          python -m pip install pywinpty==3.0.5
+          go build -o "$env:RUNNER_TEMP/nexttrace-mtr-columns.exe" .
+          python scripts/test_mtr_columns_pty.py "$env:RUNNER_TEMP/nexttrace-mtr-columns.exe"
+
       - name: Test with windows
         if: ${{ matrix.os == 'windows-latest' }}
         run: go test -v -covermode=count -coverprofile="coverage.out" ./...

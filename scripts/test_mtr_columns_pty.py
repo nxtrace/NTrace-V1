@@ -1,40 +1,52 @@
-"""Exercise the real MTR TUI on a Unix PTY using loopback probes only.
+"""Exercise the real MTR TUI on a PTY using loopback probes only.
 
 Usage: python3 scripts/test_mtr_columns_pty.py /path/to/nexttrace
+Windows requires pywinpty==3.0.5 for ConPTY.
 Linux needs permission to open ICMP sockets (CI runs this under sudo).
 """
 
-import fcntl
 import json
 import os
 import platform
-import pty
 import re
 import select
 import struct
 import subprocess
 import sys
 import tempfile
-import termios
 import time
+
+if os.name != "nt":
+    import fcntl
+    import pty
+    import termios
 
 
 def main(binary):
-    master, slave = pty.openpty()
-    original = termios.tcgetattr(slave)
     log = bytearray()
+    windows = os.name == "nt"
+    if not windows:
+        master, slave = pty.openpty()
+        original = termios.tcgetattr(slave)
 
     def resize(width):
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, width, 0, 0))
+        if windows:
+            process.setwinsize(32, width)
+        else:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, width, 0, 0))
 
     def read(seconds=0.3):
         end = time.monotonic() + seconds
         data = bytearray()
         while time.monotonic() < end:
-            if select.select([master], [], [], max(0, end - time.monotonic()))[0]:
+            source = process.fileobj if windows else master
+            if select.select([source], [], [], max(0, end - time.monotonic()))[0]:
                 try:
-                    data.extend(os.read(master, 65536))
-                except OSError:
+                    chunk = process.read(65536).encode() if windows else os.read(master, 65536)
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                except (OSError, EOFError):
                     break
         log.extend(data)
         return data.decode(errors="replace")
@@ -49,20 +61,28 @@ def main(binary):
         raise AssertionError(f"Missing {needles!r}: {text!r}")
 
     def send(keys):
-        os.write(master, keys.encode())
+        if windows:
+            process.write(keys)
+        else:
+            os.write(master, keys.encode())
 
     def counters(text):
         rows = re.findall(r"^ 1\. 127\.0\.0\.1\s+(.+)$", text, re.M)
         assert rows, text
         return rows[-1].split()
 
-    resize(120)
-    process = subprocess.Popen(
-        [os.path.abspath(binary), "-t", "--mtr-columns", "loss,snt,received,avg",
-         "-d", "disable-geoip", "-n", "-s", "127.0.0.1", "-m", "1",
-         "-i", "100", "--timeout", "100", "--no-color", "127.0.0.1"],
-        stdin=slave, stdout=slave, stderr=slave,
-    )
+    command = [
+        os.path.abspath(binary), "-t", "--mtr-columns", "loss,snt,received,avg",
+        "-d", "disable-geoip", "-n", "-s", "127.0.0.1", "-m", "1",
+        "-i", "100", "--timeout", "100", "--no-color", "127.0.0.1",
+    ]
+    if windows:
+        from winpty import PtyProcess
+        process = PtyProcess.spawn(command, dimensions=(32, 120))
+    else:
+        resize(120)
+        process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave)
+
     try:
         expect("Rcv", " 1. 127.0.0.1")
         send("p")
@@ -91,9 +111,16 @@ def main(binary):
         assert "History" not in applied.split("\x1b[H\x1b[2J")[-1], applied
         send("q")
         expect("\x1b[?1049l", "\x1b[?25h")
-        process.wait(timeout=3)
-        assert process.returncode == 0, process.returncode
-        assert termios.tcgetattr(slave) == original, "Terminal attributes not restored"
+        if windows:
+            deadline = time.monotonic() + 3
+            while process.isalive() and time.monotonic() < deadline:
+                read(0.1)
+            assert not process.isalive(), "Process did not exit"
+            assert process.exitstatus == 0, process.exitstatus
+        else:
+            process.wait(timeout=3)
+            assert process.returncode == 0, process.returncode
+            assert termios.tcgetattr(slave) == original, "Terminal attributes not restored"
         print(json.dumps({
             "platform": platform.system(), "pty": "PASS",
             "checks": ["loopback probes", "pause", "prefill", "paste newline",
@@ -102,13 +129,16 @@ def main(binary):
                        "history apply", "terminal restore"],
         }, indent=2))
     finally:
-        if process.poll() is None:
+        if windows:
+            process.close(force=True)
+        elif process.poll() is None:
             process.kill()
             process.wait()
         with open(os.path.join(tempfile.gettempdir(), "mtr-columns-pty.log"), "wb") as output:
             output.write(log)
-        os.close(master)
-        os.close(slave)
+        if not windows:
+            os.close(master)
+            os.close(slave)
 
 
 if __name__ == "__main__":
