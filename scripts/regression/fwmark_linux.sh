@@ -130,16 +130,37 @@ for family in 4 6; do
     run_case "$family-$protocol-raw" "$family" "$protocol" raw 0x100 sb
   done
  done
+# Detect the random-port sentinel accidentally being encoded as port 65535.
+ip -n "$S" route add table 201 unreachable 203.0.113.9/32
+ip -n "$S" -6 route add table 201 unreachable 2001:db8:99::9/128
+for family in 4 6; do for protocol in tcp udp; do
+  ip -n "$S" "-$family" rule add priority 90 fwmark 0x100 ipproto "$protocol" sport 65535 lookup 201
+  run_case "$family-$protocol-random-source" "$family" "$protocol" trace 0x100 sb --source-port -1
+  ip -n "$S" "-$family" rule del priority 90
+ done; done
 # The source resolver must not require an unmarked route to exist.
 ip -n "$S" route del 203.0.113.9/32
 ip -n "$S" -6 route del 2001:db8:99::9/128
 for family in 4 6; do for protocol in icmp tcp udp; do
   run_case "$family-$protocol-mark-only-route" "$family" "$protocol" report 0x100 sb
  done; done
-# Explicit constraints are never silently overridden.
-if ip netns exec "$S" timeout 10 "$BIN" --report --json --fwmark 0x100 --dev sa -n -d disable-geoip -q 1 203.0.113.9 >"$ART/conflict.out" 2>"$ART/conflict.err"; then
-  echo 'incompatible device unexpectedly succeeded' >&2; exit 1
-fi
+# A conflicting interface may yield either a kernel error or unanswered probes.
+# Neither outcome permits silently changing the requested source/interface.
+ip netns exec "$S" tcpdump --immediate-mode -i sb -n -U -w "$ART/conflict-sb.pcap" 'dst host 203.0.113.9' >"$ART/conflict.capture" 2>&1 & cp=$!
+PIDS=("$cp")
+for attempt in {1..100}; do
+  grep -q 'listening on' "$ART/conflict.capture" && break
+  kill -0 "$cp"
+  sleep 0.05
+ done
+grep -q 'listening on' "$ART/conflict.capture"
+conflict_code=0
+ip netns exec "$S" timeout 10 "$BIN" --report --json --fwmark 0x100 --dev sa -n -d disable-geoip -q 1 -m 3 203.0.113.9 >"$ART/conflict.out" 2>"$ART/conflict.err" || conflict_code=$?
+[[ "$conflict_code" == 0 || "$conflict_code" == 1 ]]
+sleep 0.2
+kill -INT "$cp"; wait "$cp"; PIDS=()
+tcpdump -nn -r "$ART/conflict-sb.pcap" >"$ART/conflict-sb.txt" 2>/dev/null
+[[ ! -s "$ART/conflict-sb.txt" ]]
 # A process without marking/raw-socket capabilities must fail, not probe unmarked.
 if ip netns exec "$S" setpriv --bounding-set=-net_admin,-net_raw --inh-caps=-all --ambient-caps=-all timeout 10 "$BIN" --report --json --fwmark 0x100 -n -d disable-geoip -q 1 203.0.113.9 >"$ART/permission.out" 2>"$ART/permission.err"; then
   echo 'unprivileged marked probe unexpectedly succeeded' >&2; exit 1
@@ -147,9 +168,15 @@ fi
 python3 - "$ART" <<'PY'
 import json,pathlib,sys
 p=pathlib.Path(sys.argv[1])
-for name in ('conflict','permission'):
+for name in ('permission',):
  r=json.loads((p/f'{name}.out').read_text())
  assert r['end_reason']=='error' and r['error']['stage']=='initialize',(name,r)
  assert not r['stats'],(name,r)
+r=json.loads((p/'conflict.out').read_text())
+if r['end_reason']=='error': assert r['error']['stage']=='initialize',r
+else:
+ assert r['effective_parameters']['source_device']=='sa',r
+ assert r['effective_parameters']['source_address']=='10.201.1.2',r
+ assert not any(x.get('received',0) for x in r['stats']),r
 PY
 printf 'PASS constraint and permission failures\n' | tee -a "$ART/summary.txt"
