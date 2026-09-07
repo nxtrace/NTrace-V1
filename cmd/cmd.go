@@ -351,6 +351,7 @@ type deployRunOptions struct {
 }
 
 type mtrCLIFlags struct {
+	columns    *string
 	mtrMode    *bool
 	reportMode *bool
 	wideMode   *bool
@@ -567,6 +568,7 @@ func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 		}
 		return mtrCLIFlags{
 			mtrMode:    mtrMode,
+			columns:    parser.String("", "mtr-columns", &argparse.Options{Help: "MTR text columns in order: loss,snt,received,last,avg,best,wrst,stdev (does not enable MTR)"}),
 			reportMode: parser.Flag("r", "report", &argparse.Options{Help: "MTR report mode (non-interactive, implies --mtr); can trigger MTR without --mtr"}),
 			wideMode:   parser.Flag("w", "wide", &argparse.Options{Help: "MTR wide report mode (implies --mtr --report); alone equals --mtr --report --wide"}),
 			showIPs:    parser.Flag("", "show-ips", &argparse.Options{Help: "MTR only: display both PTR hostnames and numeric IPs (PTR first, IP in parentheses)"}),
@@ -575,6 +577,7 @@ func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 	}
 	return mtrCLIFlags{
 		mtrMode:    ptrBool(false),
+		columns:    new(string),
 		reportMode: ptrBool(false),
 		wideMode:   ptrBool(false),
 		showIPs:    ptrBool(false),
@@ -1116,6 +1119,7 @@ func maybeRunMTRMode(
 	dataOrigin string,
 	showIPs bool,
 	ipInfoMode int,
+	columns ...printer.MTRColumn,
 ) bool {
 	if !modes.mtr {
 		return false
@@ -1133,13 +1137,13 @@ func maybeRunMTRMode(
 	case mtrRunRaw:
 		err = runMTRRaw(method, conf, mtrHopIntervalMs, mtrMaxPerHop, dataOrigin)
 	case mtrRunReport:
-		err = runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs)
+		err = runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs, columns...)
 	default:
 		if ipInfoMode < 0 || ipInfoMode > 4 {
 			fmt.Fprintf(os.Stderr, "--ipinfo/-y 必须在 0-4 范围内，当前值: %d\n", ipInfoMode)
 			os.Exit(1)
 		}
-		err = runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode)
+		err = runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode, columns...)
 	}
 	// Mode-local defers restore the terminal and close listeners before exit.
 	exitOnTraceRunError(err)
@@ -1495,6 +1499,10 @@ func Execute() {
 		}
 		os.Exit(1)
 	}
+	if *setupNextTraceAPIV4Token && parsedFlag(parser, "mtr-columns") {
+		fmt.Fprintln(os.Stderr, "--mtr-columns cannot be combined with token setup")
+		os.Exit(2)
+	}
 	if *setupNextTraceAPIV4Token {
 		if err := runNextTraceAPIV4TokenSetup(nextTraceAPIV4TokenSetupOptions{
 			stdin:  os.Stdin,
@@ -1534,6 +1542,15 @@ func Execute() {
 			os.Exit(2)
 		}
 		os.Exit(1)
+	}
+	columnsStandalone := standalone
+	if *init {
+		columnsStandalone = "--init"
+	}
+	mtrColumns, columnsErr := resolveMTRColumns(*mtrFlags.columns, parsedFlag(parser, "mtr-columns"), mtrModes, *jsonPrint, columnsStandalone)
+	if columnsErr != nil {
+		fmt.Fprintln(os.Stderr, columnsErr)
+		os.Exit(2)
 	}
 	if mtrModes.mtr && *jsonPrint {
 		if maybePrintVersion(*ver) {
@@ -1933,7 +1950,7 @@ func Execute() {
 	)
 	conf.Context = rootCtx
 
-	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode) {
+	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode, mtrColumns...) {
 		return
 	}
 	if err := writeIgnoredTraceOutputWarning(os.Stderr, outputMode, resolvedOutputPath); err != nil {

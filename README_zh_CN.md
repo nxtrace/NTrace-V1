@@ -636,6 +636,22 @@ JSON 固定输出完整可用元数据（FULL），忽略 `-y`，仍遵守 Geo/P
 
 NDJSON 输出 `start`、`probe`、`path_end`、`end` 事件，`seq` 连续递增。报告只输出一个对象，中断或失败时保留已有统计。诊断写入 stderr。退出码：完成 `0`，初始化/执行错误 `1`，参数错误 `2`，SIGINT `130`，SIGTERM `143`。完成不表示目的地可达，可达性读取 `path_end`。详见 [MTR JSON v1 契约及示例](docs/mtr-json.md)。
 
+选择并排列 MTR 文字统计列：
+
+```sh
+nexttrace -t --mtr-columns loss,received,avg 1.1.1.1
+nexttrace -w --mtr-columns received,snt,last 1.1.1.1
+ntr --mtr-columns received 1.1.1.1
+```
+
+`--mtr-columns` 支持 `loss,snt,received,last,avg,best,wrst,stdev` 的任意非空子集及顺序，忽略大小写与列名两端空格；未知列、重复列、空项报错。`received` 显示为 `Rcv`。默认仍为 `Loss%、Snt、Last、Avg、Best、Wrst、StDev`。
+
+参数适用于 TUI、非 TTY 表格和 report/wide，不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认 MTR 模式。RAW、JSON、传统 traceroute 和独立模式会在初始化前拒绝该参数。自定义 TUI 保留完整数字及至少 8 格 Host；空间不足时显示提示，加宽终端或减少列后恢复。
+
+按 `o/O` 编辑当前字段码：`L=Loss S=Snt R=Received N=Last A=Avg B=Best W=Wrst V=StDev`。输入不区分大小写，空格用于分隔。Enter 校验并应用，Esc 取消，Backspace 删除末尾字符，Ctrl-U 清空。空串、未知码和重复码保留编辑状态并显示错误。括号粘贴中的换行转为空格，不自动提交；草稿最多 256 个 ASCII 字符。
+
+编辑期间其他快捷键不生效，Ctrl-C 仍退出；探测、计数及暂停状态保持不变。从历史视图应用列后返回统计表，取消则保留历史视图。历史图表的固定列不变，列选择仅在当前会话有效；暂停期间仍可编辑和调整窗口大小。
+
 在终端（TTY）中运行时，MTR 模式使用**交互式全屏 TUI**：
 
 - **`q` / `Q`** — 退出（恢复终端，不留下输出）
@@ -647,6 +663,7 @@ NDJSON 输出 `start`、`probe`、`path_end`、`end` 事件，`seq` 连续递增
   - 默认：PTR（无 PTR 时回退 IP）↔ 仅 IP
   - 启用 `--show-ips`：PTR (IP) ↔ 仅 IP
 - **`e`** — 切换 MPLS 标签显示开/关
+- **`o` / `O`** — 编辑统计列
 - **`d` / `D`** — 切换可选历史显示；默认 TUI 仍是经典指标表
 - **`g` / `G`** — 仅在历史显示中循环切换 History 图表：heatmap → bars → sparkline
 - TUI 标题栏显示**源 → 目标**路由信息，指定 `--source`/`--dev` 时会展示对应信息。
@@ -861,7 +878,7 @@ usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  <integer>] [--dot-server
                  (dnssb|aliyun|dnspod|google|cloudflare)] [-g|--language
                  (en|cn)] [-C|--no-color] [--from "<value>"] [-t|--mtr]
-                 [-r|--report] [-w|--wide] [--show-ips] [-y|--ipinfo <integer>]
+                 [-r|--report] [-w|--wide] [--show-ips] [--mtr-columns <string>] [-y|--ipinfo <integer>]
                  [--file "<value>"] [TARGET "<value>"]
 
                  An open source visual route tracking CLI tool
@@ -994,6 +1011,9 @@ Arguments:
   -w  --wide                         MTR wide report mode (implies --mtr
                                      --report); alone equals --mtr --report
                                      --wide
+      --mtr-columns                  MTR text columns in order: loss,snt,
+                                     received,last,avg,best,wrst,stdev;
+                                     does not enable MTR
       --show-ips                     MTR only: display both PTR hostnames and
                                      numeric IPs (PTR first, IP in parentheses)
   -y  --ipinfo                       Set initial MTR TUI host info mode (0-4).
