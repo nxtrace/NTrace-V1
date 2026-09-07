@@ -59,7 +59,11 @@ func (s *ICMPSpec) Close() {
 
 // winDivertAvailable 通过尝试打开一个 WinDivert 嗅探 handle 来判断 WinDivert 是否可用
 func winDivertAvailable() (bool, error) {
-	h, err := OpenWinDivertHandle("false", wd.FlagSniff|wd.FlagRecvOnly)
+	return winDivertAvailableWithFlags(0)
+}
+
+func winDivertAvailableWithFlags(extraFlags uint64) (bool, error) {
+	h, err := OpenWinDivertHandle("false", wd.FlagSniff|wd.FlagRecvOnly|extraFlags)
 	if err != nil {
 		return false, err
 	}
@@ -275,11 +279,15 @@ func (s *ICMPSpec) sendICMPv6WithWinDivert(ip6 *layers.IPv6, icmpHdr, icmpEcho g
 }
 
 func (s *ICMPSpec) ensureICMPSendHandle(ipv6 bool) error {
+	return s.ensureICMPSendHandleWithFlags(ipv6, 0)
+}
+
+func (s *ICMPSpec) ensureICMPSendHandleWithFlags(ipv6 bool, extraFlags uint64) error {
 	if s.sendHandle != 0 {
 		return nil
 	}
 
-	handle, err := OpenWinDivertHandle("false", 0)
+	handle, err := OpenWinDivertHandle("false", extraFlags)
 	if err != nil {
 		if ipv6 {
 			return fmt.Errorf("%s: %w", formatWinDivertRequiredError("Windows ICMPv6 --tos", err), err)

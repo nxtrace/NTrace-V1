@@ -49,10 +49,9 @@ func winDivertTCPFilter(ipVersion int, srcIP net.IP, dstPort int) string {
 }
 
 func openWinDivertSniffHandle(ctx context.Context, filter, action string) (wd.Handle, func(), error) {
-	handle, err := openWinDivertSniffCall(filter, wd.FlagSniff|wd.FlagRecvOnly)
+	handle, err := openWinDivertSniffWithFlags(filter, action, 0)
 	if err != nil {
-		msg := formatWinDivertRequiredError(fmt.Sprintf("Windows WinDivert 嗅探 (%s, filter=%q)", action, filter), err)
-		return 0, nil, fmt.Errorf("%s: %w", msg, err)
+		return 0, nil, err
 	}
 
 	var closeOnce sync.Once
@@ -62,9 +61,20 @@ func openWinDivertSniffHandle(ctx context.Context, filter, action string) (wd.Ha
 		closeHandle()
 	}()
 
+	return handle, closeHandle, nil
+}
+
+// Opening the capture is separate from the read loop so doctor can check the
+// real filter without reading traffic or installing a driver.
+func openWinDivertSniffWithFlags(filter, action string, extraFlags uint64) (wd.Handle, error) {
+	handle, err := openWinDivertSniffCall(filter, wd.FlagSniff|wd.FlagRecvOnly|extraFlags)
+	if err != nil {
+		msg := formatWinDivertRequiredError(fmt.Sprintf("Windows WinDivert 嗅探 (%s, filter=%q)", action, filter), err)
+		return 0, fmt.Errorf("%s: %w", msg, err)
+	}
 	_ = handle.SetParam(wd.QueueLength, 8192)
 	_ = handle.SetParam(wd.QueueTime, 4000)
-	return handle, closeHandle, nil
+	return handle, nil
 }
 
 func packetDecoderForIPVersion(ipVersion int) gopacket.Decoder {
