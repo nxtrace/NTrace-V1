@@ -18,7 +18,7 @@ for tool in ip sysctl tcpdump python3 timeout setpriv; do command -v "$tool" >/d
 for ns in "$S" "$A" "$B" "$D"; do
   ip netns add "$ns"
   ip -n "$ns" link set dev lo up
-  ip netns exec "$ns" sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0 net.ipv6.conf.all.disable_ipv6=0
+  ip netns exec "$ns" sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0 net.ipv6.conf.all.disable_ipv6=0 net.ipv4.icmp_ratelimit=0 net.ipv6.icmp.ratelimit=0
  done
 link() {
   local left="$1" li="$2" right="$3" ri="$4" n="$5"
@@ -102,7 +102,11 @@ other='sb' if egress=='sa' else 'sa'
 assert source in expected and target in expected, (label,'missing actual marked egress/source',expected)
 assert not (p/f'{label}-{other}.txt').read_text().strip(), (label,'unexpected egress')
 output=(p/f'{label}.out').read_text()
-assert target in output,(label,'destination did not reply',output)
+if mode=='trace':
+ result=json.loads(output)
+ assert any(h.get('Success') and h.get('Address',{}).get('IP')==target for row in result['Hops'] for h in row),(label,result)
+elif mode=='raw':
+ assert any(len(fields:=line.split('|'))>3 and fields[1]==target and fields[3] for line in output.splitlines()),(label,output)
 if mode in ('report','stream'):
  records=[json.loads(output)] if mode=='report' else [json.loads(x) for x in output.splitlines()]
  params=records[0]['effective_parameters']
@@ -111,6 +115,10 @@ if mode in ('report','stream'):
  else: assert params['fwmark']==int(mark,0),(label,params)
  end=records[-1]
  assert end['end_reason']=='completed',(label,end)
+ if mode=='report':
+  assert any(row.get('ip')==target and row.get('received',0)>0 for row in end['stats']),(label,end)
+ else:
+  assert any(row.get('type')=='probe' and row['record'].get('success') and row['record'].get('ip')==target for row in records),(label,records)
 PY
   printf 'PASS %s\n' "$label" | tee -a "$ART/summary.txt"
 }
