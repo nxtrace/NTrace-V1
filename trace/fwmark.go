@@ -43,7 +43,7 @@ func PrepareFWMarkConfig(method Method, cfg Config) (Config, error) {
 	if ip == nil || ip.IsUnspecified() || (ip.To4() == nil) != (cfg.DstIP.To4() == nil) {
 		return cfg, wrapProbeSetupError(fmt.Errorf("fwmark source must be a usable IP matching the target family"))
 	}
-	if method != ICMPTrace && cfg.SrcPort == 0 && !util.RandomPortEnabled() {
+	if method != ICMPTrace && cfg.SrcPort == 0 && !probeRandomPortEnabled(cfg) {
 		proto := string(method)
 		if ip.To4() == nil {
 			proto += "6"
@@ -97,4 +97,12 @@ func probeLocalIPPort(cfg Config, source net.IP, proto string) (net.IP, int) {
 	}
 	defer func() { _ = conn.Close() }()
 	return source, conn.LocalAddr().(*net.UDPAddr).Port
+}
+
+// Marked sessions derive random-port selection from their own configuration.
+func probeRandomPortEnabled(cfg Config) bool {
+	if cfg.FWMarkSet {
+		return util.EnvRandomPort || cfg.SrcPort == -1
+	}
+	return util.RandomPortEnabled()
 }

@@ -85,7 +85,7 @@ func RequestBytes(cfg Request, seq uint32) ([]byte, error) {
 			kind uint16
 			port int
 		}{{unix.RTA_SPORT, cfg.SrcPort}, {unix.RTA_DPORT, cfg.DstPort}} {
-			if p.port == 0 {
+			if p.port <= 0 {
 				continue
 			}
 			b := make([]byte, 2)
@@ -103,7 +103,7 @@ func RequestBytes(cfg Request, seq uint32) ([]byte, error) {
 
 func Query(ctx context.Context, cfg Request) (Route, error) {
 	r := Route{}
-	if cfg.SrcPort == 0 && cfg.Method != "icmp" {
+	if cfg.SrcPort <= 0 && cfg.Method != "icmp" {
 		r.Limitations = "source port selected during probing; ECMP prediction may differ"
 	}
 	if err := ctx.Err(); err != nil {

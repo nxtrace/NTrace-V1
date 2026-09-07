@@ -415,7 +415,7 @@ func (t *TCPTracerIPv6) send(ctx context.Context, s *internal.TCPSpec, ttl, i in
 	seq := (ttl << 24) | (i & 0xFFFFFF)
 
 	_, SrcPort := func() (net.IP, int) {
-		if !util.RandomPortEnabled() && t.SrcPort > 0 {
+		if !probeRandomPortEnabled(t.Config) && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
 		return probeLocalIPPort(t.Config, t.SrcIP, "tcp6")

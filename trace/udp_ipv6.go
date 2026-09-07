@@ -388,7 +388,7 @@ func (t *UDPTracerIPv6) send(ctx context.Context, s *internal.UDPSpec, ttl, i in
 	seq := (ttl << 8) | (i & 0xFF)
 
 	_, SrcPort := func() (net.IP, int) {
-		if !util.RandomPortEnabled() && t.SrcPort > 0 {
+		if !probeRandomPortEnabled(t.Config) && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
 		return probeLocalIPPort(t.Config, t.SrcIP, "udp6")

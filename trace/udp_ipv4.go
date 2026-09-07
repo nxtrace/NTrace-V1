@@ -459,7 +459,7 @@ func (t *UDPTracer) acquireSendPermit(ctx context.Context, ttl, i int) (func(), 
 }
 
 func (t *UDPTracer) resolveSourcePort() int {
-	if !util.RandomPortEnabled() && t.SrcPort > 0 {
+	if !probeRandomPortEnabled(t.Config) && t.SrcPort > 0 {
 		return t.SrcPort
 	}
 	_, srcPort := probeLocalIPPort(t.Config, t.SrcIP, "udp")

@@ -3,6 +3,7 @@
 package trace
 
 import (
+	"github.com/nxtrace/NTrace-core/util"
 	"net"
 	"os"
 	"testing"
@@ -37,5 +38,24 @@ func TestFWMarkMTRRotation(t *testing.T) {
 			}
 		}
 		workers.shutdown(engine.close)
+	}
+}
+
+func TestFWMarkRouteOmitsRandomSourcePort(t *testing.T) {
+	old := util.EnvRandomPort
+	t.Cleanup(func() { util.EnvRandomPort = old })
+	for _, random := range []bool{false, true} {
+		util.EnvRandomPort = random
+		for _, port := range []int{-1, 0, 40000} {
+			cfg := Config{FWMarkSet: true, FWMark: 256, SrcPort: port}
+			req := fwmarkRouteRequest(TCPTrace, cfg)
+			want := port
+			if random || port == -1 {
+				want = 0
+			}
+			if req.SrcPort != want {
+				t.Fatalf("random=%v port=%d request=%d", random, port, req.SrcPort)
+			}
+		}
 	}
 }

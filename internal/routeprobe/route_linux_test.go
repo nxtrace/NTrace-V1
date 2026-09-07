@@ -126,3 +126,33 @@ func TestRouteMarkPresenceAndWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteOmitsRandomSourcePort(t *testing.T) {
+	for _, port := range []int{-1, 0, 40000} {
+		b, err := RequestBytes(Request{Method: "tcp", DstIP: net.ParseIP("127.0.0.1"), SrcPort: port, DstPort: 443}, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs, err := syscall.ParseNetlinkMessage(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs[0].Header.Type = unix.RTM_NEWROUTE
+		attrs, err := syscall.ParseNetlinkRouteAttr(&msgs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, a := range attrs {
+			if a.Attr.Type == unix.RTA_SPORT {
+				found = true
+				if int(binary.BigEndian.Uint16(a.Value)) != port {
+					t.Fatal("incorrect source port")
+				}
+			}
+		}
+		if found != (port > 0) {
+			t.Fatalf("port %d presence %v", port, found)
+		}
+	}
+}
