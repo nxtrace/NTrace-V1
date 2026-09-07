@@ -27,7 +27,11 @@ type UDPSpec struct {
 }
 
 func (s *UDPSpec) InitUDP() error {
-	handle, err := OpenWinDivertHandle("false", 0)
+	return s.initUDP(0)
+}
+
+func (s *UDPSpec) initUDP(extraFlags uint64) error {
+	handle, err := OpenWinDivertHandle("false", extraFlags)
 	if err != nil {
 		return fmt.Errorf("%s: %w", formatWinDivertRequiredError("Windows UDP 探测", err), err)
 	}

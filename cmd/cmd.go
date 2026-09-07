@@ -1385,6 +1385,9 @@ func supportsMapTrace(dataOrigin string) bool {
 }
 
 func Execute() {
+	if handled, exitCode := maybeRunDoctorMode(os.Args[1:], os.Stdout, os.Stderr); handled {
+		os.Exit(exitCode)
+	}
 	mtrJSONRequested := requestsMTRJSON(os.Args[1:])
 	if !mtrJSONRequested {
 		if handled, exitCode := maybeRunDNSMode(os.Args[1:], os.Stdout, os.Stderr); handled {
@@ -1397,7 +1400,7 @@ func Execute() {
 	parser := argparse.NewParser(appBinName, "An open source visual route tracking CLI tool")
 	// Override HelpFunc so positional arg names are sanitized in --help output
 	parser.HelpFunc = func(c *argparse.Command, msg interface{}) string {
-		return sanitizeUsagePositionalArgs(c.Usage(msg))
+		return sanitizeUsagePositionalArgs(c.Usage(msg)) + "\n  --doctor  Check local probe prerequisites without sending probes; see --doctor --help\n"
 	}
 	init := registerInitFlag(parser)
 	ipv4Only := parser.Flag("4", "ipv4", &argparse.Options{Help: "Use IPv4 only"})

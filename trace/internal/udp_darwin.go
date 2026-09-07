@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 
@@ -67,7 +68,7 @@ func (s *UDPSpec) Close() {
 	}
 }
 
-func (s *UDPSpec) ListenOut(ctx context.Context, ready chan struct{}, onOut func(srcPort, seq, ttl int, start time.Time)) error {
+func (s *UDPSpec) openCapture() (*pcap.Handle, error) {
 	// 选择捕获设备与本地接口
 	dev := "en0"
 	if s.SourceDevice != "" {
@@ -80,9 +81,8 @@ func (s *UDPSpec) ListenOut(ctx context.Context, ready chan struct{}, onOut func
 	// 接口即使在 sudo 下也会拒绝 promisc，继续请求只会让探测直接失败。
 	handle, err := util.OpenLiveImmediate(dev, 65535, false, 4<<20)
 	if err != nil {
-		return fmt.Errorf("(ListenOut) pcap open failed on %s: %w", dev, err)
+		return nil, fmt.Errorf("(ListenOut) pcap open failed on %s: %w", dev, err)
 	}
-	defer handle.Close()
 
 	// 过滤：只抓对应协议族 + udp，来自本机 s.SrcIP → 目标 s.DstIP，且目标端口为 s.DstPort
 	ipPrefix := "ip"
@@ -95,8 +95,19 @@ func (s *UDPSpec) ListenOut(ctx context.Context, ready chan struct{}, onOut func
 	)
 
 	if err := handle.SetBPFFilter(filter); err != nil {
-		return fmt.Errorf("(ListenOut) set BPF failed: %w (filter=%q)", err, filter)
+		handle.Close()
+		return nil, fmt.Errorf("(ListenOut) set BPF failed: %w (filter=%q)", err, filter)
 	}
+
+	return handle, nil
+}
+
+func (s *UDPSpec) ListenOut(ctx context.Context, ready chan struct{}, onOut func(srcPort, seq, ttl int, start time.Time)) error {
+	handle, err := s.openCapture()
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
 
 	src := gopacket.NewPacketSource(handle, handle.LinkType())
 	pktCh := src.Packets()
