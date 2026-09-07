@@ -3,11 +3,12 @@
 package trace
 
 import (
-	"github.com/nxtrace/NTrace-core/util"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/nxtrace/NTrace-core/util"
 )
 
 func TestFWMarkMTRRotation(t *testing.T) {
@@ -57,5 +58,13 @@ func TestFWMarkRouteOmitsRandomSourcePort(t *testing.T) {
 				t.Fatalf("random=%v port=%d request=%d", random, port, req.SrcPort)
 			}
 		}
+	}
+}
+
+func TestFWMarkRoutePreservesSource(t *testing.T) {
+	cfg := Config{FWMarkSet: true, SrcAddr: "192.0.2.2", SrcPort: 40000}
+	req := fwmarkRouteRequest(UDPTrace, cfg)
+	if req.SrcAddr != cfg.SrcAddr || req.SrcPort != cfg.SrcPort {
+		t.Fatalf("route constraints changed: %+v", req)
 	}
 }

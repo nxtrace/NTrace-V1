@@ -37,7 +37,7 @@ func fwmarkRouteRequest(method Method, cfg Config) routeprobe.Request {
 		sourcePort = 0
 	}
 	return routeprobe.Request{
-		Method: string(method), DstIP: cfg.DstIP, SourceDevice: cfg.SourceDevice,
+		Method: string(method), DstIP: cfg.DstIP, SrcAddr: cfg.SrcAddr, SourceDevice: cfg.SourceDevice,
 		SrcPort: sourcePort, DstPort: cfg.DstPort, TOS: cfg.TOS, FWMark: cfg.FWMark, FWMarkSet: true,
 	}
 }
