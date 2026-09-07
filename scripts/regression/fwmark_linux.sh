@@ -17,18 +17,18 @@ trap cleanup EXIT
 for tool in ip sysctl tcpdump python3 timeout setpriv; do command -v "$tool" >/dev/null; done
 for ns in "$S" "$A" "$B" "$D"; do
   ip netns add "$ns"
-  ip -n "$ns" link set lo up
+  ip -n "$ns" link set dev lo up
   ip netns exec "$ns" sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0 net.ipv6.conf.all.disable_ipv6=0
  done
 link() {
   local left="$1" li="$2" right="$3" ri="$4" n="$5"
-  ip -n "$left" link add "$li" type veth peer name "$ri" netns "$right"
+  ip -n "$left" link add name "$li" type veth peer name "$ri" netns "$right"
   ip -n "$left" addr add "10.201.$n.1/24" dev "$li"
   ip -n "$right" addr add "10.201.$n.2/24" dev "$ri"
   ip -n "$left" -6 addr add "2001:db8:$n::1/64" dev "$li" nodad
   ip -n "$right" -6 addr add "2001:db8:$n::2/64" dev "$ri" nodad
-  ip -n "$left" link set "$li" up
-  ip -n "$right" link set "$ri" up
+  ip -n "$left" link set dev "$li" up
+  ip -n "$right" link set dev "$ri" up
 }
 link "$A" as "$S" sa 1
 link "$B" bs "$S" sb 2
