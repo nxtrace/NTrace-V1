@@ -29,7 +29,6 @@ func checkMTRConflicts(flags map[string]bool) (conflict string, ok bool) {
 	}{
 		{"--table", flags["table"]},
 		{"--classic", flags["classic"]},
-		{"--json", flags["json"]},
 		{"--output", flags["output"]},
 		{"--output-default", flags["outputDefault"]},
 		{"--route-path", flags["routePath"]},
@@ -167,19 +166,13 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 		lang = "cn"
 	}
 
-	// 最终快照
-	var finalStats []trace.MTRHopStat
-	onSnapshot := func(iteration int, stats []trace.MTRHopStat) {
-		finalStats = stats
-	}
-
 	opts := trace.MTROptions{
 		HopInterval: time.Duration(hopIntervalMs) * time.Millisecond,
 		MaxPerHop:   maxPerHop,
 	}
 
 	roundConf := normalizeMTRReportConfig(conf, wide)
-	err := trace.RunMTR(ctx, method, roundConf, opts, onSnapshot)
+	finalStats, _, err := collectMTRReport(ctx, method, roundConf, opts)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Println(err)
 		return
