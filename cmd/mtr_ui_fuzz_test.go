@@ -17,7 +17,7 @@ func FuzzMTRInputParser(f *testing.F) {
 		var parser mtrInputParser
 		for _, b := range data {
 			action := parser.Feed(b)
-			if action < mtrActionNone || action > mtrActionHistoryChart {
+			if action < mtrActionNone || action > mtrActionPasteStart {
 				t.Fatalf("action = %d, outside known range", action)
 			}
 		}

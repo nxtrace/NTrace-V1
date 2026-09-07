@@ -645,6 +645,22 @@ JSON always includes all available metadata (FULL), ignores `-y`, and honors Geo
 
 NDJSON emits `start`, `probe`, `path_end`, and `end` objects with consecutive `seq` values. Reports emit exactly one object, including partial statistics on interruption or failure. Diagnostics go to stderr. Exit codes: completion `0`, runtime/initialization error `1`, invalid arguments `2`, SIGINT `130`, SIGTERM `143`. Completion does not imply reachability; use `path_end`. See the [MTR JSON v1 contract and examples](docs/mtr-json.md).
 
+Select and reorder human-readable MTR columns:
+
+```sh
+nexttrace -t --mtr-columns loss,received,avg 1.1.1.1
+nexttrace -w --mtr-columns received,snt,last 1.1.1.1
+ntr --mtr-columns received 1.1.1.1
+```
+
+`--mtr-columns` accepts any nonempty selection of `loss,snt,received,last,avg,best,wrst,stdev`, in the supplied order. Names ignore case and surrounding spaces; unknown names, duplicates and empty entries are errors. `received` is displayed as `Rcv`. The default remains `Loss%, Snt, Last, Avg, Best, Wrst, StDev`.
+
+The option applies to TUI, non-TTY tables and report/wide output. It does not enable MTR: full/tiny require `-t`, `-r` or `-w`; ntr uses its default MTR mode. RAW, JSON, traditional traceroute and standalone modes reject it before initialization. Custom TUI columns keep complete numbers and at least 8 Host cells; a narrow terminal shows a notice until widened or fewer columns are selected.
+
+Press `o/O` to edit the current column codes: `L=Loss S=Snt R=Received N=Last A=Avg B=Best W=Wrst V=StDev`. Codes ignore case; spaces separate codes. Enter validates and applies, Esc cancels, Backspace deletes and Ctrl-U clears. Invalid or duplicate codes and an empty draft keep the editor open. Bracketed paste converts newlines to spaces without submitting. The draft is limited to 256 ASCII characters.
+
+While editing, other shortcuts are inactive and Ctrl-C still exits. Editing does not pause probes, reset counters or change the paused state. Applying a selection from history view returns to the statistics table; cancellation preserves the view. History columns stay fixed. Changes last only for this session; editing and resizing work while paused.
+
 When running in a terminal (TTY), MTR mode uses an **interactive full-screen TUI**:
 
 - **`q` / `Q`** — quit (restores terminal, no output left behind)
@@ -656,6 +672,7 @@ When running in a terminal (TTY), MTR mode uses an **interactive full-screen TUI
   - default: PTR (or IP fallback) ↔ IP only
   - with `--show-ips`: PTR (IP) ↔ IP only
 - **`e`** — toggle MPLS label display on/off
+- **`o` / `O`** — edit statistic columns
 - **`d` / `D`** — toggle the optional history display; the default TUI remains the classic metric table
 - **`g` / `G`** — in history display only, cycle History chart mode: heatmap → bars → sparkline
 - The TUI header displays **source → destination**, with `--source`/`--dev` information when specified.
@@ -886,7 +903,7 @@ usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  <integer>] [--dot-server
                  (dnssb|aliyun|dnspod|google|cloudflare)] [-g|--language
                  (en|cn)] [-C|--no-color] [--from "<value>"] [-t|--mtr]
-                 [-r|--report] [-w|--wide] [--show-ips] [-y|--ipinfo <integer>]
+                 [-r|--report] [-w|--wide] [--show-ips] [--mtr-columns <string>] [-y|--ipinfo <integer>]
                  [--file "<value>"] [TARGET "<value>"]
 
                  An open source visual route tracking CLI tool
@@ -1019,6 +1036,9 @@ Arguments:
   -w  --wide                         MTR wide report mode (implies --mtr
                                      --report); alone equals --mtr --report
                                      --wide
+      --mtr-columns                  MTR text columns in order: loss,snt,
+                                     received,last,avg,best,wrst,stdev;
+                                     does not enable MTR
       --show-ips                     MTR only: display both PTR hostnames and
                                      numeric IPs (PTR first, IP in parentheses)
   -y  --ipinfo                       Set initial MTR TUI host info mode (0-4).
