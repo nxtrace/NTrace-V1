@@ -34,7 +34,7 @@ func maybeRunDNSModeWithAvailability(
 		return true, 1
 	}
 	if containsFWMarkFlag(rawArgs) {
-		fmt.Fprintln(stderr, "--fwmark cannot be combined with --dns")
+		_, _ = fmt.Fprintln(stderr, "--fwmark cannot be combined with --dns")
 		return true, 2
 	}
 	if containsTracerouteFlag(rawArgs) {

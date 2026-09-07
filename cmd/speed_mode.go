@@ -51,7 +51,7 @@ func maybeRunSpeedModeWithAvailability(enabled bool, rawArgs []string, stdout, s
 		return true, 1
 	}
 	if containsFWMarkFlag(rawArgs) {
-		fmt.Fprintln(stderr, "--fwmark cannot be combined with --speed")
+		_, _ = fmt.Fprintln(stderr, "--fwmark cannot be combined with --speed")
 		return true, 2
 	}
 	if containsTracerouteFlag(rawArgs) {

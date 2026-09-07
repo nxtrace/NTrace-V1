@@ -75,10 +75,16 @@ run_case() {
   esac
   [[ "$mark" != none ]] && args+=(--fwmark "$mark")
   local pa pb
-  ip netns exec "$S" tcpdump -i sa -n -U -w "$ART/$label-sa.pcap" "dst host $target" >"$ART/$label-sa.capture" 2>&1 & pa=$!
-  ip netns exec "$S" tcpdump -i sb -n -U -w "$ART/$label-sb.pcap" "dst host $target" >"$ART/$label-sb.capture" 2>&1 & pb=$!
+  ip netns exec "$S" tcpdump --immediate-mode -i sa -n -U -w "$ART/$label-sa.pcap" "dst host $target" >"$ART/$label-sa.capture" 2>&1 & pa=$!
+  ip netns exec "$S" tcpdump --immediate-mode -i sb -n -U -w "$ART/$label-sb.pcap" "dst host $target" >"$ART/$label-sb.capture" 2>&1 & pb=$!
   PIDS=("$pa" "$pb")
-  sleep 0.2
+  for attempt in {1..100}; do
+    if grep -q 'listening on' "$ART/$label-sa.capture" && grep -q 'listening on' "$ART/$label-sb.capture"; then break; fi
+    kill -0 "$pa" "$pb"
+    sleep 0.05
+  done
+  grep -q 'listening on' "$ART/$label-sa.capture"
+  grep -q 'listening on' "$ART/$label-sb.capture"
   if ! ip netns exec "$S" timeout 20 "$BIN" "${args[@]}" "$@" "$target" >"$ART/$label.out" 2>"$ART/$label.err"; then
     cat "$ART/$label.err" >&2; cat "$ART/$label.out" >&2; return 1
   fi
