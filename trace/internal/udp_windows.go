@@ -21,12 +21,17 @@ type UDPSpec struct {
 	DstIP        net.IP
 	DstPort      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	addr         wd.Address
 	handle       wd.Handle
 }
 
 func (s *UDPSpec) InitUDP() error {
+	if err := setPacketConnFWMark(nil, s.FWMark, s.FWMarkSet); err != nil {
+		return err
+	}
 	return s.initUDP(0)
 }
 

@@ -278,7 +278,11 @@ func (t *UDPTracer) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && SrcAddr == nil {
 		return nil, errors.New("invalid IPv4 SrcAddr:" + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "udp")
+	var sourceErr error
+	t.SrcIP, sourceErr = resolveProbeSource(UDPTrace, &t.Config, SrcAddr)
+	if sourceErr != nil {
+		return nil, wrapProbeSetupError(sourceErr)
+	}
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv4 address")
 	}
@@ -291,6 +295,7 @@ func (t *UDPTracer) Execute() (res *Result, err error) {
 		t.DstPort,
 	)
 	s.SourceDevice = t.SourceDevice
+	s.FWMark, s.FWMarkSet = t.FWMark, t.FWMarkSet
 
 	closeSpec := sync.OnceFunc(s.Close)
 	defer closeSpec()
@@ -457,7 +462,7 @@ func (t *UDPTracer) resolveSourcePort() int {
 	if !util.RandomPortEnabled() && t.SrcPort > 0 {
 		return t.SrcPort
 	}
-	_, srcPort := util.LocalIPPort(t.DstIP, t.SrcIP, "udp")
+	_, srcPort := probeLocalIPPort(t.Config, t.SrcIP, "udp")
 	return srcPort
 }
 

@@ -129,3 +129,7 @@ cancellation retains its error cause and is not reported as user interruption.
 Syntax and conflicting-mode errors occur before a session: stdout is empty,
 stderr carries the diagnostic, and exit code is 2. Help/version retain their
 existing output behavior. All session diagnostics go to stderr.
+
+### Linux socket mark
+
+For supported Linux traceroute/MTR CLI sessions, an explicit `--fwmark` is recorded in MTR `effective_parameters.fwmark` as an optional uint32 JSON number. Decimal and hexadecimal CLI spellings produce the same value. Explicit zero is included; omission leaves the field absent. Schema version remains 1. This records the requested socket setting, not proof of the observed egress route. Mark/source initialization errors use the existing `initialize` error stage and nonzero exit status; no human-readable lines are inserted into JSON or NDJSON.

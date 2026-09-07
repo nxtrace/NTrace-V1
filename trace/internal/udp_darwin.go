@@ -26,6 +26,8 @@ type UDPSpec struct {
 	DstIP        net.IP
 	DstPort      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	udp          net.PacketConn
 	udp4         *ipv4.PacketConn
@@ -34,6 +36,9 @@ type UDPSpec struct {
 }
 
 func (s *UDPSpec) InitUDP() error {
+	if err := setPacketConnFWMark(nil, s.FWMark, s.FWMarkSet); err != nil {
+		return err
+	}
 	network := "ip4:udp"
 	if s.IPVersion == 6 {
 		network = "ip6:udp"

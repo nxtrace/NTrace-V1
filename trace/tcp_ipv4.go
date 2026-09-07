@@ -239,7 +239,11 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && SrcAddr == nil {
 		return nil, errors.New("invalid IPv4 SrcAddr:" + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "tcp")
+	var sourceErr error
+	t.SrcIP, sourceErr = resolveProbeSource(TCPTrace, &t.Config, SrcAddr)
+	if sourceErr != nil {
+		return nil, wrapProbeSetupError(sourceErr)
+	}
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv4 address")
 	}
@@ -253,6 +257,7 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 		t.PktSize,
 	)
 	s.SourceDevice = t.SourceDevice
+	s.FWMark, s.FWMarkSet = t.FWMark, t.FWMarkSet
 
 	closeSpec := sync.OnceFunc(s.Close)
 	defer closeSpec()
@@ -413,7 +418,7 @@ func (t *TCPTracer) send(ctx context.Context, s *internal.TCPSpec, ttl, i int) e
 		if !util.RandomPortEnabled() && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
-		return util.LocalIPPort(t.DstIP, t.SrcIP, "tcp")
+		return probeLocalIPPort(t.Config, t.SrcIP, "tcp")
 	}()
 
 	ipHeader := &layers.IPv4{

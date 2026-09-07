@@ -418,6 +418,16 @@ nexttrace --file /path/to/your/iplist.txt
 
 #### `NextTrace` already supports route tracing for specified Network Devices
 
+### Linux policy routing (`--fwmark`)
+
+`--fwmark 256` or `--fwmark 0x100` sets a 32-bit socket mark on local traceroute and MTR probes. It supports ICMP/TCP/UDP over IPv4/IPv6 in all applicable builds. Configure matching Linux `ip rule` and route tables separately; NextTrace does not edit them. The same mark need not change the route when no rule selects a different path.
+
+Automatic source selection uses the marked route. Explicit `--source` and `--dev` remain constraints; a mark does not override them. Marked sessions do not use the legacy process-wide source cache. Protocol, TOS and known ports are included in the route query; automatic/random source ports and later policy changes can still affect ECMP selection.
+
+Values range from `0` to `4294967295`; decimal and `0x` hexadecimal are accepted, without masks. Omission leaves socket marking untouched; explicit `0` sets zero and still requires permission. Linux requires `CAP_NET_ADMIN`, or `CAP_NET_RAW` on Linux 5.17 and newer. Mark initialization failure terminates probing rather than falling back to unmarked traffic.
+
+DNS/RDNS, GeoIP and API requests do not inherit the probe mark. Human-readable and RAW output layouts are unchanged; MTR JSON/NDJSON records an explicitly supplied mark in `effective_parameters.fwmark` as a JSON number. macOS, Windows, BSD and Android reject this option. Independent modes (including doctor/MTU/DNS/speed/deploy), Globalping, Fast Trace and file targets do not support it.
+
 On macOS and Linux, `--dev` binds the requested source interface.
 On Windows, `--dev` resolves the source IP from the selected device and uses that source address for ICMP/TCP/UDP probes; it does not bind WinDivert or sockets to a real egress interface, so Windows routing may still choose a different path. The standalone `--mtu` mode follows the same source-address behavior and also uses the device name for local MTU lookup.
 

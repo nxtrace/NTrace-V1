@@ -230,7 +230,11 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && !util.IsIPv6(SrcAddr) {
 		return nil, errors.New("invalid IPv6 SrcAddr: " + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPortv6(t.DstIP, SrcAddr, "udp6")
+	var sourceErr error
+	t.SrcIP, sourceErr = resolveProbeSource(UDPTrace, &t.Config, SrcAddr)
+	if sourceErr != nil {
+		return nil, wrapProbeSetupError(sourceErr)
+	}
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv6 address")
 	}
@@ -243,6 +247,7 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 		t.DstPort,
 	)
 	s.SourceDevice = t.SourceDevice
+	s.FWMark, s.FWMarkSet = t.FWMark, t.FWMarkSet
 
 	closeSpec := sync.OnceFunc(s.Close)
 	defer closeSpec()
@@ -386,7 +391,7 @@ func (t *UDPTracerIPv6) send(ctx context.Context, s *internal.UDPSpec, ttl, i in
 		if !util.RandomPortEnabled() && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
-		return util.LocalIPPortv6(t.DstIP, t.SrcIP, "udp6")
+		return probeLocalIPPort(t.Config, t.SrcIP, "udp6")
 	}()
 
 	ipHeader := &layers.IPv6{

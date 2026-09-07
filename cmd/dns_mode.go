@@ -33,6 +33,10 @@ func maybeRunDNSModeWithAvailability(
 		_, _ = fmt.Fprintf(stderr, "-l/--dns is not available in %s; please use the full nexttrace build\n", appBinName)
 		return true, 1
 	}
+	if containsFWMarkFlag(rawArgs) {
+		fmt.Fprintln(stderr, "--fwmark cannot be combined with --dns")
+		return true, 2
+	}
 	if containsTracerouteFlag(rawArgs) {
 		_, _ = fmt.Fprintln(stderr, "--traceroute cannot be combined with --dns")
 		return true, 1

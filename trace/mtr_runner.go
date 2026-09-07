@@ -113,6 +113,13 @@ func RunMTR(ctx context.Context, method Method, baseConfig Config, opts MTROptio
 // runMTRPerHop 使用 per-hop 独立调度模式。
 func runMTRPerHop(ctx context.Context, method Method, baseConfig Config, opts MTROptions, onSnapshot MTROnSnapshot) error {
 	normalizeRuntimeConfig(&baseConfig)
+	baseConfig.Context = ctx
+	var markErr error
+	baseConfig, markErr = PrepareFWMarkConfig(method, baseConfig)
+	if markErr != nil {
+		return markErr
+	}
+
 	baseConfig.NumMeasurements = 1
 	baseConfig.MaxAttempts = 1
 	baseConfig.RealtimePrinter = nil
@@ -173,6 +180,13 @@ func mtrProbeCallbackFromOptions(opts MTROptions) func(mtrProbeResult, int, time
 // runMTRRoundBased 使用 legacy round-based 调度模式（Web MTR 兼容）。
 func runMTRRoundBased(ctx context.Context, method Method, baseConfig Config, opts MTROptions, onSnapshot MTROnSnapshot) error {
 	normalizeRuntimeConfig(&baseConfig)
+	baseConfig.Context = ctx
+	var markErr error
+	baseConfig, markErr = PrepareFWMarkConfig(method, baseConfig)
+	if markErr != nil {
+		return markErr
+	}
+
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
 	}
@@ -334,7 +348,13 @@ func newMTRICMPEngine(config Config) (*mtrICMPEngine, error) {
 	}
 
 	var srcIP net.IP
-	if ipVer == 6 {
+	if config.FWMarkSet {
+		var err error
+		srcIP, err = resolveProbeSource(ICMPTrace, &config, srcAddr)
+		if err != nil {
+			return nil, wrapProbeSetupError(err)
+		}
+	} else if ipVer == 6 {
 		srcIP, _ = util.LocalIPPortv6(config.DstIP, srcAddr, "icmp6")
 	} else {
 		srcIP, _ = util.LocalIPPort(config.DstIP, srcAddr, "icmp")
@@ -370,6 +390,7 @@ func (e *mtrICMPEngine) startMTRSession(workers *mtrWorkerSession) error {
 	ctx := workers.ctx
 	spec := internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, int(e.echoID.Load()), e.srcIP, e.config.DstIP)
 	applyICMPSourceDevice(spec, e.config.OSType, e.config.SourceDevice)
+	spec.FWMark, spec.FWMarkSet = e.config.FWMark, e.config.FWMarkSet
 	if err := spec.InitICMP(); err != nil {
 		spec.Close()
 		return wrapProbeSetupError(err)
@@ -494,6 +515,7 @@ func (e *mtrICMPEngine) rotateEngine(ctx context.Context) error {
 
 	spec := internal.NewICMPSpec(e.ipVer, e.config.ICMPMode, int(e.echoID.Load()), e.srcIP, e.config.DstIP)
 	applyICMPSourceDevice(spec, e.config.OSType, e.config.SourceDevice)
+	spec.FWMark, spec.FWMarkSet = e.config.FWMark, e.config.FWMarkSet
 	if err := spec.InitICMP(); err != nil {
 		spec.Close()
 		return wrapProbeSetupError(err)

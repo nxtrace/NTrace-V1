@@ -27,6 +27,8 @@ type TCPSpec struct {
 	DstPort      int
 	PktSize      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	tcp          net.PacketConn
 	tcp4         *ipv4.PacketConn
@@ -35,6 +37,9 @@ type TCPSpec struct {
 }
 
 func (s *TCPSpec) InitTCP() error {
+	if err := setPacketConnFWMark(nil, s.FWMark, s.FWMarkSet); err != nil {
+		return err
+	}
 	network := "ip4:tcp"
 	if s.IPVersion == 6 {
 		network = "ip6:tcp"

@@ -1,0 +1,42 @@
+name: Linux fwmark
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fwmark-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  dual-egress:
+    name: Dual-stack policy routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.1'
+      - name: Install fixture dependencies
+        run: sudo apt-get update && sudo apt-get install -y iproute2 tcpdump
+      - name: Build
+        run: |
+          go build -o "$RUNNER_TEMP/nexttrace-fwmark" .
+          go test -c -o "$RUNNER_TEMP/fwmark-socket.test" ./trace/internal
+          go test -c -o "$RUNNER_TEMP/fwmark-trace.test" ./trace
+      - name: Native sockets and MTR rotation
+        run: |
+          sudo env NEXTTRACE_FWMARK_INTEGRATION=1 "$RUNNER_TEMP/fwmark-socket.test" -test.run '^TestFWMarkNativeSockets$' -test.v
+          sudo env NEXTTRACE_FWMARK_INTEGRATION=1 "$RUNNER_TEMP/fwmark-trace.test" -test.run '^TestFWMarkMTRRotation$' -test.v
+      - name: Mark capability failures
+        run: sudo env NEXTTRACE_FWMARK_NO_CAPS=1 setpriv --bounding-set=-net_admin,-net_raw --inh-caps=-all --ambient-caps=-all "$RUNNER_TEMP/fwmark-socket.test" -test.run '^TestFWMarkPermissionDenied$' -test.v
+      - name: IPv4 and IPv6 dual egress
+        run: sudo bash scripts/regression/fwmark_linux.sh "$RUNNER_TEMP/nexttrace-fwmark" "$RUNNER_TEMP/fwmark-results"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: fwmark-results
+          path: ${{ runner.temp }}/fwmark-results
+          if-no-files-found: warn

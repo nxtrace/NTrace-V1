@@ -25,6 +25,8 @@ type UDPSpec struct {
 	DstIP        net.IP
 	DstPort      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	udp          net.PacketConn
 	udp4         *ipv4.RawConn
@@ -42,6 +44,10 @@ func (s *UDPSpec) InitUDP() error {
 	udp, err := net.ListenPacket(network, s.SrcIP.String())
 	if err != nil {
 		return fmt.Errorf("(InitUDP) ListenPacket(%s, %s) failed: %w", network, s.SrcIP, err)
+	}
+	if err := setPacketConnFWMark(udp, s.FWMark, s.FWMarkSet); err != nil {
+		_ = udp.Close()
+		return err
 	}
 	if s.SourceDevice != "" {
 		if err := bindPacketConnToSourceDevice(udp, s.IPVersion, s.SourceDevice); err != nil {
