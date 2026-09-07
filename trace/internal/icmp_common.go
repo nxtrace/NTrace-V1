@@ -30,6 +30,10 @@ func (s *ICMPSpec) InitICMP() error {
 	if err != nil {
 		return fmt.Errorf("(InitICMP) ListenPacket(%s, %s) failed: %w", network, s.SrcIP, err)
 	}
+	if err := setPacketConnFWMark(icmpConn, s.FWMark, s.FWMarkSet); err != nil {
+		_ = icmpConn.Close()
+		return err
+	}
 	if s.SourceDevice != "" {
 		if err := bindPacketConnToSourceDevice(icmpConn, s.IPVersion, s.SourceDevice); err != nil {
 			_ = icmpConn.Close()

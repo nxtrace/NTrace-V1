@@ -35,6 +35,8 @@ type Config struct {
 	SrcAddr          string
 	SrcPort          int
 	SourceDevice     string
+	FWMark           uint32
+	FWMarkSet        bool
 	BeginHop         int
 	MaxHops          int
 	NumMeasurements  int

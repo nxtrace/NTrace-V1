@@ -239,7 +239,11 @@ func (t *TCPTracerIPv6) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && !util.IsIPv6(SrcAddr) {
 		return nil, errors.New("invalid IPv6 SrcAddr: " + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPortv6(t.DstIP, SrcAddr, "tcp6")
+	var sourceErr error
+	t.SrcIP, sourceErr = resolveProbeSource(TCPTrace, &t.Config, SrcAddr)
+	if sourceErr != nil {
+		return nil, wrapProbeSetupError(sourceErr)
+	}
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv6 address")
 	}
@@ -253,6 +257,7 @@ func (t *TCPTracerIPv6) Execute() (res *Result, err error) {
 		t.PktSize,
 	)
 	s.SourceDevice = t.SourceDevice
+	s.FWMark, s.FWMarkSet = t.FWMark, t.FWMarkSet
 
 	closeSpec := sync.OnceFunc(s.Close)
 	defer closeSpec()
@@ -410,10 +415,10 @@ func (t *TCPTracerIPv6) send(ctx context.Context, s *internal.TCPSpec, ttl, i in
 	seq := (ttl << 24) | (i & 0xFFFFFF)
 
 	_, SrcPort := func() (net.IP, int) {
-		if !util.RandomPortEnabled() && t.SrcPort > 0 {
+		if !probeRandomPortEnabled(t.Config) && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
-		return util.LocalIPPortv6(t.DstIP, t.SrcIP, "tcp6")
+		return probeLocalIPPort(t.Config, t.SrcIP, "tcp6")
 	}()
 
 	ipHeader := &layers.IPv6{

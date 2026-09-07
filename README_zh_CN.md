@@ -415,6 +415,16 @@ nexttrace --file /path/to/your/iplist.txt
 
 #### `NextTrace` 已支持指定网卡进行路由跟踪
 
+### Linux 策略路由（`--fwmark`）
+
+`--fwmark 256` 或 `--fwmark 0x100` 为本地 traceroute、MTR 探测 socket 设置 32 位标记，覆盖各适用构建的 ICMP/TCP/UDP 和 IPv4/IPv6。对应的 `ip rule` 和路由表由用户配置，NextTrace 不修改系统规则；没有匹配的分流规则时，路径可以保持不变。
+
+自动源地址按带标记的路由选择，显式 `--source`、`--dev` 保留约束，标记不会覆盖它们。带标记会话不使用旧的进程级源地址缓存。路由查询包含协议和 TOS，但不传入 TCP/UDP 端口，以匹配原生 raw socket 的内核选路：用户态构造的传输层头部不会作为该查询的端口条件。后续策略变化及 ECMP 仍可能影响选路。
+
+范围为 `0..4294967295`，支持十进制及 `0x` 十六进制，不支持掩码。未传参数时不设置标记；显式 `0` 仍执行设置并检查权限。Linux 需要 `CAP_NET_ADMIN`，或 Linux 5.17 起的 `CAP_NET_RAW`。初始化失败会终止探测，不退回无标记方式。
+
+DNS/RDNS、GeoIP、API 请求不继承探测标记。终端和 RAW 格式保持不变；MTR JSON/NDJSON 在 `effective_parameters.fwmark` 中记录显式指定的数值。macOS、Windows、BSD、Android，以及 doctor/MTU/DNS/speed/deploy 等独立模式、Globalping、Fast Trace 和文件目标明确拒绝该参数。
+
 在 macOS 和 Linux 上，`--dev` 会绑定到指定源网卡。
 在 Windows 上，`--dev` 会从指定网卡解析 source IP，并用该 source address 发起 ICMP/TCP/UDP 探测；它不会把 WinDivert 或 socket 绑定到真实出接口，实际出口仍可能由 Windows 路由表决定。独立 `--mtu` 模式也遵循相同的 source-address 语义，并额外使用网卡名查询本地 MTU。
 

@@ -23,6 +23,8 @@ type TCPSpec struct {
 	icmp         net.PacketConn
 	PktSize      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	addr         wd.Address
 	handle       wd.Handle
 }
@@ -35,6 +37,9 @@ func (s *TCPSpec) sourceDeviceUnsupportedErr() error {
 }
 
 func (s *TCPSpec) InitTCP() error {
+	if err := setPacketConnFWMark(nil, s.FWMark, s.FWMarkSet); err != nil {
+		return err
+	}
 	return s.initTCP(0)
 }
 

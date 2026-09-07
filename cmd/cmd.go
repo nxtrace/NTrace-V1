@@ -1439,6 +1439,7 @@ func Execute() {
 	speedMode := registerSpeedFlag(parser)
 	naliMode := registerNaliFlag(parser)
 	srcAddr := parser.String("s", "source", &argparse.Options{Help: "Use source address src_addr for outgoing packets"})
+	fwmark := parser.String("", "fwmark", &argparse.Options{Help: "Linux probe socket mark (decimal or 0x hex); traceroute/MTR only"})
 	srcPort := parser.Int("", "source-port", &argparse.Options{Help: "Use source port src_port for outgoing packets"})
 	srcDev := parser.String("D", "dev", &argparse.Options{Help: "Use the specified network device for explicit source selection. On Windows, this selects the device source address; routing may still choose the egress interface"})
 
@@ -1480,12 +1481,21 @@ func Execute() {
 	if err != nil {
 		// In case of error print error and print usage
 		// This can also be done by passing -h or --help flags
-		if mtrJSONRequested {
+		if mtrJSONRequested || containsFWMarkFlag(os.Args[1:]) {
 			fmt.Fprint(os.Stderr, sanitizeUsagePositionalArgs(parser.Usage(err)))
 			os.Exit(2)
 		}
 		fmt.Print(sanitizeUsagePositionalArgs(parser.Usage(err)))
 		return
+	}
+	fwmarkSet := parsedFlag(parser, "fwmark")
+	mark, markErr := parseFWMark(*fwmark, fwmarkSet)
+	if markErr == nil {
+		markErr = validateFWMarkMode(fwmarkSet, *init, *mtuMode, *naliMode, *deploy, *deployMCP, *dnsMode, *speedMode, *fastTraceFlag, *file != "", *from != "", *setupNextTraceAPIV4Token)
+	}
+	if markErr != nil {
+		fmt.Fprintln(os.Stderr, markErr)
+		os.Exit(2)
 	}
 	if mtrJSONRequested && (*setupNextTraceAPIV4Token || *dnsMode || *speedMode) {
 		fmt.Fprintln(os.Stderr, "MTR JSON cannot be combined with a standalone mode")
@@ -1580,6 +1590,7 @@ func Execute() {
 			Config: trace.Config{
 				OSType: resolveOSType(), ICMPMode: *icmpMode, DN42: *dn42,
 				SrcAddr: *srcAddr, SourceDevice: *srcDev, SrcPort: *srcPort, DstPort: *port,
+				FWMark: mark, FWMarkSet: fwmarkSet,
 				BeginHop: *beginHop, MaxHops: *maxHops, ParallelRequests: *parallelRequests,
 				Timeout: time.Duration(*timeout) * time.Millisecond, TOS: *tos, Lang: *lang,
 				RDNS: !*norDNS, AlwaysWaitRDNS: *alwaysrDNS, DisableMPLS: *disableMPLS,
@@ -1893,27 +1904,16 @@ func Execute() {
 		return
 	}
 
-	// ResolveConfiguredSrcAddr is used for display/source-IP fallback before tracer runtime normalization.
-	resolvedSrcAddr, _, srcResolveErr := trace.ResolveConfiguredSrcAddr(ip, *srcAddr, *srcDev)
-	if srcResolveErr != nil {
-		fmt.Println(srcResolveErr)
-		os.Exit(1)
-	}
-	// NormalizeExplicitSourceConfig applies explicit --source/--dev selection rules.
-	sourceCfg, srcResolveErr := trace.NormalizeExplicitSourceConfig(method, trace.Config{
-		OSType:       osType,
-		DstIP:        ip,
-		SrcAddr:      *srcAddr,
-		SourceDevice: *srcDev,
+	sourceCfg, srcResolveErr := resolveCLIProbeSource(method, trace.Config{
+		Context: rootCtx, OSType: osType, DstIP: ip, SrcAddr: *srcAddr, SourceDevice: *srcDev,
+		SrcPort: *srcPort, DstPort: *port, TOS: *tos, Timeout: time.Duration(*timeout) * time.Millisecond,
+		FWMark: mark, FWMarkSet: fwmarkSet,
 	})
 	if srcResolveErr != nil {
-		fmt.Println(srcResolveErr)
+		fmt.Fprintln(os.Stderr, srcResolveErr)
 		os.Exit(1)
 	}
-	if sourceCfg.SrcAddr != "" {
-		resolvedSrcAddr = sourceCfg.SrcAddr
-	}
-	resolvedSrcDev := sourceCfg.SourceDevice
+	resolvedSrcAddr, resolvedSrcDev := sourceCfg.SrcAddr, sourceCfg.SourceDevice
 	effectivePacketSize := resolvePacketSizeArg(*packetSize, packetSizeExplicit, method, ip)
 	printTraceNav(*jsonPrint, mtrModes.mtr, ip, domain, *dataOrigin, *maxHops, effectivePacketSize, resolvedSrcAddr, method)
 
@@ -1952,6 +1952,10 @@ func Execute() {
 		*disableMPLS,
 	)
 	conf.Context = rootCtx
+	conf.FWMark, conf.FWMarkSet = mark, fwmarkSet
+	if fwmarkSet {
+		conf.SrcPort = sourceCfg.SrcPort
+	}
 
 	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode, mtrColumns...) {
 		return

@@ -42,7 +42,7 @@ func doctorValueOption(name string) bool {
 	switch name {
 	case "p", "port", "s", "source", "D", "dev", "source-port", "Q", "tos", "timeout", "dot-server", "g", "language", "icmp-mode",
 		"q", "queries", "max-attempts", "parallel-requests", "m", "max-hops", "d", "data-provider", "pow-provider", "f", "first",
-		"o", "output", "listen", "deploy-token", "z", "send-time", "i", "ttl-time", "psize", "from", "mtr-columns", "y", "ipinfo", "file":
+		"o", "output", "listen", "deploy-token", "z", "send-time", "i", "ttl-time", "psize", "from", "mtr-columns", "fwmark", "y", "ipinfo", "file":
 		return true
 	}
 	return false

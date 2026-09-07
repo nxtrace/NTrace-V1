@@ -149,6 +149,9 @@ func runMTRJSONStream(ctx context.Context, opts mtrJSONOptions, out *mtrJSONOutp
 }
 
 func normalizeMTRJSONOptions(opts *mtrJSONOptions, stderr io.Writer) error {
+	if err := trace.ValidateFWMarkPlatform(opts.Config.FWMarkSet); err != nil {
+		return err
+	}
 	if strings.TrimSpace(normalizeCLITarget(opts.Target)) == "" {
 		return errors.New("MTR JSON requires a target")
 	}
@@ -223,18 +226,12 @@ func prepareMTRJSON(ctx context.Context, opts *mtrJSONOptions, out *mtrJSONOutpu
 	*stage = "initialize"
 	cfg := &opts.Config
 	cfg.DstIP, cfg.Context = ip, ctx
-	src, _, err := trace.ResolveConfiguredSrcAddr(ip, cfg.SrcAddr, cfg.SourceDevice)
+	prepared, err := resolveCLIProbeSource(opts.Method, *cfg)
 	if err != nil {
 		return cleanup, err
 	}
-	normalized, err := trace.NormalizeExplicitSourceConfig(opts.Method, *cfg)
-	if err != nil {
-		return cleanup, err
-	}
-	if normalized.SrcAddr != "" {
-		src = normalized.SrcAddr
-	}
-	cfg.SrcAddr, cfg.SourceDevice = src, normalized.SourceDevice
+	*cfg = prepared
+	src := cfg.SrcAddr
 	if src != "" {
 		sourceIP := net.ParseIP(src)
 		if sourceIP == nil || (sourceIP.To4() == nil) != (ip.To4() == nil) {
@@ -282,6 +279,10 @@ func prepareMTRJSON(ctx context.Context, opts *mtrJSONOptions, out *mtrJSONOutpu
 		SourceAddress: cfg.SrcAddr, SourceDevice: cfg.SourceDevice, PacketSize: packetSize, RandomPacketSize: packet.Random,
 		TOS: cfg.TOS, DataProvider: opts.DataProvider, Language: cfg.Lang, DotServer: opts.DotServer,
 		RDNS: cfg.RDNS, AlwaysWaitRDNS: cfg.RDNS && cfg.AlwaysWaitRDNS, DisableMPLS: cfg.DisableMPLS, DN42: cfg.DN42,
+	}
+	if cfg.FWMarkSet {
+		mark := cfg.FWMark
+		params.FWMark = &mark
 	}
 	if opts.Method != trace.ICMPTrace {
 		params.Port, params.SourcePort = ptrInt(cfg.DstPort), ptrInt(cfg.SrcPort)

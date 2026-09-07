@@ -24,6 +24,8 @@ type TCPSpec struct {
 	DstPort      int
 	PktSize      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	tcp          net.PacketConn
 	tcp4         *ipv4.PacketConn
@@ -40,6 +42,10 @@ func (s *TCPSpec) InitTCP() error {
 	tcp, err := net.ListenPacket(network, s.SrcIP.String())
 	if err != nil {
 		return fmt.Errorf("(InitTCP) ListenPacket(%s, %s) failed: %w", network, s.SrcIP, err)
+	}
+	if err := setPacketConnFWMark(tcp, s.FWMark, s.FWMarkSet); err != nil {
+		_ = tcp.Close()
+		return err
 	}
 	if s.SourceDevice != "" {
 		if err := bindPacketConnToSourceDevice(tcp, s.IPVersion, s.SourceDevice); err != nil {

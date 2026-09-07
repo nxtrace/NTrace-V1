@@ -23,6 +23,8 @@ type ICMPSpec struct {
 	SrcIP        net.IP
 	DstIP        net.IP
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	icmp4        *ipv4.PacketConn
 	icmp6        *ipv6.PacketConn

@@ -241,7 +241,11 @@ func (t *ICMPTracer) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && SrcAddr == nil {
 		return nil, errors.New("invalid IPv4 SrcAddr:" + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPort(t.DstIP, SrcAddr, "icmp")
+	var sourceErr error
+	t.SrcIP, sourceErr = resolveProbeSource(ICMPTrace, &t.Config, SrcAddr)
+	if sourceErr != nil {
+		return nil, wrapProbeSetupError(sourceErr)
+	}
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv4 address")
 	}
@@ -254,6 +258,7 @@ func (t *ICMPTracer) Execute() (res *Result, err error) {
 		t.DstIP,
 	)
 	applyICMPSourceDevice(s, t.OSType, t.SourceDevice)
+	s.FWMark, s.FWMarkSet = t.FWMark, t.FWMarkSet
 
 	closeSpec := sync.OnceFunc(s.Close)
 	defer closeSpec()

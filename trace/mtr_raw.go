@@ -78,6 +78,12 @@ func RunMTRRaw(ctx context.Context, method Method, cfg Config, opts MTRRawOption
 // runMTRRawPerHop uses per-hop scheduling for raw streaming.
 func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRawOptions, onRecord MTRRawOnRecord) error {
 	normalizeRuntimeConfig(&cfg)
+	cfg.Context = ctx
+	var markErr error
+	cfg, markErr = PrepareFWMarkConfig(method, cfg)
+	if markErr != nil {
+		return markErr
+	}
 	roundCfg := cfg
 	roundCfg.NumMeasurements = 1
 	roundCfg.MaxAttempts = 1
@@ -134,6 +140,12 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 	session := newMTRWorkerSession(ctx)
 	defer session.shutdown(nil)
 	normalizeRuntimeConfig(&cfg)
+	cfg.Context = ctx
+	var markErr error
+	cfg, markErr = PrepareFWMarkConfig(method, cfg)
+	if markErr != nil {
+		return markErr
+	}
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
 	}
