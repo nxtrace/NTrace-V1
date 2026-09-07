@@ -351,6 +351,7 @@ type deployRunOptions struct {
 }
 
 type mtrCLIFlags struct {
+	columns    *string
 	mtrMode    *bool
 	reportMode *bool
 	wideMode   *bool
@@ -567,6 +568,7 @@ func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 		}
 		return mtrCLIFlags{
 			mtrMode:    mtrMode,
+			columns:    parser.String("", "mtr-columns", &argparse.Options{Help: "MTR text columns in order: loss,snt,received,last,avg,best,wrst,stdev (does not enable MTR)"}),
 			reportMode: parser.Flag("r", "report", &argparse.Options{Help: "MTR report mode (non-interactive, implies --mtr); can trigger MTR without --mtr"}),
 			wideMode:   parser.Flag("w", "wide", &argparse.Options{Help: "MTR wide report mode (implies --mtr --report); alone equals --mtr --report --wide"}),
 			showIPs:    parser.Flag("", "show-ips", &argparse.Options{Help: "MTR only: display both PTR hostnames and numeric IPs (PTR first, IP in parentheses)"}),
@@ -575,6 +577,7 @@ func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 	}
 	return mtrCLIFlags{
 		mtrMode:    ptrBool(false),
+		columns:    new(string),
 		reportMode: ptrBool(false),
 		wideMode:   ptrBool(false),
 		showIPs:    ptrBool(false),
@@ -1495,6 +1498,10 @@ func Execute() {
 		}
 		os.Exit(1)
 	}
+	if *setupNextTraceAPIV4Token && parsedFlag(parser, "mtr-columns") {
+		fmt.Fprintln(os.Stderr, "--mtr-columns cannot be combined with token setup")
+		os.Exit(2)
+	}
 	if *setupNextTraceAPIV4Token {
 		if err := runNextTraceAPIV4TokenSetup(nextTraceAPIV4TokenSetupOptions{
 			stdin:  os.Stdin,
@@ -1535,6 +1542,12 @@ func Execute() {
 		}
 		os.Exit(1)
 	}
+	mtrColumns, columnsErr := resolveMTRColumns(*mtrFlags.columns, parsedFlag(parser, "mtr-columns"), mtrModes, *jsonPrint, standalone)
+	if columnsErr != nil {
+		fmt.Fprintln(os.Stderr, columnsErr)
+		os.Exit(2)
+	}
+	_ = mtrColumns // Connected to human printers in the layout change.
 	if mtrModes.mtr && *jsonPrint {
 		if maybePrintVersion(*ver) {
 			return
