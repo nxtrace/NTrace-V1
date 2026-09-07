@@ -138,13 +138,9 @@ for family in 4 6; do
     run_case "$family-$protocol-raw" "$family" "$protocol" raw 0x100 sb
   done
  done
-# Detect the random-port sentinel accidentally being encoded as port 65535.
-ip -n "$S" route add table 201 unreachable 203.0.113.9/32
-ip -n "$S" -6 route add table 201 unreachable 2001:db8:99::9/128
+# Exercise random source ports; netlink unit tests verify omission of the -1 sentinel.
 for family in 4 6; do for protocol in tcp udp; do
-  ip -n "$S" "-$family" rule add priority 90 fwmark 0x100 ipproto "$protocol" sport 65535 lookup 201
   run_case "$family-$protocol-random-source" "$family" "$protocol" trace 0x100 sb --source-port -1
-  ip -n "$S" "-$family" rule del priority 90
  done; done
 # The source resolver must not require an unmarked route to exist.
 ip -n "$S" route del 203.0.113.9/32
