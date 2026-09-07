@@ -110,7 +110,7 @@ func TestExplicitSourceNotOverwrittenByRoute(t *testing.T) {
 	o.Config.SourceDevice = "ignored0"
 	o.Config.OSType = 2
 	d.interfaceByName = func(string) (*net.Interface, error) { return nil, errors.New("missing interface") }
-	d.normalize = func(_ trace.Method, c trace.Config) (trace.Config, error) { c.SourceDevice = ""; return c, nil }
+	d.normalize = trace.NormalizeExplicitSourceConfig
 	d.source = func(context.Context, net.IP) (string, error) { t.Fatal("automatic source called"); return "", nil }
 	d.route = func(_ context.Context, _ trace.Method, c trace.Config) (Route, error) {
 		if c.SrcAddr != o.Config.SrcAddr || c.SourceDevice != "" {
@@ -121,6 +121,45 @@ func TestExplicitSourceNotOverwrittenByRoute(t *testing.T) {
 	r := run(t.Context(), o, d)
 	if r.Source != o.Config.SrcAddr || r.Device != "" || r.ExitCode() != 0 {
 		t.Fatalf("source overwritten: %+v", r)
+	}
+}
+
+func TestWindowsDoctorNormalizesDeviceBeforeBackend(t *testing.T) {
+	devices, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loopback string
+	for _, dev := range devices {
+		if dev.Flags&net.FlagLoopback != 0 {
+			loopback = dev.Name
+			break
+		}
+	}
+	if loopback == "" {
+		t.Skip("loopback interface unavailable")
+	}
+	for _, method := range []trace.Method{trace.ICMPTrace, trace.TCPTrace, trace.UDPTrace} {
+		o, d := testOptions(), testDependencies()
+		o.Method, o.Config.OSType, o.Config.SourceDevice = method, 2, loopback
+		d.interfaceByName = net.InterfaceByName
+		d.normalize = trace.NormalizeExplicitSourceConfig
+		d.source = func(context.Context, net.IP) (string, error) {
+			t.Fatal("automatic source selection bypassed the device")
+			return "", nil
+		}
+		called := false
+		d.backend = func(_ context.Context, _ trace.Method, cfg trace.Config) []trace.BackendCheck {
+			called = true
+			if cfg.SourceDevice != "" || cfg.SrcAddr != "127.0.0.1" {
+				t.Fatalf("%s backend received unnormalized source: %+v", method, cfg)
+			}
+			return []trace.BackendCheck{{Name: "backend"}}
+		}
+		r := run(t.Context(), o, d)
+		if !called || r.ExitCode() != 0 {
+			t.Fatalf("%s: %+v", method, r)
+		}
 	}
 }
 

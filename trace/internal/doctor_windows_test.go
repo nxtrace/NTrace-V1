@@ -69,3 +69,16 @@ func TestDoctorWinDivertOpenAlwaysProhibitsInstallation(t *testing.T) {
 	_ = (&ICMPSpec{}).ensureICMPSendHandle(true)
 	_, _ = winDivertAvailable()
 }
+
+func TestDoctorWinDivertMissingFileIsNotInstallationUncertainty(t *testing.T) {
+	// WinDivertOpen documents error 2 as missing .sys files, whereas 1060
+	// specifically means NO_INSTALL prevented installation. Normal opens do
+	// not unpack missing driver files, so error 2 remains a definite failure.
+	// https://reqrypt.org/windivert-doc.html#divert_open
+	c := doctorWinStep(context.Background(), "windivert_tcp_send", func() error {
+		return classifyWinDivertError(wd.Error(windows.ERROR_FILE_NOT_FOUND))
+	})
+	if c.Err == nil || c.Unknown || c.Optional || c.Skipped {
+		t.Fatalf("missing driver file lost its failure classification: %+v", c)
+	}
+}
