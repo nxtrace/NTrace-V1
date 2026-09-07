@@ -32,12 +32,10 @@ func resolveFWMarkSource(method Method, cfg Config) (string, error) {
 }
 
 func fwmarkRouteRequest(method Method, cfg Config) routeprobe.Request {
-	sourcePort := cfg.SrcPort
-	if probeRandomPortEnabled(cfg) {
-		sourcePort = 0
-	}
+	// Raw probe sockets serialize transport headers in user space. Their kernel
+	// route lookup has no transport ports, even when the probe uses fixed ports.
 	return routeprobe.Request{
 		Method: string(method), DstIP: cfg.DstIP, SrcAddr: cfg.SrcAddr, SourceDevice: cfg.SourceDevice,
-		SrcPort: sourcePort, DstPort: cfg.DstPort, TOS: cfg.TOS, FWMark: cfg.FWMark, FWMarkSet: true,
+		TOS: cfg.TOS, FWMark: cfg.FWMark, FWMarkSet: true,
 	}
 }

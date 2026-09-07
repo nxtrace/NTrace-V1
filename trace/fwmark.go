@@ -32,9 +32,19 @@ func PrepareFWMarkConfig(method Method, cfg Config) (Config, error) {
 	if _, err := ResolveSourceDevice(cfg.SourceDevice); err != nil {
 		return cfg, wrapProbeSetupError(err)
 	}
+
+	if cfg.SrcAddr == "" {
+		src, err := resolveFWMarkSource(method, cfg)
+		if err != nil {
+			return cfg, wrapProbeSetupError(fmt.Errorf("resolve source for fwmark %#x: %w", cfg.FWMark, err))
+		}
+		cfg.SrcAddr = src
+	}
+	ip := net.ParseIP(cfg.SrcAddr)
+	if ip == nil || ip.IsUnspecified() || (ip.To4() == nil) != (cfg.DstIP.To4() == nil) {
+		return cfg, wrapProbeSetupError(fmt.Errorf("fwmark source must be a usable IP matching the target family"))
+	}
 	if method != ICMPTrace && cfg.SrcPort == 0 && !probeRandomPortEnabled(cfg) {
-		// Allocate locally before route lookup so its port matches the probes.
-		ip := net.ParseIP(cfg.SrcAddr)
 		proto := string(method)
 		if cfg.DstIP.To4() == nil {
 			proto += "6"
@@ -46,17 +56,6 @@ func PrepareFWMarkConfig(method Method, cfg Config) (Config, error) {
 			return cfg, wrapProbeSetupError(fmt.Errorf("fwmark: cannot allocate source port"))
 		}
 		cfg.SrcPort = port
-	}
-	if cfg.SrcAddr == "" {
-		src, err := resolveFWMarkSource(method, cfg)
-		if err != nil {
-			return cfg, wrapProbeSetupError(fmt.Errorf("resolve source for fwmark %#x: %w", cfg.FWMark, err))
-		}
-		cfg.SrcAddr = src
-	}
-	ip := net.ParseIP(cfg.SrcAddr)
-	if ip == nil || ip.IsUnspecified() || (ip.To4() == nil) != (cfg.DstIP.To4() == nil) {
-		return cfg, wrapProbeSetupError(fmt.Errorf("fwmark source must be a usable IP matching the target family"))
 	}
 	return cfg, nil
 }

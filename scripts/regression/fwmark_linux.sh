@@ -142,17 +142,13 @@ for family in 4 6; do
 for family in 4 6; do for protocol in tcp udp; do
   run_case "$family-$protocol-random-source" "$family" "$protocol" trace 0x100 sb --source-port -1
  done; done
-# Default fixed ports must participate in automatic source selection.
-# Source rules keep raw-socket sending consistent with the selected source.
-ip -n "$S" rule add priority 80 from 10.201.2.2 lookup 200
-ip -n "$S" -6 rule add priority 80 from 2001:db8:2::2 lookup 200
-for family in 4 6; do for protocol in tcp udp; do
-  ip -n "$S" "-$family" rule add priority 90 fwmark 0x200 ipproto "$protocol" sport 1-65534 lookup 200
-  run_case "$family-$protocol-auto-source-port" "$family" "$protocol" report 0x200 sb
+# Raw send sockets have no transport ports in their kernel route lookup.
+# Port-based rules must not influence only the automatic source query.
+for family in 4 6; do for protocol in tcp udp; do for selector in sport dport; do
+  ip -n "$S" "-$family" rule add priority 90 fwmark 0x100 ipproto "$protocol" "$selector" 1-65534 lookup main
+  run_case "$family-$protocol-raw-route-$selector" "$family" "$protocol" report 0x100 sb --source-port 40000
   ip -n "$S" "-$family" rule del priority 90
- done; done
-ip -n "$S" rule del priority 80
-ip -n "$S" -6 rule del priority 80
+ done; done; done
 # The source resolver must not require an unmarked route to exist.
 ip -n "$S" route del 203.0.113.9/32
 ip -n "$S" -6 route del 2001:db8:99::9/128
