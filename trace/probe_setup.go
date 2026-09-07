@@ -14,6 +14,12 @@ import (
 // probeSetupError cannot be recovered by retrying a TTL or counting a timeout.
 type probeSetupError = internal.InitializationError
 
+// IsInitializationError reports failures to initialize or replace probe resources.
+func IsInitializationError(err error) bool {
+	var setup *probeSetupError
+	return errors.As(err, &setup)
+}
+
 // A caller-supplied context owns cancellation, including the CLI's signal cause.
 func traceSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent != nil {

@@ -107,19 +107,45 @@ func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.W
 				MaxPerHop:   opts.MaxPerHop,
 			})
 		} else {
-			err = runMTRJSONRawFn(ctx, opts.Method, opts.Config, trace.MTRRawOptions{
-				HopInterval: time.Duration(opts.HopIntervalMs) * time.Millisecond,
-				MaxPerHop:   opts.MaxPerHop, OnPathEnd: out.pathEnd,
-			}, out.probe)
+			err = runMTRJSONStream(ctx, opts, out)
 		}
 	}
 	if cause := context.Cause(ctx); cause != nil && (err == nil || errors.Is(err, context.Canceled)) {
 		err = cause
 	}
+	if trace.IsInitializationError(err) {
+		stage = "initialize"
+	}
 	if cleanup != nil {
 		cleanup()
 	}
 	return out.finish(err, stage, stderr)
+}
+
+func runMTRJSONStream(ctx context.Context, opts mtrJSONOptions, out *mtrJSONOutput) error {
+	// The per-hop scheduler announces a path change before the associated RAW
+	// callback. Hold only that change so the JSON probe precedes its conclusion.
+	var pending *trace.StopReason
+	pathChanged := false
+	flushPath := func() {
+		if pathChanged {
+			out.pathEnd(pending)
+			pathChanged = false
+		}
+	}
+	err := runMTRJSONRawFn(ctx, opts.Method, opts.Config, trace.MTRRawOptions{
+		HopInterval: time.Duration(opts.HopIntervalMs) * time.Millisecond,
+		MaxPerHop:   opts.MaxPerHop, OnPathEnd: func(reason *trace.StopReason) {
+			flushPath()
+			pending, pathChanged = copyMTRPathEnd(reason), true
+		},
+	}, func(record trace.MTRRawRecord) {
+		out.probe(record)
+		flushPath()
+	})
+	// A max-hops conclusion can be emitted after the last probe callback.
+	flushPath()
+	return err
 }
 
 func normalizeMTRJSONOptions(opts *mtrJSONOptions, stderr io.Writer) error {

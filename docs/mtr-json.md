@@ -43,7 +43,8 @@ session fields are `null`. Write/encoding failures cancel probing and stop
 output, with no retry of the final event/report.
 
 Each RAW callback maps to one `probe` in the same order. `iteration` keeps its
-RAW meaning and is not a unique event identifier. There are no separate Geo/PTR
+RAW meaning and is not a unique event identifier. A probe precedes the path
+change it triggers; final max-hops conclusions precede `end`. There are no separate Geo/PTR
 update events, no retained event history, and no final stream statistics.
 
 Example finite stream with metadata queries disabled (version/times illustrative):
@@ -121,7 +122,9 @@ and `markers`. It is `null` without a current conclusion. A stream may emit
 conclusion.
 
 Session errors preserve partial statistics and have `error.stage` and
-`error.message`; signals use `signal: "SIGINT"` or `"SIGTERM"`. Internal
+`error.message`. Probe-resource initialization and replacement failures use
+`stage: "initialize"`; other runner failures use `stage: "probe"`.
+Signals use `signal: "SIGINT"` or `"SIGTERM"`. Internal
 cancellation retains its error cause and is not reported as user interruption.
 Syntax and conflicting-mode errors occur before a session: stdout is empty,
 stderr carries the diagnostic, and exit code is 2. Help/version retain their

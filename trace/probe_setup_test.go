@@ -3,12 +3,27 @@ package trace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 )
+
+func TestIsInitializationError(t *testing.T) {
+	cause := errors.New("socket unavailable")
+	for _, err := range []error{wrapProbeSetupError(cause), fmt.Errorf("mtr: %w", wrapProbeSetupError(cause))} {
+		if !IsInitializationError(err) || !errors.Is(err, cause) {
+			t.Fatalf("lost initialization classification or cause: %v", err)
+		}
+	}
+	for _, err := range []error{nil, cause, context.Canceled, context.DeadlineExceeded} {
+		if IsInitializationError(err) {
+			t.Fatalf("misclassified ordinary error: %v", err)
+		}
+	}
+}
 
 func TestProbeListenersWaitForEveryListenerAndPreserveCause(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

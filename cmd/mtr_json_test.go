@@ -225,6 +225,51 @@ func testMTRJSONOptions() mtrJSONOptions {
 	}
 }
 
+func TestMTRJSONStreamOrdersProbeBeforePathChange(t *testing.T) {
+	oldRaw := runMTRJSONRawFn
+	t.Cleanup(func() { runMTRJSONRawFn = oldRaw })
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	var stdout bytes.Buffer
+	out := newMTRJSONOutput(&stdout, true, "target", trace.ICMPTrace, cancel)
+	out.startStream()
+	records := []trace.MTRRawRecord{{TTL: 1, IP: "192.0.2.1"}, {TTL: 2, IP: "192.0.2.2"}}
+	runMTRJSONRawFn = func(_ context.Context, _ trace.Method, _ trace.Config, opts trace.MTRRawOptions, cb trace.MTRRawOnRecord) error {
+		for i, reason := range []*trace.StopReason{{Hop: 1, Reason: trace.StopReasonUnreachable}, nil} {
+			opts.OnPathEnd(reason)
+			cb(records[i])
+			if got := len(decodeMTRJSON(t, stdout.Bytes())); got != 3+2*i {
+				t.Fatalf("probe/path change were not flushed immediately: %s", stdout.String())
+			}
+		}
+		opts.OnPathEnd(&trace.StopReason{Hop: 3, Reason: trace.StopReasonMaxHops})
+		return nil
+	}
+	err := runMTRJSONStream(ctx, testMTRJSONOptions(), out)
+	if code := out.finish(err, "probe", io.Discard); code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	events := decodeMTRJSON(t, stdout.Bytes())
+	wantTypes := []string{"start", "probe", "path_end", "probe", "path_end", "path_end", "end"}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("unexpected events: %s", stdout.String())
+	}
+	for i, want := range wantTypes {
+		if string(events[i]["type"]) != `"`+want+`"` || string(events[i]["seq"]) != fmt.Sprint(i+1) {
+			t.Fatalf("event %d: %s", i, stdout.String())
+		}
+	}
+	for i, event := range []map[string]json.RawMessage{events[1], events[3]} {
+		var got trace.MTRRawRecord
+		if err := json.Unmarshal(event["record"], &got); err != nil || !reflect.DeepEqual(got, records[i]) {
+			t.Fatalf("RAW record changed: %+v, %v", got, err)
+		}
+	}
+	if string(events[4]["path_end"]) != "null" || !bytes.Equal(events[5]["path_end"], events[6]["path_end"]) {
+		t.Fatalf("lost reopening or final max-hops conclusion: %s", stdout.String())
+	}
+}
+
 func TestMTRJSONRunnerUsesFullConfigAndPreservesSnapshot(t *testing.T) {
 	oldPort, oldDst := util.SrcPort, util.DstIP
 	t.Cleanup(func() { util.SrcPort, util.DstIP = oldPort, oldDst })
