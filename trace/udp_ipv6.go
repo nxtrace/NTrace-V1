@@ -31,7 +31,6 @@ type UDPTracerIPv6 struct {
 	sem       *semaphore.Weighted
 	matchQ    chan matchTask
 	readyICMP chan struct{}
-	readyUDP  chan struct{}
 }
 
 func (t *UDPTracerIPv6) waitAllReady(ctx context.Context) error {
@@ -216,7 +215,6 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 
 	// 创建就绪通道
 	t.readyICMP = make(chan struct{})
-	t.readyUDP = make(chan struct{})
 
 	if len(t.res.Hops) > 0 {
 		return &t.res, errTracerouteExecuted

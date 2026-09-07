@@ -34,7 +34,6 @@ type UDPTracer struct {
 	matchQ    chan matchTask
 	readyOut  chan struct{}
 	readyICMP chan struct{}
-	readyUDP  chan struct{}
 }
 
 func (t *UDPTracer) waitAllReady(ctx context.Context) error {
@@ -264,7 +263,6 @@ func (t *UDPTracer) Execute() (res *Result, err error) {
 	// 创建就绪通道
 	t.readyOut = make(chan struct{})
 	t.readyICMP = make(chan struct{})
-	t.readyUDP = make(chan struct{})
 
 	if len(t.res.Hops) > 0 {
 		return &t.res, errTracerouteExecuted
