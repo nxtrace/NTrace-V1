@@ -737,6 +737,20 @@ try {
         $_ | Out-File -FilePath $windivertInitLog -Encoding utf8
         throw
     }
+    # Keep the fixture beside the WinDivert files prepared above. Only this
+    # explicit test setup may load the driver; doctor itself uses NO_INSTALL.
+    $doctorBackendTest = Join-Path $BinDir "doctor-backend.test.exe"
+    go test -c -o $doctorBackendTest ./trace/internal
+    Ensure-LastExitCodeSuccess "build doctor backend test"
+    $previousDoctorIntegration = $env:NEXTTRACE_DOCTOR_BACKEND_INTEGRATION
+    try {
+        $env:NEXTTRACE_DOCTOR_BACKEND_INTEGRATION = "1"
+        & $doctorBackendTest -test.run '^TestDoctorWindowsBackend$' -test.v
+        Ensure-LastExitCodeSuccess "doctor installed-driver backend test"
+    }
+    finally {
+        $env:NEXTTRACE_DOCTOR_BACKEND_INTEGRATION = $previousDoctorIntegration
+    }
 }
 finally {
     Pop-Location
