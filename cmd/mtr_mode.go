@@ -48,7 +48,7 @@ func checkMTRConflicts(flags map[string]bool) (conflict string, ok bool) {
 // runMTRTUI 执行 MTR 交互式 TUI 模式。
 // 当 stdin 为 TTY 时启用全屏 TUI（备用屏幕、按键控制）；
 // 非 TTY 时降级为简单表格刷新。
-func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, showIPs bool, initialDisplayMode int) {
+func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, showIPs bool, initialDisplayMode int) error {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
 	}
@@ -102,11 +102,7 @@ func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 		}
 	}
 
-	err := trace.RunMTR(ctx, method, roundConf, opts, onSnapshot)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		// 离开备用屏幕后再打印错误
-		fmt.Println(err)
-	}
+	return trace.RunMTR(ctx, method, roundConf, opts, onSnapshot)
 }
 
 func buildMTRInteractiveOptions(ui *mtrUI, hopIntervalMs int, maxPerHop int) trace.MTROptions {
@@ -143,7 +139,7 @@ func attachMTRHistoryIfTTY(ui *mtrUI, opts *trace.MTROptions) *printer.MTRHistor
 
 // runMTRReport 执行 MTR 非全屏报告模式（对齐 mtr -rzw 风格）。
 // 探测完 maxPerHop 后一次性输出最终统计到 stdout，不进入 alternate screen。
-func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, wide bool, showIPs bool) {
+func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, wide bool, showIPs bool) error {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
 	}
@@ -174,13 +170,12 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 	roundConf := normalizeMTRReportConfig(conf, wide)
 	finalStats, _, err := collectMTRReport(ctx, method, roundConf, opts)
 	if err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Println(err)
-		return
+		return err
 	}
 
 	if len(finalStats) == 0 {
 		fmt.Println("No data collected.")
-		return
+		return nil
 	}
 
 	printer.MTRReportPrint(finalStats, printer.MTRReportOptions{
@@ -190,6 +185,7 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 		ShowIPs:   showIPs,
 		Lang:      lang,
 	})
+	return nil
 }
 
 // runMTRRaw 执行 MTR 原始流式模式（逐事件输出，'|' 分隔）。
@@ -202,7 +198,7 @@ func writeMTRRawPathEnd(w io.Writer, reason *trace.StopReason) error {
 	return printer.WriteTraceStopReason(w, reason)
 }
 
-func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, dataOrigin string) {
+func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, dataOrigin string) error {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
 	}
@@ -225,12 +221,9 @@ func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 		fmt.Println(apiLine)
 	}
 
-	err := trace.RunMTRRaw(ctx, method, roundConf, opts, func(rec trace.MTRRawRecord) {
+	return trace.RunMTRRaw(ctx, method, roundConf, opts, func(rec trace.MTRRawRecord) {
 		fmt.Println(printer.FormatMTRRawLine(rec))
 	})
-	if err != nil && !errors.Is(err, context.Canceled) {
-		writeMTRRawRuntimeError(os.Stderr, err)
-	}
 }
 
 func normalizeMTRTraceConfig(conf trace.Config) trace.Config {

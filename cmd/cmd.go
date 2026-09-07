@@ -1128,18 +1128,21 @@ func maybeRunMTRMode(
 		ttlInterval,
 	)
 
+	var err error
 	switch chooseMTRRunMode(modes.raw, modes.report) {
 	case mtrRunRaw:
-		runMTRRaw(method, conf, mtrHopIntervalMs, mtrMaxPerHop, dataOrigin)
+		err = runMTRRaw(method, conf, mtrHopIntervalMs, mtrMaxPerHop, dataOrigin)
 	case mtrRunReport:
-		runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs)
+		err = runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs)
 	default:
 		if ipInfoMode < 0 || ipInfoMode > 4 {
 			fmt.Fprintf(os.Stderr, "--ipinfo/-y 必须在 0-4 范围内，当前值: %d\n", ipInfoMode)
 			os.Exit(1)
 		}
-		runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode)
+		err = runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode)
 	}
+	// Mode-local defers restore the terminal and close listeners before exit.
+	exitOnTraceRunError(err)
 	return true
 }
 
@@ -1292,7 +1295,10 @@ func maybeRunUninterruptedRaw(rawPrint bool, method trace.Method, conf trace.Con
 			if errors.Is(err, context.Canceled) {
 				return true
 			}
-			fmt.Println(err)
+			if trace.IsInitializationError(err) {
+				exitOnTraceRunError(err)
+			}
+			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
 	}
 }
@@ -1300,12 +1306,18 @@ func maybeRunUninterruptedRaw(rawPrint bool, method trace.Method, conf trace.Con
 func runTraceOnce(method trace.Method, conf trace.Config) (*trace.Result, bool) {
 	res, err := trace.Traceroute(method, conf)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			fmt.Println(err)
-		}
+		exitOnTraceRunError(err)
 		return nil, false
 	}
 	return res, true
+}
+
+func exitOnTraceRunError(err error) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
 }
 
 // traceMapPayload preserves the historical external tracemap request shape.
