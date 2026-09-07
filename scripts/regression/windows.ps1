@@ -745,7 +745,7 @@ try {
     $previousDoctorIntegration = $env:NEXTTRACE_DOCTOR_BACKEND_INTEGRATION
     try {
         $env:NEXTTRACE_DOCTOR_BACKEND_INTEGRATION = "1"
-        & $doctorBackendTest -test.run '^TestDoctorWindowsBackend$' -test.v
+        & $doctorBackendTest '-test.run=^TestDoctorWindowsBackend$' '-test.v' '-test.timeout=30s'
         Ensure-LastExitCodeSuccess "doctor installed-driver backend test"
     }
     finally {
