@@ -20,13 +20,30 @@ import (
 )
 
 func containsDoctorFlag(args []string) bool {
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
 			return false
 		}
 		if arg == "--doctor" || arg == "--doctor=true" {
 			return true
 		}
+		// Do not steal a token or filename whose literal value is --doctor
+		// from the main parser. These are the main CLI's value-taking options.
+		name, _, inline := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		if strings.HasPrefix(arg, "-") && !inline && doctorValueOption(name) {
+			i++
+		}
+	}
+	return false
+}
+
+func doctorValueOption(name string) bool {
+	switch name {
+	case "p", "port", "s", "source", "D", "dev", "source-port", "Q", "tos", "timeout", "dot-server", "g", "language", "icmp-mode",
+		"q", "queries", "max-attempts", "parallel-requests", "m", "max-hops", "d", "data-provider", "pow-provider", "f", "first",
+		"o", "output", "listen", "deploy-token", "z", "send-time", "i", "ttl-time", "psize", "from", "mtr-columns", "y", "ipinfo", "file":
+		return true
 	}
 	return false
 }
@@ -52,7 +69,7 @@ func doctorArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 		}
 		flags = append(flags, arg)
 		b, isBool := f.Value.(interface{ IsBoolFlag() bool })
-		if !hasValue && !(isBool && b.IsBoolFlag()) {
+		if !hasValue && (!isBool || !b.IsBoolFlag()) {
 			i++
 			if i == len(args) {
 				return nil, errors.New("missing option value")
@@ -130,24 +147,24 @@ func maybeRunDoctorMode(args []string, stdout, stderr io.Writer) (bool, int) {
 		err = fs.Parse(ordered)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "Invalid or unsupported doctor arguments; use --doctor --help.")
+		_, _ = fmt.Fprintln(stderr, "Invalid or unsupported doctor arguments; use --doctor --help.")
 		return true, 2
 	}
 	if !v.enabled {
 		return false, 0
 	}
 	if v.help {
-		fmt.Fprintf(stdout, "Usage: %s --doctor [options] <domain|IP>\nText-only local initialization checks. No probe packets or driver installation.\n", appBinName)
+		_, _ = fmt.Fprintf(stdout, "Usage: %s --doctor [options] <domain|IP>\nText-only local initialization checks. No probe packets or driver installation.\n", appBinName)
 		fs.SetOutput(stdout)
 		fs.PrintDefaults()
 		return true, 0
 	}
 	if v.version {
-		fmt.Fprintln(stdout, config.Version, config.CommitID)
+		_, _ = fmt.Fprintln(stdout, config.Version, config.CommitID)
 		return true, 0
 	}
 	if err := validateDoctorOptions(fs, v); err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return true, 2
 	}
 	return true, runDoctorCLI(v.opts, stdout, stderr)
@@ -155,26 +172,26 @@ func maybeRunDoctorMode(args []string, stdout, stderr io.Writer) (bool, int) {
 
 func validateDoctorOptions(fs *flag.FlagSet, v *doctorCLIFlags) error {
 	if fs.NArg() != 1 {
-		return errors.New("Doctor requires exactly one domain or IP target.")
+		return errors.New("doctor requires exactly one domain or IP target")
 	}
 	o := &v.opts
 	o.Target = fs.Arg(0)
 	if !validDoctorTarget(o.Target) {
-		return errors.New("Doctor requires a domain or IP literal; URLs and scoped addresses are not supported.")
+		return errors.New("doctor requires a domain or IP literal; URLs and scoped addresses are not supported")
 	}
 	if o.IPv4Only && o.IPv6Only || v.tcp && v.udp {
-		return errors.New("Conflicting address families or probe protocols.")
+		return errors.New("conflicting address families or probe protocols")
 	}
 	if v.timeout <= 0 || int64(v.timeout) > int64((1<<63-1)/time.Millisecond) || o.Config.TOS < 0 || o.Config.TOS > 255 || o.Config.ICMPMode < 0 || o.Config.ICMPMode > 2 {
-		return errors.New("Invalid timeout, TOS or ICMP mode.")
+		return errors.New("invalid timeout, TOS or ICMP mode")
 	}
 	if o.Config.Lang != "cn" && o.Config.Lang != "en" {
-		return errors.New("Language must be cn or en.")
+		return errors.New("language must be cn or en")
 	}
 	switch o.DotServer {
 	case "", "dnssb", "aliyun", "dnspod", "google", "cloudflare":
 	default:
-		return errors.New("Unsupported DoT resolver.")
+		return errors.New("unsupported DoT resolver")
 	}
 	o.Method = resolveTraceMethod(v.tcp, v.udp)
 	portSet := false
@@ -184,13 +201,13 @@ func validateDoctorOptions(fs *flag.FlagSet, v *doctorCLIFlags) error {
 		}
 	})
 	if !v.tcp && !v.udp && portSet {
-		return errors.New("ICMP has no source or destination port.")
+		return errors.New("ICMP has no source or destination port")
 	}
 	if v.tcp || v.udp {
 		applyDefaultPort(&o.Config.DstPort, v.udp)
 	}
 	if o.Config.DstPort < 0 || o.Config.DstPort > 65535 || o.Config.SrcPort < 0 || o.Config.SrcPort > 65535 {
-		return errors.New("Invalid source or destination port.")
+		return errors.New("invalid source or destination port")
 	}
 	if o.Config.OSType == 2 && o.Config.ICMPMode == 0 && util.EnvICMPMode > 0 && util.EnvICMPMode <= 2 {
 		o.Config.ICMPMode = util.EnvICMPMode
@@ -215,7 +232,7 @@ func runDoctorCLI(opts doctor.Options, stdout, stderr io.Writer) int {
 	defer func() { signal.Stop(signals); cancel(nil); <-done }()
 	r := doctor.Run(ctx, opts)
 	if err := doctor.Render(stdout, r); err != nil {
-		fmt.Fprintln(stderr, "Unable to write doctor report.")
+		_, _ = fmt.Fprintln(stderr, "Unable to write doctor report.")
 		return 1
 	}
 	var interrupted *mtrJSONSignal

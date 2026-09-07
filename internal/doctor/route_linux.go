@@ -15,6 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// RTA_NH_ID from Linux uapi/linux/rtnetlink.h is absent from x/sys/unix.
+const routeNextHopID = 30
+
 func routeAttr(kind uint16, value []byte) []byte {
 	n := 4 + len(value)
 	b := make([]byte, (n+3)&^3)
@@ -67,9 +70,10 @@ func linuxRouteRequest(method trace.Method, cfg trace.Config, seq uint32) ([]byt
 	if family == unix.AF_INET6 {
 		proto = unix.IPPROTO_ICMPV6
 	}
-	if method == trace.TCPTrace {
+	switch method {
+	case trace.TCPTrace:
 		proto = unix.IPPROTO_TCP
-	} else if method == trace.UDPTrace {
+	case trace.UDPTrace:
 		proto = unix.IPPROTO_UDP
 	}
 	body = append(body, routeAttr(unix.RTA_IP_PROTO, []byte{proto})...)
@@ -111,7 +115,7 @@ func queryRoute(ctx context.Context, method trace.Method, cfg trace.Config) (Rou
 	if err != nil {
 		return r, err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	if err = unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return r, err
 	}
@@ -157,6 +161,9 @@ func parseLinuxRoute(m syscall.NetlinkMessage, r Route) (Route, error) {
 	if len(m.Data) < 12 {
 		return r, errors.New("short route response")
 	}
+	if m.Data[0] != unix.AF_INET && m.Data[0] != unix.AF_INET6 {
+		return r, errors.New("unsupported route address family")
+	}
 	switch m.Data[7] {
 	case unix.RTN_UNREACHABLE, unix.RTN_BLACKHOLE, unix.RTN_PROHIBIT:
 		return r, errNoRoute
@@ -168,6 +175,7 @@ func parseLinuxRoute(m syscall.NetlinkMessage, r Route) (Route, error) {
 	if err != nil {
 		return r, err
 	}
+	nextHopObject := false
 	for _, a := range attrs {
 		switch a.Attr.Type {
 		case unix.RTA_OIF:
@@ -196,7 +204,29 @@ func parseLinuxRoute(m syscall.NetlinkMessage, r Route) (Route, error) {
 		case unix.RTA_MULTIPATH:
 			r.Limitations += "; multiple next hops; actual selection unknown"
 			return r, errors.New("route contains multiple next hops")
+		case unix.RTA_VIA:
+			if len(a.Value) < 2 {
+				return r, errors.New("short route next hop")
+			}
+			family := binary.NativeEndian.Uint16(a.Value)
+			n := 4
+			switch family {
+			case unix.AF_INET6:
+				n = 16
+			case unix.AF_INET:
+			default:
+				return r, errors.New("unsupported next-hop family")
+			}
+			if len(a.Value) != n+2 {
+				return r, errors.New("invalid route next hop")
+			}
+			r.Gateway = net.IP(a.Value[2:]).String()
+		case routeNextHopID:
+			nextHopObject = true
 		}
+	}
+	if nextHopObject && r.Gateway == "" {
+		return r, errors.New("next-hop object was not expanded by the kernel")
 	}
 	r.OnLink = r.Gateway == "" && r.Interface != ""
 	return r, nil

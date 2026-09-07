@@ -10,7 +10,11 @@ import (
 
 func TestDoctorRejectsOtherModesBeforeInitialization(t *testing.T) {
 	for _, flag := range []string{"--json", "--raw", "--mtr", "--report", "--wide", "--mtr-columns", "--traceroute", "--speed", "--dns", "--mtu", "--deploy", "--init", "--setup-api-v4-token", "--psize", "--output", "--from"} {
-		for _, args := range [][]string{{flag, "--doctor", "127.0.0.1"}, {"--doctor", "127.0.0.1", flag}} {
+		option := []string{flag}
+		if doctorValueOption(strings.TrimLeft(flag, "-")) {
+			option = append(option, "1")
+		}
+		for _, args := range [][]string{append(append([]string{}, option...), "--doctor", "127.0.0.1"), append([]string{"--doctor", "127.0.0.1"}, option...)} {
 			var out, err bytes.Buffer
 			handled, code := maybeRunDoctorMode(args, &out, &err)
 			if !handled || code != 2 || out.Len() != 0 || err.Len() == 0 {
@@ -28,7 +32,7 @@ func TestDoctorHelpAndArgumentBoundaries(t *testing.T) {
 			t.Fatalf("%v: %v %d %q", args, handled, code, err.String())
 		}
 	}
-	for _, args := range [][]string{{"--", "--doctor"}, {"--source", "--doctor", "127.0.0.1"}} {
+	for _, args := range [][]string{{"--", "--doctor"}, {"--source", "--doctor", "127.0.0.1"}, {"--deploy-token", "--doctor", "--deploy"}, {"--file", "--doctor"}, {"--output", "--doctor", "127.0.0.1"}} {
 		var out, err bytes.Buffer
 		handled, _ := maybeRunDoctorMode(args, &out, &err)
 		if handled {

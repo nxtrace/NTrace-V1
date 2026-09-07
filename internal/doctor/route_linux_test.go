@@ -28,6 +28,10 @@ func TestLinuxRouteQueryIncludesEffectiveConditions(t *testing.T) {
 		if m.Header.Seq != 41 || m.Header.Type != unix.RTM_GETROUTE || m.Header.Flags != unix.NLM_F_REQUEST || m.Data[3] != 32 {
 			t.Fatalf("wrong request: %+v", m)
 		}
+		// The standard-library attribute decoder accepts response message
+		// types only. The RTM_GETROUTE header above is checked independently;
+		// request and response rtmsg attributes share the same layout.
+		m.Header.Type = unix.RTM_NEWROUTE
 		attrs, e := syscall.ParseNetlinkRouteAttr(&m)
 		if e != nil {
 			t.Fatal(e)
@@ -69,5 +73,25 @@ func TestLinuxRouteResponseDistinguishesRejectAndMalformed(t *testing.T) {
 	_, err = parseLinuxRoute(m, Route{})
 	if err == nil || errors.Is(err, errNoRoute) {
 		t.Fatal("malformed reply treated as no route")
+	}
+}
+
+func TestLinuxRouteNextHopObjectIsNotAssumedOnLink(t *testing.T) {
+	data := make([]byte, 12)
+	data[0], data[7] = unix.AF_INET, unix.RTN_UNICAST
+	data = append(data, routeAttr(unix.RTA_OIF, routeUint(1))...)
+	data = append(data, routeAttr(routeNextHopID, routeUint(42))...)
+	m := syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: unix.RTM_NEWROUTE}, Data: data}
+	r, err := parseLinuxRoute(m, Route{})
+	if err == nil || errors.Is(err, errNoRoute) || r.OnLink {
+		t.Fatalf("unexpanded next hop: %+v %v", r, err)
+	}
+	via := make([]byte, 2)
+	binary.NativeEndian.PutUint16(via, unix.AF_INET6)
+	via = append(via, net.ParseIP("2001:db8::1").To16()...)
+	m.Data = append(data, routeAttr(unix.RTA_VIA, via)...)
+	r, err = parseLinuxRoute(m, Route{})
+	if err != nil || r.Gateway != "2001:db8::1" || r.OnLink {
+		t.Fatalf("expanded next hop: %+v %v", r, err)
 	}
 }

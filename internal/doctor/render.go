@@ -96,12 +96,12 @@ func Render(w io.Writer, r Report) error {
 		if value == "" {
 			value = l("unknown")
 		}
-		fmt.Fprintf(&b, "%s: %s\n", l(key), safeLine(value))
+		_, _ = fmt.Fprintf(&b, "%s: %s\n", l(key), safeLine(value))
 	}
-	section := func(key string) { fmt.Fprintf(&b, "\n%s\n", l(key)) }
-	fmt.Fprintln(&b, l("title"))
+	section := func(key string) { _, _ = fmt.Fprintf(&b, "\n%s\n", l(key)) }
+	_, _ = fmt.Fprintln(&b, l("title"))
 	if r.Interrupted {
-		fmt.Fprintln(&b, l("interrupted"))
+		_, _ = fmt.Fprintln(&b, l("interrupted"))
 	}
 	section("basic")
 	field("version", strings.TrimSpace(config.Version+" "+config.CommitID+" "+config.BuildDate))
@@ -144,7 +144,7 @@ func Render(w io.Writer, r Report) error {
 	field("tos", fmt.Sprint(r.Request.Config.TOS))
 	if r.Request.Config.OSType == 2 {
 		field("icmp_mode", fmt.Sprint(r.Request.Config.ICMPMode))
-		fmt.Fprintln(&b, l("windows"))
+		_, _ = fmt.Fprintln(&b, l("windows"))
 	}
 	section("prediction")
 	field("conditions", r.Route.Conditions)
@@ -160,14 +160,14 @@ func Render(w io.Writer, r Report) error {
 	}
 	section("actual")
 	for _, c := range r.Checks {
-		fmt.Fprintf(&b, "[%s] %s", l(string(c.Status)), l(c.Name))
+		_, _ = fmt.Fprintf(&b, "[%s] %s", l(string(c.Status)), l(c.Name))
 		if c.Detail != "" {
-			fmt.Fprintf(&b, ": %s", safeLine(l(c.Detail)))
+			_, _ = fmt.Fprintf(&b, ": %s", safeLine(l(c.Detail)))
 		}
 		if c.Optional {
-			fmt.Fprintf(&b, " (%s)", l("optional"))
+			_, _ = fmt.Fprintf(&b, " (%s)", l("optional"))
 		}
-		fmt.Fprintln(&b)
+		_, _ = fmt.Fprintln(&b)
 	}
 	section("summary")
 	key := "complete"
@@ -176,8 +176,8 @@ func Render(w io.Writer, r Report) error {
 	} else if r.ExitCode() != 0 {
 		key = "incomplete"
 	}
-	fmt.Fprintln(&b, l(key))
-	fmt.Fprintln(&b, l("boundary"))
+	_, _ = fmt.Fprintln(&b, l(key))
+	_, _ = fmt.Fprintln(&b, l("boundary"))
 	_, err := io.WriteString(w, b.String())
 	return err
 }

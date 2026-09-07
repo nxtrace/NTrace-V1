@@ -46,7 +46,7 @@ func queryRoute(ctx context.Context, method trace.Method, cfg trace.Config) (Rou
 	if err != nil {
 		return r, err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	unix.CloseOnExec(fd)
 	if err = unix.SetNonblock(fd, true); err != nil {
 		return r, err

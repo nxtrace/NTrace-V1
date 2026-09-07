@@ -226,7 +226,7 @@ func predictSource(ctx context.Context, target net.IP) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	a, ok := c.LocalAddr().(*net.UDPAddr)
 	if !ok || a.IP.IsUnspecified() {
 		return "", errors.New("kernel did not select a source address")
