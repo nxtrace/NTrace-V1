@@ -516,30 +516,40 @@ func resolveMTRTUIDestinationLabel(header MTRTUIHeader) string {
 
 func buildMTRTUIControlsLine(header MTRTUIHeader, termWidth int) string {
 	const keysPrefix = "Keys:  "
-	keyLine := strings.Join(buildMTRTUIKeyItems(header), "  ")
+	items := buildMTRTUIKeyItems(header, mtrTUIKeyHiColor)
+	plainItems := buildMTRTUIKeyItems(header, fmt.Sprint)
+	keyLine := strings.Join(items, "  ")
 	statusText := mtrTUIStatusText(header.Status)
 	statusTag := mtrTUIStatusColor("[" + statusText + "]")
-	pad := termWidth - displayWidth(keysPrefix) - displayWidth(keyLine) - len("["+statusText+"]")
+	pad := termWidth - displayWidth(keysPrefix) - displayWidth(strings.Join(plainItems, "  ")) - len("["+statusText+"]")
 	if pad < 2 {
-		pad = 2
+		keyLine = strings.Join(items, " ")
+		pad = termWidth - displayWidth(keysPrefix) - displayWidth(strings.Join(plainItems, " ")) - len("["+statusText+"]")
+	}
+	if pad < 2 {
+		compact := "O:cols Q:quit"
+		if header.HistoryMode {
+			compact += " G-chart(" + mtrTUIHistoryChartLabel(header.HistoryChartMode) + ")"
+		}
+		return truncateByDisplayWidth(compact+" "+statusText, termWidth)
 	}
 	return keysPrefix + keyLine + strings.Repeat(" ", pad) + statusTag
 }
 
-func buildMTRTUIKeyItems(header MTRTUIHeader) []string {
+func buildMTRTUIKeyItems(header MTRTUIHeader, highlight func(...any) string) []string {
 	items := []string{
-		mtrTUIKeyHiColor("Q") + "uit",
-		mtrTUIKeyHiColor("O") + "-columns",
-		mtrTUIKeyHiColor("P") + "ause",
-		mtrTUIKeyHiColor("Space") + "-resume",
-		mtrTUIKeyHiColor("R") + "eset",
-		mtrTUIKeyHiColor("Y") + "-display(" + mtrTUIDisplayModeLabel(header.DisplayMode) + ")",
-		mtrTUIKeyHiColor("N") + "-host(" + mtrTUINameModeLabel(header.NameMode, header.ShowIPs) + ")",
-		mtrTUIKeyHiColor("E") + "-mpls(" + mtrTUIMPLSLabel(header.DisableMPLS) + ")",
-		mtrTUIKeyHiColor("D") + "-history(" + mtrTUIHistoryModeLabel(header.HistoryMode) + ")",
+		highlight("Q") + "uit",
+		highlight("O") + "-columns",
+		highlight("P") + "ause",
+		highlight("Space") + "-resume",
+		highlight("R") + "eset",
+		highlight("Y") + "-display(" + mtrTUIDisplayModeLabel(header.DisplayMode) + ")",
+		highlight("N") + "-host(" + mtrTUINameModeLabel(header.NameMode, header.ShowIPs) + ")",
+		highlight("E") + "-mpls(" + mtrTUIMPLSLabel(header.DisableMPLS) + ")",
+		highlight("D") + "-history(" + mtrTUIHistoryModeLabel(header.HistoryMode) + ")",
 	}
 	if header.HistoryMode {
-		items = append(items, mtrTUIKeyHiColor("G")+"-chart("+mtrTUIHistoryChartLabel(header.HistoryChartMode)+")")
+		items = append(items, highlight("G")+"-chart("+mtrTUIHistoryChartLabel(header.HistoryChartMode)+")")
 	}
 	return items
 }

@@ -1543,7 +1543,11 @@ func Execute() {
 		}
 		os.Exit(1)
 	}
-	mtrColumns, columnsErr := resolveMTRColumns(*mtrFlags.columns, parsedFlag(parser, "mtr-columns"), mtrModes, *jsonPrint, standalone)
+	columnsStandalone := standalone
+	if *init {
+		columnsStandalone = "--init"
+	}
+	mtrColumns, columnsErr := resolveMTRColumns(*mtrFlags.columns, parsedFlag(parser, "mtr-columns"), mtrModes, *jsonPrint, columnsStandalone)
 	if columnsErr != nil {
 		fmt.Fprintln(os.Stderr, columnsErr)
 		os.Exit(2)

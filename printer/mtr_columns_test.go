@@ -2,10 +2,12 @@ package printer
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/fatih/color"
 	"github.com/nxtrace/NTrace-core/trace"
 )
 
@@ -131,5 +133,49 @@ func TestMTRCustomFrameAndEditorStayWithinTerminal(t *testing.T) {
 				t.Fatal("missing O hint")
 			}
 		}
+	}
+}
+
+func TestMTRColumnsDistinguishesEmptyAndUnknownEntries(t *testing.T) {
+	for _, input := range []string{"", " ", ",loss", "loss,", "loss,,snt", "loss, ,snt"} {
+		_, err := ParseMTRColumns(input, false)
+		if err == nil || err.Error() != "empty MTR column entry" {
+			t.Fatalf("input %q: %v", input, err)
+		}
+	}
+	_, err := ParseMTRColumns("jitter", false)
+	if err == nil || err.Error() != `unknown MTR column "jitter"` {
+		t.Fatalf("unknown column: %v", err)
+	}
+}
+
+func TestMTRDefaultControlsFitTerminal(t *testing.T) {
+	for _, width := range []int{24, 40, 60, 80, 120, 160, 200} {
+		for _, history := range []bool{false, true} {
+			line := buildMTRTUIControlsLine(MTRTUIHeader{HistoryMode: history}, width)
+			if displayWidth(line) > width {
+				t.Fatalf("width %d: %q", width, line)
+			}
+			if !strings.Contains(line, "O") {
+				t.Fatal("missing column editor hint")
+			}
+		}
+	}
+	line := buildMTRTUIControlsLine(MTRTUIHeader{}, 120)
+	for _, hint := range []string{"O-columns", "Y-display", "N-host", "D-history(off)"} {
+		if !strings.Contains(line, hint) {
+			t.Fatalf("missing %q: %s", hint, line)
+		}
+	}
+}
+
+func TestMTRDefaultControlsMeasureVisibleColorWidth(t *testing.T) {
+	old := color.NoColor
+	color.NoColor = false
+	t.Cleanup(func() { color.NoColor = old })
+	line := buildMTRTUIControlsLine(MTRTUIHeader{}, 120)
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(line, "")
+	if displayWidth(plain) > 120 || !strings.Contains(plain, "D-history(off)") {
+		t.Fatalf("colored controls: %q", line)
 	}
 }

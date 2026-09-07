@@ -49,6 +49,9 @@ func ParseMTRColumns(input string, codes bool) ([]MTRColumn, error) {
 	var columns []MTRColumn
 	for _, token := range tokens {
 		token = strings.TrimSpace(token)
+		if token == "" {
+			return nil, fmt.Errorf("empty MTR column entry")
+		}
 		found := false
 		for i, def := range mtrColumnDefinitions {
 			if (!codes && token == def.name) || (codes && token == string(def.code)) {

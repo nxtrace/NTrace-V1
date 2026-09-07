@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ func TestMTRColumnsModeContract(t *testing.T) {
 		{"raw", effectiveMTRModes{mtr: true, raw: true}, false, "", false},
 		{"json", effectiveMTRModes{mtr: true}, true, "", false},
 		{"standalone", effectiveMTRModes{mtr: true}, false, "--mtu", false},
+		{"init", effectiveMTRModes{mtr: true}, false, "--init", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := resolveMTRColumns("received", true, tt.modes, tt.json, tt.standalone)
@@ -56,6 +58,14 @@ func TestMTRColumnsCLIRejectsBeforeInitialization(t *testing.T) {
 		{"-r", "--mtr-columns", "loss,LOSS"}, {"-r", "--mtr-columns", ""},
 		{"-r", "--mtr-columns", "received,"}, {"-r", "--mtr-columns", "jitter"},
 		{"-r", "--raw", "--mtr-columns", "loss"}, {"-r", "--json", "--mtr-columns", "loss"},
+	}
+	if runtime.GOOS == "windows" {
+		cases = append(cases, []string{"-r", "--init", "--mtr-columns", "loss"})
+		if defaultMTR {
+			cases = append(cases, []string{"--init", "--mtr-columns", "loss"})
+		} else {
+			cases = append(cases, []string{"-t", "--init", "--mtr-columns", "loss"})
+		}
 	}
 	if enableTraceroute {
 		cases = append(cases, []string{"--mtr-columns", "loss"}, []string{"-k", "--mtr-columns", "loss"}, []string{"--mtu", "--mtr-columns", "loss"})
