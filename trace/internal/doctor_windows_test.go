@@ -4,6 +4,7 @@ package internal
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	wd "github.com/xjasonlyu/windivert-go"
@@ -38,6 +39,24 @@ func TestDoctorWinDivertOpenAlwaysProhibitsInstallation(t *testing.T) {
 	}
 	if calls != 5 {
 		t.Fatalf("opens=%d", calls)
+	}
+	// Exercise the dispatcher too: passing NO_INSTALL explicitly to helpers
+	// above would not catch a future omission at a real doctor call site.
+	for _, protocol := range []string{"tcp", "udp", "icmp"} {
+		for _, target := range []string{"127.0.0.1", "::1"} {
+			ip, family := net.ParseIP(target), 4
+			if ip.To4() == nil {
+				family = 6
+			}
+			before := calls
+			CheckProbeBackend(context.Background(), BackendOptions{
+				Protocol: protocol, IPVersion: family, Source: ip, Target: ip, Port: 443, TOS: 32,
+			})
+			// ICMPv4 may select only sockets without administrator privileges.
+			if (protocol != "icmp" || family == 6) && calls == before {
+				t.Fatalf("%s/%s did not check WinDivert", protocol, target)
+			}
+		}
 	}
 	openWinDivertCall = func(_ string, flags uint64) (wd.Handle, error) {
 		if flags&wd.FlagNoInstall != 0 {
