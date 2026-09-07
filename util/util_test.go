@@ -237,6 +237,41 @@ func TestDomainLookUpWithContextReturnsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestResolveTargetIPsPreservesCandidatesAndDoesNotFallback(t *testing.T) {
+	old := domainResolverFactory
+	t.Cleanup(func() { domainResolverFactory = old })
+	calls := 0
+	domainResolverFactory = func(dot string) hostLookupResolver {
+		calls++
+		if dot != "google" {
+			t.Fatal("unexpected system DNS fallback")
+		}
+		return fakeHostLookupResolver{hosts: []string{"192.0.2.1", "192.0.2.2", "2001:db8::1"}}
+	}
+	stdout, stderr := captureStdoutStderr(t, func() {
+		ips, err := ResolveTargetIPs(t.Context(), "example.test", "google")
+		if err != nil || len(ips) != 3 {
+			t.Fatalf("%v %v", ips, err)
+		}
+	})
+	if stdout != "" || stderr != "" {
+		t.Fatal("resolver produced output")
+	}
+	_, err := ResolveTargetIPs(t.Context(), "127.0.0.1", "google")
+	if err != nil || calls != 1 {
+		t.Fatal("IP literal performed DNS")
+	}
+	domainResolverFactory = func(dot string) hostLookupResolver {
+		if dot != "google" {
+			t.Fatal("fallback")
+		}
+		return fakeHostLookupResolver{err: errors.New("DoT failed")}
+	}
+	if _, err := ResolveTargetIPs(t.Context(), "example.test", "google"); err == nil {
+		t.Fatal("DoT error lost")
+	}
+}
+
 func TestLookupAddrWithContextUsesCache(t *testing.T) {
 	oldResolver := rdnsResolver
 	rdnsResolver = fakeAddrLookupResolver{
