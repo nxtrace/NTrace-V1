@@ -123,6 +123,13 @@ jobs:
           go build -buildvcs=false -trimpath -tags flavor_tiny -o "${RUNNER_TEMP}/nexttrace-tiny" .
           go build -buildvcs=false -trimpath -tags flavor_ntr -o "${RUNNER_TEMP}/ntr" .
 
+      - name: MTR column editor PTY smoke
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          go build -o "${RUNNER_TEMP}/nexttrace-mtr-columns" .
+          sudo python3 scripts/test_mtr_columns_pty.py "${RUNNER_TEMP}/nexttrace-mtr-columns"
+
       - name: Test with windows
         if: ${{ matrix.os == 'windows-latest' }}
         run: go test -v -covermode=count -coverprofile="coverage.out" ./...

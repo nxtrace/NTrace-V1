@@ -382,7 +382,11 @@ func mtrTUIRenderWithWidth(w io.Writer, header MTRTUIHeader, stats []trace.MTRHo
 		fmt.Fprint(w, b.String())
 		return
 	}
-	renderMTRTUIHeader(&b, header, lo.termWidth)
+	if header.Columns != nil && !header.HistoryMode {
+		renderMTRSelectedHeader(&b, header, lo.termWidth)
+	} else {
+		renderMTRTUIHeader(&b, header, lo.termWidth)
+	}
 	if header.HistoryMode {
 		renderMTRTUIHistory(&b, header, stats, lo.termWidth)
 		fmt.Fprint(w, b.String())

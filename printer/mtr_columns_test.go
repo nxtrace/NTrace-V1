@@ -107,3 +107,28 @@ func TestMTRSelectedReportAndTableOrder(t *testing.T) {
 		out = out[i+len(v):]
 	}
 }
+
+func TestMTRCustomFrameAndEditorStayWithinTerminal(t *testing.T) {
+	columns, _ := ParseMTRColumns("received,loss,snt,last,avg,best,wrst,stdev", false)
+	for _, width := range []int{24, 40, 60, 80, 120, 200} {
+		for _, editing := range []bool{false, true} {
+			header := MTRTUIHeader{Columns: columns, ColumnEditor: MTRColumnEditor{Active: editing, Draft: strings.Repeat("L", 256)}, Target: "192.0.2.1", SrcHost: "中文主机.example", Status: MTRTUIPaused}
+			out := mtrTUIRenderStringWithWidth(header, nil, width)
+			out = strings.TrimPrefix(out, "\x1b[H\x1b[2J")
+			for _, line := range strings.Split(out, "\r\n") {
+				if displayWidth(line) > width {
+					t.Fatalf("width %d: %q", width, line)
+				}
+			}
+			if editing {
+				for _, code := range []string{"L=Loss", "S=Snt", "R=Received", "N=Last", "A=Avg", "B=Best", "W=Wrst", "V=StDev"} {
+					if !strings.Contains(out, code) {
+						t.Fatalf("missing %s in %d: %s", code, width, out)
+					}
+				}
+			} else if !strings.Contains(out, "O") {
+				t.Fatal("missing O hint")
+			}
+		}
+	}
+}

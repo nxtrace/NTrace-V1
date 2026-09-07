@@ -7,6 +7,7 @@ import (
 	"github.com/rodaine/table"
 	"os"
 	"strings"
+	"time"
 )
 
 // MTRColumnEditor is an immutable frame snapshot supplied by the TUI controller.
@@ -122,5 +123,21 @@ func printMTRSelectedReport(stats []trace.MTRHopStat, opts MTRReportOptions, hos
 	for i, s := range stats {
 		fmt.Printf("%s%s %s\n", mtrReportPrefix(s.TTL, prevTTL), reportPadRight(hosts[i], hostW), mtrSelectedMetrics(opts.Columns, widths, &s, false))
 		prevTTL = s.TTL
+	}
+}
+
+// Keep custom frames within the terminal even when the legacy shortcut bar
+// would wrap over the data. O remains visible in the narrowest supported view.
+func renderMTRSelectedHeader(b *strings.Builder, header MTRTUIHeader, width int) {
+	tuiLine(b, "%s", buildMTRTUITitleLine(header, width))
+	if width < 40 {
+		tuiLine(b, "%s", truncateByDisplayWidth(buildMTRTUIRouteText(header), width))
+	} else {
+		tuiLine(b, "%s", buildMTRTUIRouteLine(header, width, time.Now()))
+	}
+	if width >= 160 {
+		tuiLine(b, "%s", buildMTRTUIControlsLine(header, width))
+	} else {
+		tuiLine(b, "%s", truncateByDisplayWidth("O:cols Q:quit "+mtrTUIStatusText(header.Status), width))
 	}
 }
