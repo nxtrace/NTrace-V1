@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -78,3 +80,18 @@ func TestFWMarkJSONOptionalParameter(t *testing.T) {
 	}
 }
 func ptrFWMark(v uint32) *uint32 { return &v }
+
+func TestFWMarkConflictNamesMode(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only option")
+	}
+	for _, mode := range []string{"--mtu", "--dns", "--file", "--from"} {
+		err := validateFWMarkMode(true, map[string]bool{mode: true, "--deploy": false})
+		if err == nil || !strings.Contains(err.Error(), mode) {
+			t.Fatalf("mode=%s err=%v", mode, err)
+		}
+	}
+	if err := validateFWMarkMode(false, map[string]bool{"--mtu": true}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1496,7 +1496,13 @@ func Execute() {
 	fwmarkSet := parsedFlag(parser, "fwmark")
 	mark, markErr := parseFWMark(*fwmark, fwmarkSet)
 	if markErr == nil {
-		markErr = validateFWMarkMode(fwmarkSet, *init, *mtuMode, *naliMode, *deploy, *deployMCP, *dnsMode, *speedMode, *fastTraceFlag, *file != "", *from != "", *setupNextTraceAPIV4Token)
+		markErr = validateFWMarkMode(fwmarkSet, map[string]bool{
+			"--init": *init, "--mtu": *mtuMode, "--nali": *naliMode,
+			"--deploy": *deploy, "--mcp": *deployMCP, "--dns": *dnsMode,
+			"--speed": *speedMode, "--fast-trace": *fastTraceFlag,
+			"--file": *file != "", "--from": *from != "",
+			"--setup-api-v4-token": *setupNextTraceAPIV4Token,
+		})
 	}
 	if markErr != nil {
 		fmt.Fprintln(os.Stderr, markErr)

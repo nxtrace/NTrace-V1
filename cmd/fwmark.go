@@ -50,16 +50,16 @@ func containsFWMarkFlag(args []string) bool {
 	return false
 }
 
-func validateFWMarkMode(explicit bool, unsupported ...bool) error {
+func validateFWMarkMode(explicit bool, unsupported map[string]bool) error {
 	if !explicit {
 		return nil
 	}
 	if err := trace.ValidateFWMarkPlatform(true); err != nil {
 		return err
 	}
-	for _, active := range unsupported {
+	for name, active := range unsupported {
 		if active {
-			return fmt.Errorf("--fwmark supports only local traceroute and MTR; standalone, batch and remote modes are unsupported")
+			return fmt.Errorf("--fwmark cannot be combined with %s; only local traceroute and MTR are supported", name)
 		}
 	}
 	return nil
