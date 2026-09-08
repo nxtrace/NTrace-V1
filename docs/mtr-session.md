@@ -57,6 +57,13 @@ When present, a probe's `response.kind` must be `transit`, `destination`, or
 requires `success: true` and a valid responder IP; timeouts cannot carry path
 evidence.
 
+Replay verifies destination, unreachable and reopening events against the
+accumulated probe evidence before applying a path boundary. A contradictory
+event is an error, not an instruction to discard statistics.
+
+Offline JSON always encodes `stats` as an array, including `[]` for empty
+sessions, initialization failures and the state immediately after a reset.
+
 The session header only includes explicitly selected safe fields, not the
 runtime configuration or provider credentials. Source selection describes the
 recorded configuration/display, not proof of an operating-system route.

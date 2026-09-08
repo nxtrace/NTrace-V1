@@ -267,6 +267,38 @@ func TestMTRReplayRejectsInvalidEvents(t *testing.T) {
 	}
 }
 
+func TestMTRReplayPathEndRequiresProbeEvidence(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		for _, kind := range []string{MTRResponseTransit, MTRResponseDestination, MTRResponseUnreachable} {
+			state := NewMTRReplayState(bounded, 5)
+			probe := MTRSessionEvent{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: 3, IP: "192.0.2.3", Success: true, Response: &MTRProbeResponse{Kind: kind, Description: "test response", Marker: "!H"}}}
+			if err := state.Apply(probe); err != nil {
+				t.Fatal(err)
+			}
+			before, edge := state.Snapshot(), state.PathEnd()
+			for _, fabricated := range []*StopReason{
+				{Hop: 1, Reason: StopReasonDestination}, {Hop: 1, Reason: StopReasonUnreachable},
+				{Hop: 3, Reason: StopReasonDestination, Responses: []string{"fabricated"}},
+			} {
+				if err := state.Apply(MTRSessionEvent{Type: MTRSessionPathEndEvent, PathEnd: fabricated}); err == nil {
+					t.Fatalf("accepted fabricated path bound: kind=%s bounded=%v edge=%+v", kind, bounded, fabricated)
+				}
+				if !reflect.DeepEqual(before, state.Snapshot()) || !reflect.DeepEqual(edge, state.PathEnd()) {
+					t.Fatal("rejected path event changed statistics or evidence")
+				}
+			}
+			if edge != nil {
+				if err := state.Apply(MTRSessionEvent{Type: MTRSessionPathEndEvent}); err == nil {
+					t.Fatal("accepted reopening without transit evidence")
+				}
+			}
+			if err := state.Apply(MTRSessionEvent{Type: MTRSessionPathEndEvent, PathEnd: edge}); err != nil {
+				t.Fatalf("rejected matching evidence: %v", err)
+			}
+		}
+	}
+}
+
 func TestMTRSessionBoundedReplayNaturalCompletion(t *testing.T) {
 	state := NewMTRReplayState(true, 3)
 	var lastEvent MTRSessionEvent

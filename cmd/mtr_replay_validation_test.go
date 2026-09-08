@@ -75,6 +75,38 @@ func TestMTRReplayRejectsUnknownResponseKind(t *testing.T) {
 	}
 }
 
+func TestMTRReplayRejectsPathEndWithoutEvidence(t *testing.T) {
+	for _, reason := range []string{trace.StopReasonDestination, trace.StopReasonUnreachable} {
+		file := replayFixture(t, time.Now(), true)
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rewritten bytes.Buffer
+		for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+			var record mtrsession.Record
+			if err := json.Unmarshal(line, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Type == trace.MTRSessionMetadataEvent {
+				record.Type, record.Metadata = trace.MTRSessionPathEndEvent, nil
+				record.PathEnd = &trace.StopReason{Hop: 1, Reason: reason}
+			}
+			if err := json.NewEncoder(&rewritten).Encode(record); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(file, rewritten.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var output, diagnostic bytes.Buffer
+		_, code := maybeRunMTRReplayMode([]string{"--mtr-replay", file, "--json"}, &output, &diagnostic)
+		if code != 1 || output.Len() != 0 || !strings.Contains(diagnostic.String(), "probe evidence") {
+			t.Fatalf("reason=%s code=%d output=%q diagnostic=%q", reason, code, output.String(), diagnostic.String())
+		}
+	}
+}
+
 func TestMTRReplayRejectsResponseWithoutSuccessfulPeer(t *testing.T) {
 	for _, kind := range []string{trace.MTRResponseTransit, trace.MTRResponseDestination, trace.MTRResponseUnreachable} {
 		for _, peer := range []struct {

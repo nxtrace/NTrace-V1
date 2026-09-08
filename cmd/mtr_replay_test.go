@@ -58,6 +58,53 @@ func replayFixture(t *testing.T, start time.Time, complete bool) string {
 	return path
 }
 
+func TestMTRReplayEmptyStatsArray(t *testing.T) {
+	for _, mode := range []string{"empty", "initialize-failed", "reset", "incomplete"} {
+		t.Run(mode, func(t *testing.T) {
+			start := time.Now()
+			path := filepath.Join(t.TempDir(), "empty.jsonl")
+			w, err := mtrsession.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = w.Close() }()
+			session := mtrsession.Session{Version: "test", StartedAt: start}
+			if err := w.Start(session); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "reset" {
+				if err := w.Event(trace.MTRSessionEvent{Type: trace.MTRSessionResetEvent, Generation: 1, At: start.Add(time.Second)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			end := mtrsession.End{EndedAt: start.Add(2 * time.Second), EndReason: "completed"}
+			if mode == "initialize-failed" {
+				end.EndReason, end.Error = "error", &mtrsession.Error{Stage: "initialize", Message: "test failure"}
+			}
+			if mode != "incomplete" {
+				if err := w.Finish(end); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var output, diagnostic bytes.Buffer
+			_, code := maybeRunMTRReplayMode([]string{"--mtr-replay", path, "--json"}, &output, &diagnostic)
+			var report map[string]json.RawMessage
+			if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+				t.Fatalf("invalid replay JSON: %v: %s", err, diagnostic.String())
+			}
+			expectedCode := 0
+			if mode == "incomplete" {
+				expectedCode = 1
+			}
+			if code != expectedCode || string(report["stats"]) != "[]" {
+				t.Fatalf("code=%d stats=%s", code, report["stats"])
+			}
+		})
+	}
+}
+
 func TestMTRReplaySeekRebuildAndVirtualHistory(t *testing.T) {
 	for _, year := range []int{2000, 2100} {
 		t.Run(time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC).Format("2006"), func(t *testing.T) {

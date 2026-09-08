@@ -3,6 +3,7 @@ package trace
 import (
 	"fmt"
 	"net"
+	"reflect"
 	"time"
 
 	"github.com/nxtrace/NTrace-core/ipgeo"
@@ -104,23 +105,26 @@ func (s *MTRReplayState) Apply(event MTRSessionEvent) error {
 	case MTRSessionResumeEvent:
 		s.paused = false
 	case MTRSessionPathEndEvent:
-		if reason := event.PathEnd; reason != nil {
-			if reason.Hop <= 0 || reason.Hop > s.maxHops {
-				return fmt.Errorf("mtr replay: invalid path end hop %d", reason.Hop)
-			}
-			switch reason.Reason {
-			case StopReasonDestination, StopReasonUnreachable, StopReasonMaxHops:
-			default:
-				return fmt.Errorf("mtr replay: invalid path end reason %q", reason.Reason)
-			}
-			if reason.Reason == StopReasonDestination {
-				s.agg.ClearAbove(reason.Hop)
-			}
-		}
-		s.tracker.current = cloneStopReason(event.PathEnd)
+		return s.applyPathEnd(event.PathEnd)
 	default:
 		return fmt.Errorf("mtr replay: unsupported event type %q", event.Type)
 	}
+	return nil
+}
+
+func (s *MTRReplayState) applyPathEnd(reason *StopReason) error {
+	expected := s.tracker.pathEnd()
+	if expected == nil && s.tracker.bounded && reason != nil && reason.Reason == StopReasonMaxHops {
+		// Bounded completion is the only conclusion without response evidence.
+		expected = &StopReason{Hop: s.maxHops, Reason: StopReasonMaxHops}
+	}
+	if !reflect.DeepEqual(expected, cloneStopReason(reason)) {
+		return fmt.Errorf("mtr replay: path end does not match probe evidence")
+	}
+	if reason != nil && reason.Reason == StopReasonDestination {
+		s.agg.ClearAbove(reason.Hop)
+	}
+	s.tracker.current = cloneStopReason(reason)
 	return nil
 }
 

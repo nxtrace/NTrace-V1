@@ -201,6 +201,9 @@ func runMTRReplay(ctx context.Context, opts mtrReplayOptions, stdout, stderr io.
 	}
 	if opts.json {
 		snap := loaded.state.Snapshot()
+		if snap.Stats == nil {
+			snap.Stats = []trace.MTRHopStat{}
+		}
 		return json.NewEncoder(&mtrReplayOutput{w: stdout}).Encode(struct {
 			SchemaVersion  int                 `json:"schema_version"`
 			Type           string              `json:"type"`
