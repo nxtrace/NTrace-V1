@@ -74,3 +74,40 @@ func TestMTRReplayRejectsUnknownResponseKind(t *testing.T) {
 		}
 	}
 }
+
+func TestMTRReplayRejectsResponseWithoutSuccessfulPeer(t *testing.T) {
+	for _, kind := range []string{trace.MTRResponseTransit, trace.MTRResponseDestination, trace.MTRResponseUnreachable} {
+		for _, peer := range []struct {
+			success bool
+			ip      string
+		}{{false, ""}, {false, "192.0.2.1"}, {true, ""}, {true, "not-an-ip"}} {
+			file := replayFixture(t, time.Now(), true)
+			data, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rewritten bytes.Buffer
+			for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+				var record mtrsession.Record
+				if err := json.Unmarshal(line, &record); err != nil {
+					t.Fatal(err)
+				}
+				if record.Probe != nil {
+					record.Probe.Success, record.Probe.IP = peer.success, peer.ip
+					record.Probe.Response = &trace.MTRProbeResponse{Kind: kind}
+				}
+				if err := json.NewEncoder(&rewritten).Encode(record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(file, rewritten.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var output, diagnostic bytes.Buffer
+			handled, code := maybeRunMTRReplayMode([]string{"--mtr-replay", file, "--json"}, &output, &diagnostic)
+			if !handled || code != 1 || output.Len() != 0 || diagnostic.Len() == 0 {
+				t.Fatalf("kind=%q peer=%+v code=%d output=%q diagnostic=%q", kind, peer, code, output.String(), diagnostic.String())
+			}
+		}
+	}
+}

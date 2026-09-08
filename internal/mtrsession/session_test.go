@@ -134,6 +134,29 @@ func TestProbeResponseKinds(t *testing.T) {
 	}
 }
 
+func TestWriterRejectsResponseWithoutSuccessfulPeer(t *testing.T) {
+	for _, peer := range []struct {
+		success bool
+		ip      string
+	}{{false, ""}, {false, "192.0.2.1"}, {true, ""}, {true, "not-an-ip"}} {
+		w, err := Open(filepath.Join(t.TempDir(), "recording.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = w.Close() })
+		session := testSession()
+		if err := w.Start(session); err != nil {
+			t.Fatal(err)
+		}
+		probe := testProbe(session.StartedAt.Add(time.Second))
+		probe.Probe.Success, probe.Probe.IP = peer.success, peer.ip
+		probe.Probe.Response = &trace.MTRProbeResponse{Kind: trace.MTRResponseDestination}
+		if err := w.Event(probe); err == nil {
+			t.Fatalf("writer accepted response without a successful peer: %+v", peer)
+		}
+	}
+}
+
 func TestExclusivePrivateFile(t *testing.T) {
 	path := writeFixture(t, true)
 	original, err := os.ReadFile(path)

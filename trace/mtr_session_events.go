@@ -143,6 +143,9 @@ func (s *MTRReplayState) applyProbe(event MTRSessionEvent) error {
 	if probe.Success && addr == nil {
 		return fmt.Errorf("mtr replay: successful probe has no address")
 	}
+	if probe.Response != nil && !probe.Success {
+		return fmt.Errorf("mtr replay: failed probe cannot carry a response")
+	}
 	response := mtrProbeResponseWithPeer(probe.Response, addr)
 	if s.tracker.observe(probe.TTL, response) {
 		if reason := s.tracker.pathEnd(); reason != nil && reason.Reason == StopReasonDestination {

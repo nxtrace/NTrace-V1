@@ -3,6 +3,7 @@ package mtrsession
 import (
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/nxtrace/NTrace-core/trace"
 )
@@ -93,6 +94,9 @@ func (s *recordState) acceptEvent(r Record) error {
 			return errors.New("invalid MTR session probe")
 		}
 		if response := r.Probe.Response; response != nil {
+			if !r.Probe.Success || net.ParseIP(r.Probe.IP) == nil {
+				return errors.New("MTR session response requires a successful probe with a valid address")
+			}
 			switch response.Kind {
 			case trace.MTRResponseTransit, trace.MTRResponseDestination, trace.MTRResponseUnreachable:
 			default:

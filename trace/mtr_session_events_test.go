@@ -244,6 +244,8 @@ func TestMTRReplayRejectsInvalidEvents(t *testing.T) {
 		{Type: "future_event"},
 		{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: 256}},
 		{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: 1, Success: true}},
+		{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: 1, Response: &MTRProbeResponse{Kind: MTRResponseDestination}}},
+		{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: 1, IP: "192.0.2.1", Response: &MTRProbeResponse{Kind: MTRResponseUnreachable}}},
 		{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: 1, IP: "not-an-ip"}},
 		{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: 1, RTT: -1}},
 		{Type: MTRSessionProbeEvent, Generation: 1, Probe: &MTRSessionProbe{TTL: 1}},
@@ -257,7 +259,7 @@ func TestMTRReplayRejectsInvalidEvents(t *testing.T) {
 		if err := state.Apply(event); err == nil {
 			t.Errorf("accepted invalid event: %+v", event)
 		}
-		if len(state.Snapshot().Stats) != 0 || state.Generation() != 0 {
+		if len(state.Snapshot().Stats) != 0 || state.Generation() != 0 || state.PathEnd() != nil {
 			t.Errorf("invalid event changed state: %+v", event)
 		}
 	}

@@ -53,7 +53,9 @@ Every record includes `type`, `seq`, `generation`, `elapsed_ns`, and `timestamp`
 | `end` | `end`: end time, reason, final path conclusion and optional error/signal |
 
 When present, a probe's `response.kind` must be `transit`, `destination`, or
-`unreachable`; empty or unknown kinds are invalid records.
+`unreachable`; empty or unknown kinds are invalid records. A response also
+requires `success: true` and a valid responder IP; timeouts cannot carry path
+evidence.
 
 The session header only includes explicitly selected safe fields, not the
 runtime configuration or provider credentials. Source selection describes the
