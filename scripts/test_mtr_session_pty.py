@@ -174,6 +174,10 @@ def main(binary):
     log = bytearray()
     help_result = subprocess.run([binary, "--help"], capture_output=True,
                                  text=True, timeout=5, check=True)
+    for flag in ("--help", "--version"):
+        result = subprocess.run([binary, "--mtr-replay", flag], capture_output=True,
+                                text=True, timeout=5, check=True)
+        assert result.stdout.strip(), f"Replay {flag} produced no output"
     # ntr selects MTR by default and deliberately omits the mode flag.
     explicit_mtr = bool(re.search(r"^\s+-t\s+--mtr\s", help_result.stdout, re.M))
     mode = ["--mtr"] if explicit_mtr else []
@@ -232,7 +236,7 @@ def main(binary):
                 verify_recording_signals(binary, directory, mode, log)
         print(json.dumps({
             "platform": platform.system(), "binary": os.path.basename(binary), "session_pty": "PASS",
-            "checks": ["loopback recording", "pause/resume", "reset generation", "ordered file",
+            "checks": ["replay help/version", "loopback recording", "pause/resume", "reset generation", "ordered file",
                        "offline count/RTT parity", "final snapshot", "time seek", "history", "column editor",
                        "play/pause", "rewind", "EOF pause", "terminal restore"]
                       + (["recorded SIGINT/SIGTERM"] if os.name != "nt" else []),

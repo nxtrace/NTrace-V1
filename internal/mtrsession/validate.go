@@ -92,6 +92,13 @@ func (s *recordState) acceptEvent(r Record) error {
 		if r.Probe == nil || r.Metadata != nil || r.PathEnd != nil || r.Probe.TTL < 1 || r.Probe.TTL > s.maxHops || r.Probe.RTT < 0 || r.Probe.CompletedAt.IsZero() {
 			return errors.New("invalid MTR session probe")
 		}
+		if response := r.Probe.Response; response != nil {
+			switch response.Kind {
+			case trace.MTRResponseTransit, trace.MTRResponseDestination, trace.MTRResponseUnreachable:
+			default:
+				return fmt.Errorf("invalid MTR session response kind %q", response.Kind)
+			}
+		}
 	case trace.MTRSessionMetadataEvent:
 		if r.Metadata == nil || r.Metadata.IP == "" || r.Probe != nil || r.PathEnd != nil {
 			return errors.New("invalid MTR session metadata")

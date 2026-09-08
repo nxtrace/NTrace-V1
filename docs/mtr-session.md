@@ -52,6 +52,9 @@ Every record includes `type`, `seq`, `generation`, `elapsed_ns`, and `timestamp`
 | `path_end` | `path_end`: destination/unreachable/max-hops conclusion, or explicit `null` for reopening |
 | `end` | `end`: end time, reason, final path conclusion and optional error/signal |
 
+When present, a probe's `response.kind` must be `transit`, `destination`, or
+`unreachable`; empty or unknown kinds are invalid records.
+
 The session header only includes explicitly selected safe fields, not the
 runtime configuration or provider credentials. Source selection describes the
 recorded configuration/display, not proof of an operating-system route.
@@ -82,6 +85,9 @@ nexttrace --mtr-replay session.jsonl
 nexttrace --mtr-replay session.jsonl -w
 nexttrace --mtr-replay session.jsonl -r --json
 ```
+
+`--mtr-replay --help` and `--mtr-replay --version` need no file. For a file named
+`--help` or `--version`, use `--mtr-replay=--help` or a path such as `./--help`.
 
 Replay accepts presentation options, not a target or probe configuration. It
 does not initialize probing, resolve addresses, query metadata, or discover a

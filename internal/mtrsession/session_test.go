@@ -98,6 +98,42 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProbeResponseKinds(t *testing.T) {
+	for _, kind := range []string{trace.MTRResponseTransit, trace.MTRResponseDestination, trace.MTRResponseUnreachable, "", "future_response"} {
+		t.Run(kind, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "recording.jsonl")
+			w, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = w.Close() }()
+			session := testSession()
+			if err := w.Start(session); err != nil {
+				t.Fatal(err)
+			}
+			probe := testProbe(session.StartedAt.Add(time.Second))
+			probe.Probe.Response = &trace.MTRProbeResponse{Kind: kind}
+			err = w.Event(probe)
+			if kind == "" || kind == "future_response" {
+				if err == nil || !strings.Contains(err.Error(), "response kind") {
+					t.Fatalf("invalid kind %q: %v", kind, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Finish(End{EndedAt: session.StartedAt.Add(2 * time.Second), EndReason: "completed"}); err != nil {
+				t.Fatal(err)
+			}
+			records, incomplete, err := readRecords(t, path)
+			if err != nil || incomplete || len(records) != 3 || records[1].Probe.Response.Kind != kind {
+				t.Fatalf("kind=%q records=%v incomplete=%v err=%v", kind, records, incomplete, err)
+			}
+		})
+	}
+}
+
 func TestExclusivePrivateFile(t *testing.T) {
 	path := writeFixture(t, true)
 	original, err := os.ReadFile(path)
