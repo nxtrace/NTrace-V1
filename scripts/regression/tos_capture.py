@@ -80,14 +80,21 @@ def packets(path):
         yield item
 
 
-def assert_capture(path, family, protocol, tos, source, target, minimum=2, fragmented=False):
+def assert_capture(path, family, protocol, tos, source, target, minimum=2, fragmented=False,
+                   source_ports=()):
     number = {"icmp": 1 if family == 4 else 58, "tcp": 6, "udp": 17}[protocol]
     selected, identities = [], set()
+    expected_ports, seen_ports = set(source_ports), set()
     for packet in packets(path):
         if (packet["family"] != family or packet["protocol"] != number
                 or packet["source"] != source or packet["target"] != target):
             continue
         body = packet["body"]
+        if not packet["fragment"] and protocol != "icmp":
+            assert len(body) >= 8
+            source_port = struct.unpack_from("!H", body)[0]
+            if expected_ports and source_port not in expected_ports:
+                continue
         if packet["fragment"]:
             # IPv4 fragments have the same IP fields, but no transport header.
             assert protocol == "udp", "unexpected fragmented probe protocol"
@@ -100,11 +107,15 @@ def assert_capture(path, family, protocol, tos, source, target, minimum=2, fragm
             if len(body) < 14 or body[13] & 0x12 != 0x02:
                 continue  # Exclude TCP replies, including loopback RSTs.
             identities.add(body[0:8])
+            seen_ports.add(source_port)
         else:
             assert len(body) >= 8
             identities.add((packet.get("packet_id"), body))
+            seen_ports.add(source_port)
         assert packet["tos"] == tos, (path, "wrong TOS/Traffic Class", tos, packet["tos"])
         selected.append(packet)
+    if expected_ports:
+        assert seen_ports == expected_ports, (path, "missing probe sessions", seen_ports, expected_ports)
     assert len(identities) >= minimum, (path, "missing distinct probes", len(identities), minimum)
     if fragmented:
         assert any(p["fragment"] for p in selected), (path, "no noninitial fragment captured")
@@ -141,6 +152,12 @@ def run_matrix(binary, artifacts):
                     if protocol != "icmp":
                         args += ["--" + protocol]
                     args.append(target)
+                    # Fallback MTR repeats the same TCP sequence/UDP payload in
+                    # separate one-probe rounds. Distinct session source ports
+                    # identify real probes without counting loopback duplicates.
+                    source_ports = (47464, 47465) if mode == "report" and protocol != "icmp" else ()
+                    commands = [(f"{label}-port{port}", args[:-1] + ["--source-port", str(port), target])
+                                for port in source_ports] if source_ports else [(label, args)]
                     with log.open("wb") as capture_log:
                         process = subprocess.Popen([tcpdump, "--immediate-mode", "-n", "-U", "-s", "0",
                                                     "-i", interface, "-w", str(capture),
@@ -151,21 +168,24 @@ def run_matrix(binary, artifacts):
                                 assert process.poll() is None, log.read_text()
                                 assert time.monotonic() < deadline, "capture failed to become ready"
                                 time.sleep(0.025)
-                            result = subprocess.run(args, capture_output=True, timeout=15)
-                            (artifacts / (label + ".out")).write_bytes(result.stdout)
-                            (artifacts / (label + ".err")).write_bytes(result.stderr)
-                            assert result.returncode == 0, (label, result.returncode, result.stderr.decode(errors="replace"))
-                            output = json.loads(result.stdout)
-                            if mode == "report":
-                                assert output["end_reason"] == "completed", (label, output)
-                                assert output["effective_parameters"]["tos"] == tos, (label, output)
+                            for run_label, command in commands:
+                                result = subprocess.run(command, capture_output=True, timeout=15)
+                                (artifacts / (run_label + ".out")).write_bytes(result.stdout)
+                                (artifacts / (run_label + ".err")).write_bytes(result.stderr)
+                                assert result.returncode == 0, (run_label, result.returncode, result.stderr.decode(errors="replace"))
+                                output = json.loads(result.stdout)
+                                if mode == "report":
+                                    assert output["end_reason"] == "completed", (run_label, output)
+                                    assert output["effective_parameters"]["tos"] == tos, (run_label, output)
+                                    assert sum(row["snt"] for row in output["stats"]) == 2, (run_label, output)
                             time.sleep(0.1)
                         finally:
                             if process.poll() is None:
                                 process.send_signal(signal.SIGINT)
                             process.wait(timeout=5)
                     assert process.returncode == 0, log.read_text()
-                    result = assert_capture(capture, family, protocol, tos, target, target)
+                    result = assert_capture(capture, family, protocol, tos, target, target,
+                                            source_ports=source_ports)
                     with (artifacts / "summary.jsonl").open("a") as summary:
                         summary.write(json.dumps(dict(case=label, status="PASS", **result)) + "\n")
                     print("PASS", label, result, flush=True)
@@ -186,12 +206,14 @@ def main():
     check.add_argument("target")
     check.add_argument("--minimum", type=int, default=2)
     check.add_argument("--fragmented", action="store_true")
+    check.add_argument("--source-ports", type=int, nargs="+", default=())
     args = parser.parse_args()
     if args.command == "run":
         run_matrix(args.binary, args.artifacts)
     else:
         print(json.dumps(assert_capture(args.pcap, args.family, args.protocol, args.tos,
-                                        args.source, args.target, args.minimum, args.fragmented)))
+                                        args.source, args.target, args.minimum, args.fragmented,
+                                        args.source_ports)))
 
 
 if __name__ == "__main__":

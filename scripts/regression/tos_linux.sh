@@ -86,29 +86,45 @@ run_case() {
   [[ "$protocol" != icmp ]] && args+=("--$protocol")
   if [[ "$mode" == trace ]]; then args+=(--traceroute); else args+=(--report); fi
   [[ "$mark" != none ]] && args+=(--fwmark "$mark")
-  start_capture "$label" "$target"
-  if ! ip netns exec "$S" timeout 15 "$BIN" "${args[@]}" "$@" "$target" >"$ART/$label.out" 2>"$ART/$label.err"; then
-    cat "$ART/$label.err" >&2; cat "$ART/$label.out" >&2; return 1
+  local run_ports=(auto) out_files=() check_args=()
+  # TCP/UDP fallback MTR may repeat identical headers. Two source-port sessions
+  # make the captured probes distinguishable while each still runs two rounds.
+  if [[ "$mode" == report && "$protocol" != icmp ]]; then
+    run_ports=(47464 47465)
+    check_args+=(--source-ports 47464 47465)
   fi
+  start_capture "$label" "$target"
+  for source_port in "${run_ports[@]}"; do
+    local port_args=() output_label="$label"
+    if [[ "$source_port" != auto ]]; then
+      port_args=(--source-port "$source_port")
+      output_label="$label-port$source_port"
+    fi
+    out_files+=("$ART/$output_label.out")
+    if ! ip netns exec "$S" timeout 15 "$BIN" "${args[@]}" "${port_args[@]}" "$@" "$target" >"$ART/$output_label.out" 2>"$ART/$output_label.err"; then
+      cat "$ART/$output_label.err" >&2; cat "$ART/$output_label.out" >&2; return 1
+    fi
+  done
   stop_capture
-  local check_args=()
   [[ "$label" == *fragment* ]] && check_args+=(--fragmented)
   python3 "$CHECK" check "$ART/$label-$egress.pcap" "$family" "$protocol" "$tos" "$source" "$target" "${check_args[@]}" >"$ART/$label.assert.json"
   tcpdump -nn -r "$ART/$label-$other.pcap" >"$ART/$label-unexpected.txt" 2>/dev/null
   [[ ! -s "$ART/$label-unexpected.txt" ]]
-  python3 - "$ART/$label.out" "$mode" "$tos" "$mark" "$source" "$target" <<'PY'
+  python3 - "$mode" "$tos" "$mark" "$source" "$target" "${out_files[@]}" <<'PY'
 import json,sys
-path,mode,tos,mark,source,target=sys.argv[1:]
-r=json.load(open(path))
-if mode=='report':
- assert r['end_reason']=='completed',r
- p=r['effective_parameters']
- assert p['tos']==int(tos) and p['source_address']==source,p
- if mark=='none': assert 'fwmark' not in p,p
- else: assert p['fwmark']==int(mark,0),p
- assert any(x.get('ip')==target and x.get('received',0)>0 for x in r['stats']),r
-else:
- assert any(h.get('Success') and h.get('Address',{}).get('IP')==target for row in r['Hops'] for h in row),r
+mode,tos,mark,source,target,*paths=sys.argv[1:]
+for path in paths:
+ r=json.load(open(path))
+ if mode=='report':
+  assert r['end_reason']=='completed',r
+  p=r['effective_parameters']
+  assert p['tos']==int(tos) and p['source_address']==source,p
+  if mark=='none': assert 'fwmark' not in p,p
+  else: assert p['fwmark']==int(mark,0),p
+  assert sum(x['snt'] for x in r['stats'])==2,r
+  assert any(x.get('ip')==target and x.get('received',0)>0 for x in r['stats']),r
+ else:
+  assert any(h.get('Success') and h.get('Address',{}).get('IP')==target for row in r['Hops'] for h in row),r
 PY
   printf 'PASS %s\n' "$label" | tee -a "$ART/summary.txt"
 }
@@ -132,6 +148,21 @@ for family in 4 6; do
     run_case "$family-$protocol-device" "$family" "$protocol" report 16 none sb --dev sb
     run_case "$family-$protocol-both" "$family" "$protocol" report 16 0 sb --source "$source" --dev sb
   done
+done
+# Linux IPv4 IP_HDRINCL routes as IPPROTO_RAW (255), even when the serialized
+# packet is UDP. IPv6 UDP uses the ordinary protocol 17 route lookup.
+for family in 4 6; do
+  ip -n "$S" "-$family" rule add priority 80 ipproto udp lookup main
+  ip -n "$S" "-$family" rule add priority 81 ipproto 255 lookup 200
+  ip -n "$S" "-$family" rule show >"$ART/ipv$family-protocol-rules.txt"
+done
+for mode in trace report; do
+  run_case "4-udp-$mode-header-protocol" 4 udp "$mode" 16 none sb
+  run_case "6-udp-$mode-header-protocol" 6 udp "$mode" 16 none sa
+done
+for family in 4 6; do
+  ip -n "$S" "-$family" rule del priority 80
+  ip -n "$S" "-$family" rule del priority 81
 done
 # Confirm every IPv4 UDP fragment preserves the complete byte, including ECN.
 for mode in trace report; do

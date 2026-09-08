@@ -33,6 +33,41 @@ class CaptureAssertions(unittest.TestCase):
         ip = struct.pack('!IHBB16s16s', (6 << 28) | (tos << 20), len(body), 58, 64, addr, addr)
         return struct.pack('<I', 30) + ip + body
 
+    def ipv4_tcp(self, tos, source_port, sequence=0x01000000):
+        body = struct.pack('!HHIIBBHHH', source_port, 33494, sequence, 0,
+                           0x50, 0x02, 65535, 0, 0)
+        ip = struct.pack('!BBHHHBBH4s4s', 0x45, tos, 40, 0, 0,
+                         64, 6, 0, b'\x7f\0\0\1', b'\x7f\0\0\1')
+        return b'\0' * 12 + b'\x08\0' + ip + body
+
+    def test_repeated_tcp_rounds_in_distinct_port_sessions(self):
+        self.pcap([self.ipv4_tcp(184, 47464)] * 2 +
+                  [self.ipv4_tcp(184, 47465)] * 2)
+        result = assert_capture(self.path, 4, 'tcp', 184, '127.0.0.1', '127.0.0.1',
+                                source_ports=(47464, 47465))
+        self.assertEqual(result['distinct_probes'], 2)
+        self.assertEqual(result['packets'], 4)
+
+    def test_each_report_session_must_be_captured(self):
+        self.pcap([self.ipv4_tcp(184, 47464, 1), self.ipv4_tcp(184, 47464, 2)])
+        with self.assertRaisesRegex(AssertionError, 'missing probe sessions'):
+            assert_capture(self.path, 4, 'tcp', 184, '127.0.0.1', '127.0.0.1',
+                           source_ports=(47464, 47465))
+
+    def test_repeated_ipv6_udp_rounds_in_distinct_port_sessions(self):
+        addr = ipaddress.IPv6Address('::1').packed
+        frames = []
+        for port in (47464, 47465):
+            body = struct.pack('!HHHHH', port, 33494, 10, 0, 0)
+            ip = struct.pack('!IHBB16s16s', (6 << 28) | (184 << 20),
+                             len(body), 17, 64, addr, addr)
+            frames.extend([struct.pack('<I', 30) + ip + body] * 2)
+        self.pcap(frames, link=0)
+        result = assert_capture(self.path, 6, 'udp', 184, '::1', '::1',
+                                source_ports=(47464, 47465))
+        self.assertEqual(result['distinct_probes'], 2)
+        self.assertEqual(result['packets'], 4)
+
     def test_all_eight_bits_checked(self):
         self.pcap([self.ipv4_udp(184, 1), self.ipv4_udp(185, 2)])
         with self.assertRaisesRegex(AssertionError, 'wrong TOS'):

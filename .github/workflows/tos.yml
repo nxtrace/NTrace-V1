@@ -31,6 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y tcpdump iproute2
       - name: Build
+        id: build
         run: |
           go build -o "$RUNNER_TEMP/nexttrace-tos" .
           go test -c -o "$RUNNER_TEMP/tos-trace.test" ./trace
@@ -44,7 +45,7 @@ jobs:
       - name: Capture IPv4 and IPv6 traceroute and MTR
         run: sudo python3 scripts/regression/tos_capture.py run "$RUNNER_TEMP/nexttrace-tos" "$RUNNER_TEMP/tos-results/packets"
       - name: Verify Linux policy routes and UDP fragments
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.build.outcome == 'success' }}
         run: sudo bash scripts/regression/tos_linux.sh "$RUNNER_TEMP/nexttrace-tos" "$RUNNER_TEMP/tos-results/routes"
       - uses: actions/upload-artifact@v7
         if: always()
