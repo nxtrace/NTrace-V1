@@ -84,6 +84,19 @@ class CaptureAssertions(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_rebuild_capture(self.path, output, 6, '::1')
 
+    def test_udp_session_excludes_unrelated_loopback_traffic(self):
+        self.pcap([self.ipv4_udp(16, 1), self.ipv4_udp(16, 2),
+                   self.ipv4_udp(0, 3)])
+        result = assert_capture(self.path, 4, 'udp', 16, '127.0.0.1', '127.0.0.1',
+                                source_ports=(40001, 40002))
+        self.assertEqual(result['packets'], 2)
+        # Matching probe sessions must still fail if any TOS byte is wrong.
+        self.pcap([self.ipv4_udp(16, 1), self.ipv4_udp(0, 2),
+                   self.ipv4_udp(16, 3)])
+        with self.assertRaisesRegex(AssertionError, 'wrong TOS'):
+            assert_capture(self.path, 4, 'udp', 16, '127.0.0.1', '127.0.0.1',
+                           source_ports=(40001, 40002))
+
     def test_all_eight_bits_checked(self):
         self.pcap([self.ipv4_udp(184, 1), self.ipv4_udp(185, 2)])
         with self.assertRaisesRegex(AssertionError, 'wrong TOS'):
