@@ -44,7 +44,7 @@ func TestFWMarkRouteOmitsRawSocketPorts(t *testing.T) {
 	for _, method := range []Method{TCPTrace, UDPTrace} {
 		for _, port := range []int{-1, 0, 40000} {
 			cfg := Config{FWMarkSet: true, FWMark: 256, SrcPort: port, DstPort: 443}
-			req := fwmarkRouteRequest(method, cfg)
+			req := probeRouteRequest(method, cfg)
 			if req.SrcPort != 0 || req.DstPort != 0 {
 				t.Fatalf("raw socket route includes transport ports: %+v", req)
 			}
@@ -54,7 +54,7 @@ func TestFWMarkRouteOmitsRawSocketPorts(t *testing.T) {
 
 func TestFWMarkRoutePreservesSource(t *testing.T) {
 	cfg := Config{FWMarkSet: true, SrcAddr: "192.0.2.2", SrcPort: 40000}
-	req := fwmarkRouteRequest(UDPTrace, cfg)
+	req := probeRouteRequest(UDPTrace, cfg)
 	if req.SrcAddr != cfg.SrcAddr {
 		t.Fatalf("route constraints changed: %+v", req)
 	}

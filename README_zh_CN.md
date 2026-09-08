@@ -415,6 +415,16 @@ nexttrace --file /path/to/your/iplist.txt
 
 #### `NextTrace` 已支持指定网卡进行路由跟踪
 
+### TOS / IPv6 Traffic Class（`-Q`、`--tos`）
+
+`--tos` 设置完整的 8 位 IPv4 TOS / IPv6 Traffic Class 字段，范围 `0..255`，默认 `0`。计算方式为 `DSCP × 4 + ECN`：DSCP 46、ECN 0 使用 `--tos 184`；`--tos 46` 仍表示原始字段值 46（DSCP 11、ECN 2）。它修改探测报文头，实际选路与优先级由网络策略决定。
+
+Linux、macOS 的发送路径使用原生 socket 选项或完整 IP 报文头。Linux 上非零 TOS 的自动源地址按该 TOS 的路由选择，支持与 `--fwmark` 组合；显式 `--source`、`--dev` 保留约束，各会话独立选源。路由查询按 raw socket 的内核条件匹配，不传用户态报文中的 TCP/UDP 端口。选源或 TOS 设置失败会终止探测，不转换为 MTR 丢包，也不退回默认字段值。
+
+TOS 适用于现有 traceroute、MTR、Fast Trace、文件目标和 Web/API/MCP 探测入口；不影响 DNS/RDNS、GeoIP、API 等辅助请求。独立 MTU 和 Globalping 不支持该参数。JSON 中的 `tos` 记录请求配置，不代表抓包确认值。
+
+BSD、Android 提供相关原生接口，但未完成本次原生抓包验收；实际运行仍受探测所需权限与系统限制影响。Windows 的 WinDivert 发送路径目前仅编译于 amd64，不能将其支持结论套用于 Windows arm64。
+
 ### Linux 策略路由（`--fwmark`）
 
 `--fwmark 256` 或 `--fwmark 0x100` 为本地 traceroute、MTR 探测 socket 设置 32 位标记，覆盖各适用构建的 ICMP/TCP/UDP 和 IPv4/IPv6。对应的 `ip rule` 和路由表由用户配置，NextTrace 不修改系统规则；没有匹配的分流规则时，路径可以保持不变。
@@ -569,8 +579,8 @@ nexttrace --psize 1024 example.com
 # 让每个 probe 在 1500 字节内随机大小
 nexttrace --psize -1500 example.com
 
-# 设置 TOS / traffic class 字段
-nexttrace -Q 46 example.com
+# 设置 DSCP 46、ECN 0（完整 TOS / traffic class 值为 184）
+nexttrace -Q 184 example.com
 
 # 特色功能：打印Route-Path图
 # Route-Path图示例：
@@ -1024,8 +1034,9 @@ Arguments:
                                      and IP family; raise for MTU or
                                      large-packet testing. Negative values
                                      randomize each probe up to abs(value)
-  -Q  --tos                          Set the IP type-of-service / traffic class
-                                     value [0-255]. Default: 0
+  -Q  --tos                          Set the full 8-bit IP type-of-service /
+                                     traffic class [0-255]: DSCP*4+ECN (DSCP
+                                     46, ECN 0 = 184). Default: 0
       --dot-server                   Use DoT Server for DNS Parse [dnssb,
                                      aliyun, dnspod, google, cloudflare]
   -g  --language                     Choose the language for displaying [en,

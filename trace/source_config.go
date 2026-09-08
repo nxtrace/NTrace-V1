@@ -120,8 +120,8 @@ func ResolveConfiguredSrcAddr(dstIP net.IP, srcAddr, srcDev string) (resolved st
 }
 
 func NormalizeExplicitSourceConfig(method Method, config Config) (Config, error) {
-	if config.FWMarkSet {
-		return PrepareFWMarkConfig(method, config)
+	if usesPolicyRouteSource(config) {
+		return PrepareProbeSourceConfig(method, config)
 	}
 	config.SrcAddr = strings.TrimSpace(config.SrcAddr)
 	config.SourceDevice = strings.TrimSpace(config.SourceDevice)

@@ -185,7 +185,7 @@ func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, ic
 		defer s.hopLimitLock.Unlock()
 
 		if err := s.icmp4.SetTOS(int(ip4.TOS)); err != nil {
-			return time.Time{}, err
+			return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv4 TOS %d: %w", ip4.TOS, err)}
 		}
 		if err := s.icmp4.SetTTL(ttl); err != nil {
 			return time.Time{}, err

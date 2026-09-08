@@ -1160,6 +1160,7 @@ func TestProbeOptionHelpMentionsRandomPacketSizeAndTOS(t *testing.T) {
 	for _, want := range []string{
 		"Negative values randomize each probe",
 		"type-of-service / traffic class",
+		"DSCP*4+ECN",
 	} {
 		if !strings.Contains(usage, want) {
 			t.Fatalf("usage missing %q:\n%s", want, usage)

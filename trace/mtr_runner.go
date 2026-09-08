@@ -114,10 +114,10 @@ func RunMTR(ctx context.Context, method Method, baseConfig Config, opts MTROptio
 func runMTRPerHop(ctx context.Context, method Method, baseConfig Config, opts MTROptions, onSnapshot MTROnSnapshot) error {
 	normalizeRuntimeConfig(&baseConfig)
 	baseConfig.Context = ctx
-	var markErr error
-	baseConfig, markErr = PrepareFWMarkConfig(method, baseConfig)
-	if markErr != nil {
-		return markErr
+	var sourceErr error
+	baseConfig, sourceErr = PrepareProbeSourceConfig(method, baseConfig)
+	if sourceErr != nil {
+		return sourceErr
 	}
 
 	baseConfig.NumMeasurements = 1
@@ -181,10 +181,10 @@ func mtrProbeCallbackFromOptions(opts MTROptions) func(mtrProbeResult, int, time
 func runMTRRoundBased(ctx context.Context, method Method, baseConfig Config, opts MTROptions, onSnapshot MTROnSnapshot) error {
 	normalizeRuntimeConfig(&baseConfig)
 	baseConfig.Context = ctx
-	var markErr error
-	baseConfig, markErr = PrepareFWMarkConfig(method, baseConfig)
-	if markErr != nil {
-		return markErr
+	var sourceErr error
+	baseConfig, sourceErr = PrepareProbeSourceConfig(method, baseConfig)
+	if sourceErr != nil {
+		return sourceErr
 	}
 
 	if opts.Interval <= 0 {
@@ -348,7 +348,7 @@ func newMTRICMPEngine(config Config) (*mtrICMPEngine, error) {
 	}
 
 	var srcIP net.IP
-	if config.FWMarkSet {
+	if usesPolicyRouteSource(config) {
 		var err error
 		srcIP, err = resolveProbeSource(ICMPTrace, &config, srcAddr)
 		if err != nil {

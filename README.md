@@ -418,6 +418,16 @@ nexttrace --file /path/to/your/iplist.txt
 
 #### `NextTrace` already supports route tracing for specified Network Devices
 
+### TOS / IPv6 Traffic Class (`-Q`, `--tos`)
+
+`--tos` sets the complete 8-bit IPv4 TOS / IPv6 Traffic Class field, from `0` to `255`, defaulting to `0`. Compute it as `DSCP * 4 + ECN`: DSCP 46 with ECN 0 is `--tos 184`; `--tos 46` still means the raw field value 46 (DSCP 11, ECN 2). The field is part of the probe IP header; routing and priority depend on network policy.
+
+Linux and macOS senders use native socket options or complete IP headers. On Linux, nonzero TOS selects the automatic source address using the corresponding route, including combinations with `--fwmark`. Explicit `--source` and `--dev` remain constraints, and source selection is local to each session. Route queries match the raw socket lookup and omit transport ports serialized in user space. Source-selection or TOS-configuration failures terminate probing instead of becoming MTR loss or falling back to a default field value.
+
+Existing traceroute, MTR, Fast Trace, file-target and Web/API/MCP probe entrypoints support TOS. DNS/RDNS, GeoIP and API helper traffic do not inherit it. Standalone MTU and Globalping do not support this option. The JSON `tos` field records the requested configuration, not a packet-capture observation.
+
+BSD and Android expose the native options but have not completed this native packet-capture acceptance; probe permissions and system restrictions still apply. The Windows WinDivert send backend is currently compiled only for amd64, so its support does not imply Windows arm64 support.
+
 ### Linux policy routing (`--fwmark`)
 
 `--fwmark 256` or `--fwmark 0x100` sets a 32-bit socket mark on local traceroute and MTR probes. It supports ICMP/TCP/UDP over IPv4/IPv6 in all applicable builds. Configure matching Linux `ip rule` and route tables separately; NextTrace does not edit them. The same mark need not change the route when no rule selects a different path.
@@ -577,8 +587,8 @@ nexttrace --psize 1024 example.com
 # Randomize each probe packet size up to 1500 bytes
 nexttrace --psize -1500 example.com
 
-# Set the TOS / traffic class field
-nexttrace -Q 46 example.com
+# Set DSCP 46 with ECN 0 (complete TOS / traffic class value 184)
+nexttrace -Q 184 example.com
 
 # Feature: print Route-Path diagram
 # Route-Path diagram example:
@@ -1049,8 +1059,9 @@ Arguments:
                                      and IP family; raise for MTU or
                                      large-packet testing. Negative values
                                      randomize each probe up to abs(value)
-  -Q  --tos                          Set the IP type-of-service / traffic class
-                                     value [0-255]. Default: 0
+  -Q  --tos                          Set the full 8-bit IP type-of-service /
+                                     traffic class [0-255]: DSCP*4+ECN (DSCP
+                                     46, ECN 0 = 184). Default: 0
       --dot-server                   Use DoT Server for DNS Parse [dnssb,
                                      aliyun, dnspod, google, cloudflare]
   -g  --language                     Choose the language for displaying [en,

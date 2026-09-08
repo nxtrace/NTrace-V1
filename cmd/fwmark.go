@@ -66,19 +66,15 @@ func validateFWMarkMode(explicit bool, unsupported ...bool) error {
 }
 
 func resolveCLIProbeSource(method trace.Method, cfg trace.Config) (trace.Config, error) {
-	if cfg.FWMarkSet {
-		return trace.PrepareFWMarkConfig(method, cfg)
-	}
-	src, _, err := trace.ResolveConfiguredSrcAddr(cfg.DstIP, cfg.SrcAddr, cfg.SourceDevice)
-	if err != nil {
-		return cfg, err
-	}
+	// Resolve policy-routed sources before the legacy UDP fallback. In particular,
+	// a nonzero TOS may select a different Linux route and source without a mark.
 	normalized, err := trace.NormalizeExplicitSourceConfig(method, cfg)
 	if err != nil {
 		return cfg, err
 	}
-	if normalized.SrcAddr != "" {
-		src = normalized.SrcAddr
+	src, _, err := trace.ResolveConfiguredSrcAddr(normalized.DstIP, normalized.SrcAddr, normalized.SourceDevice)
+	if err != nil {
+		return cfg, err
 	}
 	normalized.SrcAddr = src
 	return normalized, nil
