@@ -4,10 +4,13 @@ package internal
 
 import (
 	"errors"
+	"net"
+	"strings"
 	"testing"
 
 	"github.com/google/gopacket/layers"
 	wd "github.com/xjasonlyu/windivert-go"
+	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/windows"
 )
 
@@ -30,8 +33,10 @@ func TestShouldUseICMPv4RawSend(t *testing.T) {
 	if shouldUseICMPv4RawSend(&layers.IPv4{}) {
 		t.Fatal("zero tos should keep socket send")
 	}
-	if shouldUseICMPv4RawSend(&layers.IPv4{TOS: 46}) {
-		t.Fatal("non-zero tos should keep socket send on Windows ICMPv4")
+	for _, tos := range []uint8{1, 46, 184, 255} {
+		if !shouldUseICMPv4RawSend(&layers.IPv4{TOS: tos}) {
+			t.Fatalf("nonzero TOS=%d must use WinDivert send on Windows ICMPv4", tos)
+		}
 	}
 }
 
@@ -63,5 +68,28 @@ func TestEnsureICMPSendHandlePreservesWrappedWinDivertError(t *testing.T) {
 	}
 	if wrapped.Kind != winDivertErrorDriverMissing {
 		t.Fatalf("wrapped.Kind = %v, want %v", wrapped.Kind, winDivertErrorDriverMissing)
+	}
+}
+
+func TestICMPv4ZeroTOSFailureIsInitializationError(t *testing.T) {
+	conn := closedTOSSocket(t)
+	s := ICMPSpec{IPVersion: 4, icmp: conn, icmp4: ipv4.NewPacketConn(conn)}
+	start, err := s.SendICMP(t.Context(), &layers.IPv4{Version: 4, TTL: 1}, &layers.ICMPv4{}, nil, nil)
+	var setup *InitializationError
+	if !errors.As(err, &setup) || !errors.Is(err, net.ErrClosed) || !strings.Contains(err.Error(), "IPv4 TOS 0") || !start.IsZero() {
+		t.Fatalf("start=%v error=%v, want native zero-TOS initialization failure", start, err)
+	}
+}
+
+func TestICMPv4NonzeroTOSWinDivertFailureIsInitializationError(t *testing.T) {
+	oldCheck := checkWinDivertDLL
+	t.Cleanup(func() { checkWinDivertDLL = oldCheck })
+	cause := wd.Error(windows.ERROR_FILE_NOT_FOUND)
+	checkWinDivertDLL = func() error { return cause }
+	s := ICMPSpec{IPVersion: 4}
+	start, err := s.SendICMP(t.Context(), &layers.IPv4{Version: 4, TOS: 184, TTL: 1}, &layers.ICMPv4{}, nil, nil)
+	var setup *InitializationError
+	if !errors.As(err, &setup) || !errors.Is(err, cause) || !strings.Contains(err.Error(), "Windows ICMPv4 --tos") || !start.IsZero() {
+		t.Fatalf("start=%v error=%v, want WinDivert dependency initialization failure", start, err)
 	}
 }

@@ -87,11 +87,11 @@
     - `--tos` 同样只是在现有路径上设置 `TOS/TrafficClass`。
   - Windows：
     - `TCP/UDP` 的 IPv4/IPv6 一直走 WinDivert raw send。
-    - `ICMPv4` 一直走 socket path（`SetTOS` / `SetTTL`）。
+    - `ICMPv4` 默认或 `--tos 0` 走 socket path（`SetTOS` / `SetTTL`）；非零 TOS 改用 WinDivert 完整报文发送，因为原生路径实测将非零字段发成零。
     - `ICMPv6`：
       - 默认或 `--tos 0`：继续走原生 socket path，只设置 `HopLimit`，保持与 `v1.5.2` 一致。
       - 非零 `--tos`：切到 WinDivert raw send，直接发送完整 `IPv6 + ICMPv6` 报文，因为 Windows 的 `x/net/ipv6.PacketConn` 不能可靠设置 `TrafficClass`。
-    - 因此，Windows 上只有“`ICMPv6` 且 `--tos != 0`”这个组合会额外依赖 WinDivert 发送能力；README 中英两份都已写明。
+    - 因此，Windows amd64 上 ICMPv4/ICMPv6 的 `--tos != 0` 均额外依赖 WinDivert 发送能力；`--icmp-mode 1` 仍仅选择接收后端。其他 Windows 架构未接入此 WinDivert 发送实现。
 
 ### 间隔默认值（分层体系）
 

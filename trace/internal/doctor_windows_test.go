@@ -52,8 +52,8 @@ func TestDoctorWinDivertOpenAlwaysProhibitsInstallation(t *testing.T) {
 			CheckProbeBackend(context.Background(), BackendOptions{
 				Protocol: protocol, IPVersion: family, Source: ip, Target: ip, Port: 443, TOS: 32,
 			})
-			// ICMPv4 may select only sockets without administrator privileges.
-			if (protocol != "icmp" || family == 6) && calls == before {
+			// Nonzero TOS ICMP now requires a WinDivert sender for both families.
+			if calls == before {
 				t.Fatalf("%s/%s did not check WinDivert", protocol, target)
 			}
 		}

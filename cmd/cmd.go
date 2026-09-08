@@ -437,7 +437,7 @@ func buildPayloadSizeHelp() string {
 }
 
 func buildTOSHelp() string {
-	return "Set the IP type-of-service / traffic class value [0-255]"
+	return "Set the full 8-bit IP type-of-service / traffic class [0-255]: DSCP*4+ECN (DSCP 46, ECN 0 = 184)"
 }
 
 func registerTracerouteOutputFlags(parser *argparse.Parser) tracerouteOutputFlags {
@@ -1974,9 +1974,7 @@ func Execute() {
 	)
 	conf.Context = rootCtx
 	conf.FWMark, conf.FWMarkSet = mark, fwmarkSet
-	if fwmarkSet {
-		conf.SrcPort = sourceCfg.SrcPort
-	}
+	conf.SrcPort = sourceCfg.SrcPort
 
 	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode, mtrColumns...) {
 		return

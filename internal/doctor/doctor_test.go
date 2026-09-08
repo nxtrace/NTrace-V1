@@ -216,3 +216,30 @@ func TestRenderBoundariesAndTerminalEscapes(t *testing.T) {
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("closed pipe") }
+
+func TestPolicyRouteSourceSurvivesDoctorNormalization(t *testing.T) {
+	opts, deps := testOptions(), testDependencies()
+	opts.Config.TOS = 184
+	ctx := t.Context()
+	deps.normalize = func(_ trace.Method, cfg trace.Config) (trace.Config, error) {
+		if cfg.Context != ctx {
+			t.Fatal("normalization did not receive the request context")
+		}
+		cfg.SrcAddr = "192.0.2.184"
+		return cfg, nil
+	}
+	deps.source = func(context.Context, net.IP) (string, error) {
+		t.Fatal("ordinary UDP fallback replaced the policy-routed source")
+		return "", nil
+	}
+	deps.route = func(_ context.Context, _ trace.Method, cfg trace.Config) (Route, error) {
+		if cfg.SrcAddr != "192.0.2.184" || cfg.TOS != 184 {
+			t.Fatalf("route received wrong probe configuration: %+v", cfg)
+		}
+		return Route{Interface: "policy0", Source: cfg.SrcAddr}, nil
+	}
+	report := run(ctx, opts, deps)
+	if report.Source != "192.0.2.184" || report.SourceBasis != "route_prediction" || report.ExitCode() != 0 {
+		t.Fatalf("policy-routed source changed: %+v", report)
+	}
+}

@@ -156,3 +156,58 @@ func TestRouteOmitsRandomSourcePort(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteHeaderIncludedProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		target, method string
+		headerIncluded bool
+		protocol       byte
+		ports          bool
+	}{
+		{"192.0.2.9", "udp", true, unix.IPPROTO_RAW, false},
+		{"192.0.2.9", "udp", false, unix.IPPROTO_UDP, true},
+		{"192.0.2.9", "tcp", false, unix.IPPROTO_TCP, true},
+		{"192.0.2.9", "icmp", false, unix.IPPROTO_ICMP, false},
+		{"2001:db8::9", "udp", true, unix.IPPROTO_UDP, true},
+		{"2001:db8::9", "tcp", false, unix.IPPROTO_TCP, true},
+		{"2001:db8::9", "icmp", false, unix.IPPROTO_ICMPV6, false},
+	} {
+		cfg := Request{Method: tc.method, DstIP: net.ParseIP(tc.target), HeaderIncluded: tc.headerIncluded, SrcPort: 40000, DstPort: 443}
+		b, err := RequestBytes(cfg, 1)
+		if tc.headerIncluded && cfg.DstIP.To4() != nil {
+			if err == nil {
+				t.Fatal("IPv4 HDRINCL must use the raw socket source lookup, not an unsupported netlink protocol")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages, err := syscall.ParseNetlinkMessage(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages[0].Header.Type = unix.RTM_NEWROUTE
+		attrs, err := syscall.ParseNetlinkRouteAttr(&messages[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var protocol byte
+		ports := 0
+		for _, attr := range attrs {
+			switch attr.Attr.Type {
+			case unix.RTA_IP_PROTO:
+				protocol = attr.Value[0]
+			case unix.RTA_SPORT, unix.RTA_DPORT:
+				ports++
+			}
+		}
+		wantPorts := 0
+		if tc.ports {
+			wantPorts = 2
+		}
+		if protocol != tc.protocol || ports != wantPorts {
+			t.Fatalf("%+v: kernel protocol=%d ports=%d", tc, protocol, ports)
+		}
+	}
+}

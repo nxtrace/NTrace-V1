@@ -29,3 +29,15 @@ func TestFWMarkSourceConstraints(t *testing.T) {
 		t.Fatal("unmarked path changed", err)
 	}
 }
+
+func TestTOSSourcePreparationPlatformBoundary(t *testing.T) {
+	cfg := Config{TOS: 184}
+	_, err := PrepareProbeSourceConfig(ICMPTrace, cfg)
+	if runtime.GOOS == "linux" {
+		if !IsInitializationError(err) {
+			t.Fatalf("Linux policy route accepted an invalid target: %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("TOS incorrectly acquired the Linux-only fwmark restriction: %v", err)
+	}
+}

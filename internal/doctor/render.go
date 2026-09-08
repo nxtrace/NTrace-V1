@@ -51,6 +51,7 @@ var labels = map[string][2]string{
 	"Socket; WinDivert availability check failed":                              {"Socket；WinDivert 可用性检查失败", "Socket; WinDivert availability check failed"},
 	"Socket alternative checked; normal selection unverified under NO_INSTALL": {"已检查 Socket 备选路径；禁止安装策略下无法确认普通运行的最终选择", "Socket alternative checked; normal selection unverified under NO_INSTALL"},
 	"explicit_source": {"显式源地址", "Explicit source"}, "device_source": {"接口地址选择", "Interface address selection"},
+	"route_prediction":           {"系统按探测条件选择的地址", "Kernel source selection for the probe route"},
 	"socket_prediction":          {"系统为 UDP socket 选择的地址", "Kernel selection for a UDP socket"},
 	"optional":                   {"不构成阻断项", "Non-blocking"},
 	"complete":                   {"必要检查已完成，未发现初始化阻断项。", "Required checks completed without an initialization blocker."},
@@ -66,6 +67,8 @@ var labels = map[string][2]string{
 	"source policy, protocol, ports and TOS are not included in this route query":                        {"本次路由查询未包含源地址策略、协议、端口及 TOS", "Source policy, protocol, ports and TOS are not included in this route query"},
 	"protocol, ports and TOS are not included; --dev selects a source address, not an interface binding": {"本次查询未包含协议、端口及 TOS；设备参数仅用于源地址选择", "Protocol, ports and TOS are not included; --dev selects a source address, not an interface binding"},
 	"source port selected during probing; ECMP prediction may differ":                                    {"源端口在探测时确定，多路径选择可能不同", "Source port selected during probing; ECMP prediction may differ"},
+	"raw socket lookup omits transport ports; ECMP prediction may differ":                                {"原始套接字选路不使用传输层端口，多路径选择可能不同", "Raw socket lookup omits transport ports; ECMP prediction may differ"},
+	"raw socket selected the source; route interface and gateway are unavailable":                        {"原始套接字已选择源地址；出口接口及网关未知", "Raw socket selected the source; route interface and gateway are unavailable"},
 }
 
 func textLabel(key, lang string) string {

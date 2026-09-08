@@ -84,10 +84,10 @@ func RunMTRRaw(ctx context.Context, method Method, cfg Config, opts MTRRawOption
 func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRawOptions, onRecord MTRRawOnRecord) error {
 	normalizeRuntimeConfig(&cfg)
 	cfg.Context = ctx
-	var markErr error
-	cfg, markErr = PrepareFWMarkConfig(method, cfg)
-	if markErr != nil {
-		return markErr
+	var sourceErr error
+	cfg, sourceErr = PrepareProbeSourceConfig(method, cfg)
+	if sourceErr != nil {
+		return sourceErr
 	}
 	roundCfg := cfg
 	roundCfg.NumMeasurements = 1
@@ -147,10 +147,10 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 	defer session.shutdown(nil)
 	normalizeRuntimeConfig(&cfg)
 	cfg.Context = ctx
-	var markErr error
-	cfg, markErr = PrepareFWMarkConfig(method, cfg)
-	if markErr != nil {
-		return markErr
+	var sourceErr error
+	cfg, sourceErr = PrepareProbeSourceConfig(method, cfg)
+	if sourceErr != nil {
+		return sourceErr
 	}
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second

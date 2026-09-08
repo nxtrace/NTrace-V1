@@ -42,6 +42,9 @@ func RequestBytes(cfg Request, seq uint32) ([]byte, error) {
 	if ip == nil {
 		return nil, errors.New("invalid route target")
 	}
+	if family == unix.AF_INET && cfg.HeaderIncluded {
+		return nil, errors.New("IPv4 IP_HDRINCL source selection requires a raw socket; RTM_GETROUTE rejects protocol 255")
+	}
 	body := make([]byte, 12)
 	body[0], body[1], body[3] = family, byte(len(ip)*8), byte(cfg.TOS)
 	body = append(body, routeAttr(unix.RTA_DST, ip)...)
@@ -108,6 +111,12 @@ func Query(ctx context.Context, cfg Request) (Route, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return r, err
+	}
+	if cfg.DstIP.To16() == nil {
+		return r, errors.New("invalid route target")
+	}
+	if cfg.HeaderIncluded && cfg.DstIP.To4() != nil {
+		return queryRawSource(ctx, cfg)
 	}
 	b, err := RequestBytes(cfg, 1)
 	if err != nil {

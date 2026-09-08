@@ -333,7 +333,7 @@ All three builds support `--doctor`. Options are limited to `--ipv4`/`--ipv6`, `
 
 The default is ICMP, Chinese text, and 5000 ms per network check. Multiple DNS candidates are listed; the first matching the requested family is selected without prompting. Target DoT failures do not fall back to system DNS. A failed check does not prevent independent checks from completing. The report goes to stdout; usage and output-write errors go to stderr. Reports include target/source/interface addresses, but no token or proxy credentials.
 
-Route queries use Linux netlink, macOS routing sockets, and Windows `GetBestRoute2`. Unavailable information remains unknown. macOS/Windows route predictions cannot express all protocol, port, source-policy or TOS constraints; the report states these limits. Opening a socket or capture filter does not establish actual egress, successful packet delivery, or TOS application. Network waits have deadlines; synchronous native initialization calls have no forced-cancellation guarantee.
+Route queries use Linux netlink, macOS routing sockets, and Windows `GetBestRoute2`. Linux IPv4 UDP instead selects its source with a raw socket `connect` without transmitting: netlink cannot query its kernel protocol 255. This exposes the source only; `--doctor` leaves the route interface and gateway unknown. Unavailable information remains unknown. macOS/Windows route predictions cannot express all protocol, port, source-policy or TOS constraints; the report states these limits. Opening a socket or capture filter does not establish actual egress, successful packet delivery, or TOS application. Network waits have deadlines; synchronous native initialization calls have no forced-cancellation guarantee.
 
 On Windows, `--dev` selects a source address; it does not prove device binding. Every doctor WinDivert open uses `NO_INSTALL`: it does not unpack/install a driver or run `--init`. A not-yet-installed driver is reported as unverified, since ordinary tracing may install it. Socket alternatives are reported separately. The reported backend follows the build architecture; WinDivert probe paths are currently compiled for Windows amd64.
 
@@ -392,7 +392,7 @@ The routing visualization function requires the geographical coordinates of each
 - **For Administrator Mode:**  
   **TCP/UDP mode** requires `WinDivert`.  
   **ICMP mode** supports `1=Socket` and `2=WinDivert` (`0=Auto`). If running in Socket mode, the firewall must allow `ICMP/ICMPv6`.  
-  On `Windows`, `ICMPv6` without `--tos` (or with `--tos 0`) keeps using the native Socket send path. A non-zero `ICMPv6 --tos` requires `WinDivert` send support in addition to administrator privilege.  
+  On `Windows amd64`, ICMPv4 and ICMPv6 without `--tos` (or with `--tos 0`) keep using the native Socket send path. Nonzero ICMP `--tos` uses `WinDivert` to preserve the complete field and requires administrator privilege, including when `--icmp-mode 1` selects socket reception. Native Windows ICMPv4 was observed sending zero for every tested nonzero TOS value.
   `WinDivert` can be automatically configured using the `--init` parameter, which extracts the runtime to the executable directory.
 
 #### `NextTrace` now supports quick testing, and friends who have a one-time backhaul routing test requirement can use it
@@ -418,11 +418,21 @@ nexttrace --file /path/to/your/iplist.txt
 
 #### `NextTrace` already supports route tracing for specified Network Devices
 
+### TOS / IPv6 Traffic Class (`-Q`, `--tos`)
+
+`--tos` sets the complete 8-bit IPv4 TOS / IPv6 Traffic Class field, from `0` to `255`, defaulting to `0`. Compute it as `DSCP * 4 + ECN`: DSCP 46 with ECN 0 is `--tos 184`; `--tos 46` still means the raw field value 46 (DSCP 11, ECN 2). The field is part of the probe IP header; routing and priority depend on network policy.
+
+Linux and macOS senders use native socket options or complete IP headers. On Linux, nonzero TOS selects the automatic source address using the corresponding route, including combinations with `--fwmark`. Explicit `--source` and `--dev` remain constraints, and source selection is local to each session. Route queries match the raw socket lookup and omit transport ports serialized in user space. Source-selection or TOS-configuration failures terminate probing instead of becoming MTR loss or falling back to a default field value.
+
+Existing traceroute, MTR, Fast Trace, file-target and Web/API/MCP probe entrypoints support TOS. DNS/RDNS, GeoIP and API helper traffic do not inherit it. Standalone MTU and Globalping do not support this option. The JSON `tos` field records the requested configuration, not a packet-capture observation.
+
+BSD and Android expose the native options but have not completed this native packet-capture acceptance; probe permissions and system restrictions still apply. The Windows WinDivert send backend is currently compiled only for amd64, so its support does not imply Windows arm64 support.
+
 ### Linux policy routing (`--fwmark`)
 
 `--fwmark 256` or `--fwmark 0x100` sets a 32-bit socket mark on local traceroute and MTR probes. It supports ICMP/TCP/UDP over IPv4/IPv6 in all applicable builds. Configure matching Linux `ip rule` and route tables separately; NextTrace does not edit them. The same mark need not change the route when no rule selects a different path.
 
-Automatic source selection uses the marked route. Explicit `--source` and `--dev` remain constraints; a mark does not override them. Marked sessions do not use the legacy process-wide source cache. The query includes protocol and TOS, but omits TCP/UDP ports to match the native raw sockets: their kernel route lookup does not see the transport headers serialized in user space. Later policy changes and ECMP can still affect path selection.
+Automatic source selection uses the marked route. Explicit `--source` and `--dev` remain constraints; a mark does not override them. Marked sessions do not use the legacy process-wide source cache. The query includes the kernel send protocol and TOS (IPv4 UDP with IP_HDRINCL uses protocol 255), but omits TCP/UDP ports to match the native raw sockets: their kernel route lookup does not see the transport headers serialized in user space. Later policy changes and ECMP can still affect path selection.
 
 Values range from `0` to `4294967295`; decimal and `0x` hexadecimal are accepted, without masks. Omission leaves socket marking untouched; explicit `0` sets zero and still requires permission. Linux requires `CAP_NET_ADMIN`, or `CAP_NET_RAW` on Linux 5.17 and newer. Mark initialization failure terminates probing rather than falling back to unmarked traffic.
 
@@ -577,8 +587,8 @@ nexttrace --psize 1024 example.com
 # Randomize each probe packet size up to 1500 bytes
 nexttrace --psize -1500 example.com
 
-# Set the TOS / traffic class field
-nexttrace -Q 46 example.com
+# Set DSCP 46 with ECN 0 (complete TOS / traffic class value 184)
+nexttrace -Q 184 example.com
 
 # Feature: print Route-Path diagram
 # Route-Path diagram example:
@@ -608,7 +618,7 @@ export NO_COLOR=1
 | `--ttl-time` | Gap between TTL groups in traceroute; per-hop interval in MTR | traceroute: `300ms`; MTR: `1000ms` when omitted | Lower to speed up; raise on remote/rate-limited paths |
 | `--timeout` | Per-probe timeout | `1000ms` | Raise to `2000-3000ms` for intercontinental or high-loss paths |
 | `--psize` | Probe packet size | Protocol/IP-family minimum | Inclusive IP + probe headers; negative values randomize each probe up to `abs(value)`; sizes above the egress/path MTU may fragment on wire |
-| `-Q`, `--tos` | IP TOS / traffic class | `0` | Set DSCP/TOS style marking in the IP header; on Windows only `ICMPv6` with a non-zero value requires `WinDivert` |
+| `-Q`, `--tos` | IP TOS / traffic class | `0` | Set the full 8-bit IP field (DSCP*4+ECN); nonzero ICMP on Windows amd64 requires `WinDivert` |
 
 These probe knobs are CLI-only today; `nt_config.yaml` does not yet store them. If you want reusable profiles, keep them in shell aliases or small wrapper scripts.
 
@@ -1061,8 +1071,9 @@ Arguments:
                                      and IP family; raise for MTU or
                                      large-packet testing. Negative values
                                      randomize each probe up to abs(value)
-  -Q  --tos                          Set the IP type-of-service / traffic class
-                                     value [0-255]. Default: 0
+  -Q  --tos                          Set the full 8-bit IP type-of-service /
+                                     traffic class [0-255]: DSCP*4+ECN (DSCP
+                                     46, ECN 0 = 184). Default: 0
       --dot-server                   Use DoT Server for DNS Parse [dnssb,
                                      aliyun, dnspod, google, cloudflare]
   -g  --language                     Choose the language for displaying [en,

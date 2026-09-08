@@ -14,6 +14,9 @@ type Request struct {
 	SrcPort, DstPort, TOS int
 	FWMark                uint32
 	FWMarkSet             bool
+	// HeaderIncluded selects the Linux IPv4 IP_HDRINCL route lookup, whose
+	// kernel protocol is IPPROTO_RAW regardless of the serialized IP header.
+	HeaderIncluded bool
 }
 
 type Route struct {
