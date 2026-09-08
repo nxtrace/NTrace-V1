@@ -315,7 +315,8 @@ type mtrICMPEngine struct {
 	// Per-probe notification channels for ProbeTTL（受 mu 保护）。
 	probeNotify map[int]chan struct{} // seq → done chan
 
-	// sendMu serializes seq allocation + rotation check in concurrent ProbeTTL calls.
+	// sendMu orders sequence allocation, registration and sending before a
+	// sequence-wrap rotation. Reply waiting and Close must not hold it.
 	sendMu sync.Mutex
 }
 
@@ -1002,7 +1003,8 @@ func (p *mtrFallbackProber) close() {}
 // ProbeTTL sends one ICMP echo at the given TTL and blocks until a response
 // arrives, the timeout elapses, or ctx is cancelled.
 func (e *mtrICMPEngine) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, error) {
-	// Serialize seq allocation + rotation check across concurrent ProbeTTL calls.
+	// Exclude sequence-wrap rotation until registration, sending and bookkeeping
+	// finish. Close stays independent so cancellation can interrupt socket I/O.
 	e.sendMu.Lock()
 	if seqWillWrap(e.seqCounter.Load(), 1) {
 		if err := e.rotateEngine(ctx); err != nil {
@@ -1011,7 +1013,6 @@ func (e *mtrICMPEngine) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, 
 		}
 	}
 	seq := int(e.seqCounter.Add(1) & 0xFFFF)
-	e.sendMu.Unlock()
 
 	curRound := e.roundID.Load()
 	done := make(chan struct{})
@@ -1030,6 +1031,7 @@ func (e *mtrICMPEngine) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, 
 		delete(e.sentAt, seq)
 		e.closeProbeNotifyLocked(seq)
 		e.mu.Unlock()
+		e.sendMu.Unlock()
 		if ctx.Err() != nil {
 			return mtrProbeResult{TTL: ttl}, context.Cause(ctx)
 		}
@@ -1048,6 +1050,7 @@ func (e *mtrICMPEngine) ProbeTTL(ctx context.Context, ttl int) (mtrProbeResult, 
 		e.sentAt[seq] = meta
 	}
 	e.mu.Unlock()
+	e.sendMu.Unlock()
 
 	timeout := e.config.Timeout
 	if timeout <= 0 {
