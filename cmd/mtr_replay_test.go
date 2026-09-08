@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -65,7 +66,7 @@ func TestMTRReplaySeekRebuildAndVirtualHistory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer r.Close()
+			defer func() { _ = r.Close() }()
 			final, err := readMTRReplay(t.Context(), r, time.Duration(1<<63-1))
 			if err != nil {
 				t.Fatal(err)
@@ -143,6 +144,13 @@ func TestMTRReplayOfflineCLIAndPartialResult(t *testing.T) {
 		if strings.Contains(diag.String(), "Incomplete") == complete {
 			t.Fatalf("diag=%s", diag.String())
 		}
+		canonicalJSON := append([]byte(nil), out.Bytes()...)
+		out.Reset()
+		diag.Reset()
+		_, code = maybeRunMTRReplayMode([]string{"--mtr-replay", path, "-j"}, &out, &diag)
+		if code != wantCode || !bytes.Equal(canonicalJSON, out.Bytes()) {
+			t.Fatalf("JSON alias differs: code=%d out=%s diag=%s", code, out.String(), diag.String())
+		}
 		out.Reset()
 		diag.Reset()
 		_, code = maybeRunMTRReplayMode([]string{"--mtr-replay", path, "-w", "--mtr-columns", "received,avg"}, &out, &diag)
@@ -169,11 +177,40 @@ func TestMTRReplayArgumentsAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := readMTRReplay(ctx, r, time.Second); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel err=%v", err)
+	}
+}
+
+type replayDelayedWriteFailure struct{ calls int }
+
+func (w *replayDelayedWriteFailure) Write(data []byte) (int, error) {
+	w.calls++
+	if w.calls == 1 {
+		return len(data), nil
+	}
+	return 0, io.ErrClosedPipe
+}
+
+func TestMTRReplayHelpVersionWriteFailures(t *testing.T) {
+	for _, flag := range []string{"--help", "--version"} {
+		for _, short := range []bool{false, true} {
+			var diag bytes.Buffer
+			writer := &failingMTRWriter{short: short}
+			handled, code := maybeRunMTRReplayMode([]string{"--mtr-replay", "unused", flag}, writer, &diag)
+			if !handled || code != 1 || writer.calls != 1 || diag.Len() == 0 {
+				t.Fatalf("flag=%s short=%v handled=%v code=%d writes=%d diag=%s", flag, short, handled, code, writer.calls, diag.String())
+			}
+		}
+	}
+	var diag bytes.Buffer
+	writer := &replayDelayedWriteFailure{}
+	_, code := maybeRunMTRReplayMode([]string{"--mtr-replay", "unused", "--help"}, writer, &diag)
+	if code != 1 || writer.calls != 2 || diag.Len() == 0 {
+		t.Fatalf("PrintDefaults error lost: code=%d writes=%d diag=%s", code, writer.calls, diag.String())
 	}
 }
 
@@ -301,7 +338,7 @@ func TestMTRReplayLongSessionStreamingSeek(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	started = time.Now()
 	final, err := readMTRReplay(t.Context(), r, time.Duration(1<<63-1))
 	if err != nil {

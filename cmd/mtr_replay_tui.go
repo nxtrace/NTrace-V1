@@ -93,10 +93,11 @@ func runMTRReplayTUI(parent context.Context, reader *mtrsession.Reader, current 
 		h.ReplayEditor = ui.replayEditor
 		editing := h.ColumnEditor.Active || h.ReplayEditor.Active
 		ui.columnsMu.Unlock()
+		// The sink retains the first error; render returns it after the frame.
 		if editing {
-			fmt.Fprint(output, "\033[?2004h")
+			_, _ = fmt.Fprint(output, "\033[?2004h")
 		} else {
-			fmt.Fprint(output, "\033[?2004l")
+			_, _ = fmt.Fprint(output, "\033[?2004l")
 		}
 		snapshot := current.state.Snapshot()
 		h.Iteration = snapshot.Iteration

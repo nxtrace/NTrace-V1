@@ -699,7 +699,7 @@ ntr --mtr-columns received 1.1.1.1
 
 `--mtr-columns` accepts any nonempty selection of `loss,snt,received,last,avg,best,wrst,stdev`, in the supplied order. Names ignore case and surrounding spaces; unknown names, duplicates and empty entries are errors. `received` is displayed as `Rcv`. The default remains `Loss%, Snt, Last, Avg, Best, Wrst, StDev`.
 
-The option applies to TUI, non-TTY tables and report/wide output. It does not enable MTR: full/tiny require `-t`, `-r` or `-w`; ntr uses its default MTR mode. RAW, JSON, traditional traceroute and standalone modes reject it before initialization. Custom TUI columns keep complete numbers and at least 8 Host cells; a narrow terminal shows a notice until widened or fewer columns are selected.
+The option applies to TUI, non-TTY tables and report/wide output, including offline replay text output. It does not enable MTR: full/tiny require `-t`, `-r` or `-w`; ntr uses its default MTR mode. RAW, JSON, traditional traceroute and other standalone modes reject it before initialization. Custom TUI columns keep complete numbers and at least 8 Host cells; a narrow terminal shows a notice until widened or fewer columns are selected.
 
 Press `o/O` to edit the current column codes: `L=Loss S=Snt R=Received N=Last A=Avg B=Best W=Wrst V=StDev`. Codes ignore case; spaces separate codes. Enter validates and applies, Esc cancels, Backspace deletes and Ctrl-U clears. Invalid or duplicate codes and an empty draft keep the editor open. Bracketed paste converts newlines to spaces without submitting. The draft is limited to 256 ASCII characters.
 

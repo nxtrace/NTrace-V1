@@ -690,7 +690,7 @@ ntr --mtr-columns received 1.1.1.1
 
 `--mtr-columns` 支持 `loss,snt,received,last,avg,best,wrst,stdev` 的任意非空子集及顺序，忽略大小写与列名两端空格；未知列、重复列、空项报错。`received` 显示为 `Rcv`。默认仍为 `Loss%、Snt、Last、Avg、Best、Wrst、StDev`。
 
-参数适用于 TUI、非 TTY 表格和 report/wide，不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认 MTR 模式。RAW、JSON、传统 traceroute 和独立模式会在初始化前拒绝该参数。自定义 TUI 保留完整数字及至少 8 格 Host；空间不足时显示提示，加宽终端或减少列后恢复。
+参数适用于 TUI、非 TTY 表格和 report/wide，也支持离线回放的文字输出；不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认 MTR 模式。RAW、JSON、传统 traceroute 和其他独立模式会在初始化前拒绝该参数。自定义 TUI 保留完整数字及至少 8 格 Host；空间不足时显示提示，加宽终端或减少列后恢复。
 
 按 `o/O` 编辑当前字段码：`L=Loss S=Snt R=Received N=Last A=Avg B=Best W=Wrst V=StDev`。输入不区分大小写，空格用于分隔。Enter 校验并应用，Esc 取消，Backspace 删除末尾字符，Ctrl-U 清空。空串、未知码和重复码保留编辑状态并显示错误。括号粘贴中的换行转为空格，不自动提交；草稿最多 256 个 ASCII 字符。
 

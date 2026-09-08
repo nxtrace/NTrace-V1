@@ -112,7 +112,7 @@ func (u *mtrUI) editReplayTime(b byte, paste bool) {
 				return
 			}
 			if at > u.replay.duration {
-				e.Error = "Time exceeds recording duration"
+				e.Error = "time exceeds recording duration"
 				return
 			}
 			e.Active = false
@@ -123,7 +123,7 @@ func (u *mtrUI) editReplayTime(b byte, paste bool) {
 	}
 	if b >= 32 && b <= 126 {
 		if len(e.Draft) >= 32 {
-			e.Error = "Maximum 32 characters"
+			e.Error = "maximum 32 characters"
 			return
 		}
 		e.Draft += string(b)
@@ -132,7 +132,7 @@ func (u *mtrUI) editReplayTime(b byte, paste bool) {
 }
 
 func parseMTRReplayTime(value string) (time.Duration, error) {
-	invalid := errors.New("Use HH:MM:SS[.mmm]")
+	invalid := errors.New("use HH:MM:SS[.mmm]")
 	parts := strings.Split(strings.TrimSpace(value), ":")
 	if len(parts) != 3 || len(parts[0]) < 2 || len(parts[1]) != 2 {
 		return 0, invalid

@@ -127,7 +127,7 @@ func readMTRRecordingFixture(t *testing.T, path string) []mtrsession.Record {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	decoder := json.NewDecoder(f)
 	var records []mtrsession.Record
 	for {

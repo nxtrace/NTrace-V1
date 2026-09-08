@@ -73,7 +73,9 @@ func maybeRunMTRReplayMode(args []string, stdout, stderr io.Writer) (bool, int) 
 	for _, name := range []string{"y", "ipinfo"} {
 		fs.IntVar(&o.hostMode, name, 0, "Initial host display mode (0-4)")
 	}
-	fs.BoolVar(&o.json, "json", false, "Print the offline replay result as JSON")
+	for _, name := range []string{"j", "json"} {
+		fs.BoolVar(&o.json, name, false, "Print the offline replay result as JSON")
+	}
 	fs.BoolVar(&o.showIPs, "show-ips", false, "Show PTR and IP together")
 	fs.StringVar(&o.columns, "mtr-columns", "", "Select text statistic columns")
 	ordered, err := doctorArgs(fs, args)
@@ -81,31 +83,39 @@ func maybeRunMTRReplayMode(args []string, stdout, stderr io.Writer) (bool, int) 
 		err = fs.Parse(ordered)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "Invalid replay arguments; use --mtr-replay FILE --help.")
+		_, _ = fmt.Fprintln(stderr, "Invalid replay arguments; use --mtr-replay FILE --help.")
 		return true, 2
 	}
-	if help {
-		fmt.Fprintf(stdout, "Usage: %s --mtr-replay FILE [--report|--wide|--json]\nOffline only. J: time, Space: play, P: pause, R: rewind, Q: quit.\n", appBinName)
-		fs.SetOutput(stdout)
-		fs.PrintDefaults()
-		return true, 0
-	}
-	if version {
-		fmt.Fprintln(stdout, config.Version, config.CommitID)
-		return true, 0
+	if help || version {
+		return true, runMTRCLIWithSignals(func(context.Context) int {
+			output := &mtrReplayOutput{w: stdout}
+			// The sink retains errors, including writes hidden by PrintDefaults.
+			if help {
+				_, _ = fmt.Fprintf(output, "Usage: %s --mtr-replay FILE [--report|--wide|--json]\nOffline only. J: time, Space: play, P: pause, R: rewind, Q: quit.\n", appBinName)
+				fs.SetOutput(output)
+				fs.PrintDefaults()
+			} else {
+				_, _ = fmt.Fprintln(output, config.Version, config.CommitID)
+			}
+			if output.err != nil {
+				_, _ = fmt.Fprintln(stderr, output.err)
+				return 1
+			}
+			return 0
+		})
 	}
 	fs.Visit(func(f *flag.Flag) { o.explicit[f.Name] = true })
 	if fs.NArg() != 0 || strings.TrimSpace(o.file) == "" || o.file == "-" {
-		fmt.Fprintln(stderr, "Replay requires one --mtr-replay file and no target")
+		_, _ = fmt.Fprintln(stderr, "Replay requires one --mtr-replay file and no target")
 		return true, 2
 	}
 	if o.hostMode < 0 || o.hostMode > 4 || (o.language != "" && o.language != "cn" && o.language != "en") || (o.json && o.explicit["mtr-columns"]) {
-		fmt.Fprintln(stderr, "Invalid replay display options")
+		_, _ = fmt.Fprintln(stderr, "Invalid replay display options")
 		return true, 2
 	}
 	if o.explicit["mtr-columns"] {
 		if _, err = printer.ParseMTRColumns(o.columns, false); err != nil {
-			fmt.Fprintln(stderr, err)
+			_, _ = fmt.Fprintln(stderr, err)
 			return true, 2
 		}
 	}
@@ -122,8 +132,8 @@ func maybeRunMTRReplayMode(args []string, stdout, stderr io.Writer) (bool, int) 
 			return 130
 		}
 		if err != nil {
-			if !errors.Is(err, errMTRReplayIncomplete) {
-				fmt.Fprintln(stderr, sanitizeMTRReplayText(err.Error()))
+			if err != errMTRReplayIncomplete {
+				_, _ = fmt.Fprintln(stderr, sanitizeMTRReplayText(err.Error()))
 			}
 			return 1
 		}
@@ -138,9 +148,13 @@ func runMTRReplay(ctx context.Context, opts mtrReplayOptions, stdout, stderr io.
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() {
+		if closeErr := r.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	if !opts.json && !opts.report && !opts.wide && stdout == os.Stdout && CheckTTY(int(os.Stdin.Fd()), int(os.Stdout.Fd())) {
-		fmt.Fprintln(stderr, "Loading recording...")
+		_, _ = fmt.Fprintln(stderr, "Loading recording...")
 	}
 	loaded, err := readMTRReplay(ctx, r, time.Duration(1<<63-1))
 	if err != nil {
@@ -154,7 +168,7 @@ func runMTRReplay(ctx context.Context, opts mtrReplayOptions, stdout, stderr io.
 	}()
 	duration := loaded.cursor
 	if !complete {
-		fmt.Fprintln(stderr, "Incomplete recording: displaying all complete events.")
+		_, _ = fmt.Fprintln(stderr, "Incomplete recording: displaying all complete events.")
 	}
 	if opts.json {
 		snap := loaded.state.Snapshot()
