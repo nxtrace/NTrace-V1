@@ -129,7 +129,7 @@ func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.W
 		if err == nil {
 			display.sourceIP = resolveSrcIP(opts.Config)
 		}
-		if startErr := recording.start(out, display); startErr != nil {
+		if startErr := recording.start(out, display); startErr != nil && err == nil {
 			err, stage = startErr, "record"
 		}
 	}
@@ -158,7 +158,7 @@ func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.W
 		cleanup()
 	}
 	if recording != nil {
-		if recordErr := recording.finish(err, stage); recordErr != nil {
+		if recordErr := recording.finish(err, stage); recordErr != nil && err == nil {
 			err, stage = recordErr, "record"
 		}
 	}
@@ -187,8 +187,11 @@ func runMTRJSONStream(ctx context.Context, opts mtrJSONOptions, out *mtrJSONOutp
 		out.probe(record)
 		flushPath()
 	})
-	// A max-hops conclusion can be emitted after the last probe callback.
-	flushPath()
+	// Only max-hops can conclude without a following probe callback. A recording
+	// failure may drop the causal probe for any other pending path change.
+	if pending != nil && pending.Reason == trace.StopReasonMaxHops {
+		flushPath()
+	}
 	return err
 }
 
@@ -238,12 +241,8 @@ func normalizeMTRJSONOptions(opts *mtrJSONOptions, stderr io.Writer) error {
 		cfg.ParallelRequests = 1
 	}
 	applyDefaultPort(&cfg.DstPort, opts.Method == trace.UDPTrace)
-	minimumSourcePort := 0
-	if opts.HumanOutput {
-		minimumSourcePort = -1
-	}
-	if opts.Method != trace.ICMPTrace && (cfg.SrcPort < minimumSourcePort || cfg.SrcPort > 65535 || cfg.DstPort < 1 || cfg.DstPort > 65535) {
-		return errors.New("probe ports must be between 1 and 65535 (source port 0 selects automatically)")
+	if opts.Method != trace.ICMPTrace && (cfg.SrcPort < -1 || cfg.SrcPort > 65535 || cfg.DstPort < 1 || cfg.DstPort > 65535) {
+		return errors.New("probe ports must be between 1 and 65535 (source port 0 selects automatically, -1 selects randomly per probe)")
 	}
 	if cfg.ICMPMode <= 0 && util.EnvICMPMode > 0 {
 		cfg.ICMPMode = util.EnvICMPMode

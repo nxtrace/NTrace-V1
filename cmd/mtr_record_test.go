@@ -246,3 +246,32 @@ func TestMTRRecordCLIRejectsModesBeforeNetwork(t *testing.T) {
 		}
 	}
 }
+
+func TestMTRRecordKeepsResolutionErrorWhenStartFails(t *testing.T) {
+	old := domainLookupFn
+	t.Cleanup(func() { domainLookupFn = old })
+	domainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
+		return nil, errors.New("original resolution failure")
+	}
+	for _, human := range []bool{false, true} {
+		opts := testMTRJSONOptions()
+		opts.Target = strings.Repeat("x", mtrsession.MaxLineBytes+1)
+		opts.RecordPath = filepath.Join(t.TempDir(), "failed.jsonl")
+		var stdout, stderr bytes.Buffer
+		var code int
+		if human {
+			code = runMTRRecorded(t.Context(), opts, effectiveMTRModes{mtr: true}, false, 0, "", nil, &stderr)
+		} else {
+			code = runMTRJSON(t.Context(), opts, &stdout, &stderr)
+		}
+		if code != 1 || !strings.Contains(stderr.String(), "original resolution failure") {
+			t.Fatalf("human=%v code=%d stderr=%s", human, code, stderr.String())
+		}
+		if !human {
+			events := decodeMTRJSON(t, stdout.Bytes())
+			if !bytes.Contains(events[len(events)-1]["error"], []byte(`"stage":"resolve"`)) {
+				t.Fatal("original error stage lost")
+			}
+		}
+	}
+}

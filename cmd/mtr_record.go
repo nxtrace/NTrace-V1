@@ -157,7 +157,7 @@ func runMTRRecorded(ctx context.Context, opts mtrJSONOptions, modes effectiveMTR
 	if err == nil {
 		display.sourceIP = resolveSrcIP(opts.Config)
 	}
-	if startErr := recording.start(out, display); startErr != nil {
+	if startErr := recording.start(out, display); startErr != nil && err == nil {
 		err, stage = startErr, "record"
 	}
 	if err == nil {
@@ -180,7 +180,7 @@ func runMTRRecorded(ctx context.Context, opts mtrJSONOptions, modes effectiveMTR
 	if cleanup != nil {
 		cleanup()
 	}
-	if finishErr := recording.finish(err, stage); finishErr != nil {
+	if finishErr := recording.finish(err, stage); finishErr != nil && err == nil {
 		err = fmt.Errorf("write MTR recording: %w", finishErr)
 	}
 	var interrupted *mtrJSONSignal

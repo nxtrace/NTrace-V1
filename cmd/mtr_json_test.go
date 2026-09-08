@@ -309,8 +309,8 @@ func TestMTRJSONRunnerUsesFullConfigAndPreservesSnapshot(t *testing.T) {
 	}
 
 	runMTRJSONRawFn = func(ctx context.Context, _ trace.Method, _ trace.Config, opts trace.MTRRawOptions, callback trace.MTRRawOnRecord) error {
-		callback(trace.MTRRawRecord{TTL: 1, Success: true, IP: "192.0.2.1"})
 		opts.OnPathEnd(nil)
+		callback(trace.MTRRawRecord{TTL: 1, Success: true, IP: "192.0.2.1"})
 		return &mtrJSONSignal{syscall.SIGTERM}
 	}
 	stdout.Reset()
@@ -491,5 +491,65 @@ func TestMTRJSONCLIProcess(t *testing.T) {
 				t.Fatal("FULL fields missing")
 			}
 		})
+	}
+}
+
+func TestMTRJSONStreamDropsPathWithoutCausalProbe(t *testing.T) {
+	oldRaw := runMTRJSONRawFn
+	t.Cleanup(func() { runMTRJSONRawFn = oldRaw })
+	for _, reason := range []string{trace.StopReasonDestination, trace.StopReasonUnreachable, trace.StopReasonMaxHops} {
+		t.Run(reason, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(t.Context())
+			defer cancel(nil)
+			var stdout bytes.Buffer
+			out := newMTRJSONOutput(&stdout, true, "target", trace.ICMPTrace, cancel)
+			out.startStream()
+			recordErr := errors.New("recording failed")
+			runMTRJSONRawFn = func(_ context.Context, _ trace.Method, _ trace.Config, opts trace.MTRRawOptions, cb trace.MTRRawOnRecord) error {
+				cb(trace.MTRRawRecord{TTL: 1, IP: "192.0.2.1"})
+				opts.OnPathEnd(&trace.StopReason{Hop: 2, Reason: reason})
+				return recordErr
+			}
+			err := runMTRJSONStream(ctx, testMTRJSONOptions(), out)
+			if !errors.Is(err, recordErr) {
+				t.Fatal(err)
+			}
+			out.finish(err, "probe", io.Discard)
+			events := decodeMTRJSON(t, stdout.Bytes())
+			paths := 0
+			for _, event := range events {
+				if string(event["type"]) == `"path_end"` {
+					paths++
+				}
+			}
+			want := 0
+			if reason == trace.StopReasonMaxHops {
+				want = 1
+			}
+			if paths != want {
+				t.Fatalf("paths=%d want=%d: %s", paths, want, stdout.String())
+			}
+			if want == 0 && string(events[len(events)-1]["path_end"]) != "null" {
+				t.Fatalf("dropped path leaked into end: %s", stdout.String())
+			}
+		})
+	}
+}
+
+func TestMTRJSONSourcePortRange(t *testing.T) {
+	for _, method := range []trace.Method{trace.TCPTrace, trace.UDPTrace} {
+		for _, port := range []int{-2, -1, 0, 1, 65535, 65536} {
+			for _, human := range []bool{false, true} {
+				opts := testMTRJSONOptions()
+				opts.Method, opts.Config.SrcPort, opts.HumanOutput = method, port, human
+				err := normalizeMTRJSONOptions(&opts, io.Discard)
+				if (err == nil) != (port >= -1 && port <= 65535) {
+					t.Fatalf("method=%s port=%d human=%v: %v", method, port, human, err)
+				}
+				if opts.Config.SrcPort != port {
+					t.Fatal("source port changed")
+				}
+			}
+		}
 	}
 }
