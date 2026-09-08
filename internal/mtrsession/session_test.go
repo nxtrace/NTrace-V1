@@ -187,6 +187,9 @@ func TestRejectInvalidRecordContract(t *testing.T) {
 		{"missing-probe", 1, func(r *Record) { r.Probe = nil }},
 		{"bad-generation", 1, func(r *Record) { r.Generation = 1 }},
 		{"missing-timestamp", 1, func(r *Record) { r.Timestamp = time.Time{} }},
+		{"negative-probe-age", 1, func(r *Record) { age := int64(-1); r.ProbeAgeNS = &age }},
+		{"probe-age-on-start", 0, func(r *Record) { age := int64(0); r.ProbeAgeNS = &age }},
+		{"probe-age-on-end", 2, func(r *Record) { age := int64(0); r.ProbeAgeNS = &age }},
 		{"unexpected-header", 1, func(r *Record) { r.Session = original[0].Session }},
 		{"missing-end-payload", 2, func(r *Record) { r.End = nil }},
 	}
@@ -443,5 +446,85 @@ func TestReaderRejectsDirectory(t *testing.T) {
 	if r, err := OpenReader(t.TempDir()); err == nil {
 		_ = r.Close()
 		t.Fatal("accepted directory")
+	}
+}
+
+func TestWriterProbeAgePreservesMonotonicTime(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		t.Run(map[bool]string{false: "event-time", true: "fallback-time"}[fallback], func(t *testing.T) {
+			f := &failingFile{}
+			w := &Writer{file: f}
+			completed := time.Now().Add(-time.Second)
+			applied := time.Now()
+			s := testSession()
+			s.StartedAt = completed.Add(-time.Second)
+			if err := w.Start(s); err != nil {
+				t.Fatal(err)
+			}
+			event := testProbe(completed)
+			event.At = applied
+			if fallback {
+				event.At = time.Time{}
+			}
+			if err := w.Event(event); err != nil {
+				t.Fatal(err)
+			}
+			after := time.Now()
+			lines := bytes.Split(f.Bytes(), []byte{'\n'})
+			var record Record
+			if err := json.Unmarshal(lines[1], &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.ProbeAgeNS == nil {
+				t.Fatal("probe age was omitted")
+			}
+			want := int64(applied.Sub(completed))
+			if fallback {
+				if *record.ProbeAgeNS < want || *record.ProbeAgeNS > int64(after.Sub(completed)) {
+					t.Fatalf("fallback age out of bounds: %d", *record.ProbeAgeNS)
+				}
+			} else if *record.ProbeAgeNS != want {
+				t.Fatalf("age = %d, want %d", *record.ProbeAgeNS, want)
+			}
+		})
+	}
+}
+
+func TestReaderProbeAgeIndependentOfWallClock(t *testing.T) {
+	original, _, err := readRecords(t, writeFixture(t, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, shift := range []time.Duration{-24 * time.Hour, 24 * time.Hour} {
+		for _, legacy := range []bool{false, true} {
+			records := append([]Record(nil), original...)
+			records[1].Timestamp = records[1].Probe.CompletedAt.Add(shift)
+			age := int64(50 * time.Millisecond)
+			records[1].ProbeAgeNS = &age
+			if legacy {
+				records[1].ProbeAgeNS = nil
+			}
+			var data bytes.Buffer
+			for _, record := range records {
+				if err := json.NewEncoder(&data).Encode(record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(t.TempDir(), "wall-clock.session")
+			if err := os.WriteFile(path, data.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, incomplete, err := readRecords(t, path)
+			if err != nil || incomplete || len(got) != 3 {
+				t.Fatalf("shift=%v legacy=%v err=%v", shift, legacy, err)
+			}
+			if legacy {
+				if got[1].ProbeAgeNS != nil {
+					t.Fatal("invented an age for an older record")
+				}
+			} else if got[1].ProbeAgeNS == nil || *got[1].ProbeAgeNS != age {
+				t.Fatal("stored probe age was changed by wall-clock timestamps")
+			}
+		}
 	}
 }

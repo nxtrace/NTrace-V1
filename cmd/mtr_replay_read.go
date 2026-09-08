@@ -97,6 +97,9 @@ func (c *mtrReplayCursor) apply(record mtrsession.Record) error {
 	if p := record.Probe; p != nil {
 		now := c.session.StartedAt.Add(time.Duration(record.ElapsedNS))
 		age := max(time.Duration(0), record.Timestamp.Sub(p.CompletedAt))
+		if record.ProbeAgeNS != nil {
+			age = time.Duration(*record.ProbeAgeNS)
+		}
 		c.history.AddProbeEventAt(trace.MTRProbeEvent{TTL: p.TTL, Success: p.Success, RTT: p.RTT, Timestamp: now.Add(-age)}, now)
 	}
 	return nil

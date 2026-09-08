@@ -58,7 +58,15 @@ func (w *Writer) Event(event trace.MTRSessionEvent) error {
 	if event.At.IsZero() {
 		event.At = time.Now()
 	}
-	return w.writeLocked(Record{MTRSessionEvent: event, Timestamp: event.At.UTC(), ElapsedNS: w.elapsed(event.At)})
+	record := Record{MTRSessionEvent: event, ElapsedNS: w.elapsed(event.At)}
+	if event.Probe != nil {
+		// Sub retains the monotonic clock here; the two serialized wall times
+		// cannot recover this age if the clock steps while a result is queued.
+		age := int64(max(time.Duration(0), event.At.Sub(event.Probe.CompletedAt)))
+		record.ProbeAgeNS = &age
+	}
+	record.Timestamp = event.At.UTC()
+	return w.writeLocked(record)
 }
 
 func (w *Writer) elapsed(at time.Time) int64 {

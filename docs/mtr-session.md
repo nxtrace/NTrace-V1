@@ -38,6 +38,7 @@ Every record includes `type`, `seq`, `generation`, `elapsed_ns`, and `timestamp`
   with equal elapsed time retain sequence order.
 - `timestamp` records event application time. Probe completion time is separate:
   concurrent results must never be reordered by their completion timestamps.
+- Probe records include optional `probe_age_ns`, computed from the monotonic clock before serialization; replay uses this nonnegative completion-to-application age for history positioning, falling back to the wall timestamps only for older records without this field.
 - `start` is first and `end` is last in a complete recording. Additional fields
   may be introduced within v1; unsupported versions and event types are errors.
 

@@ -36,6 +36,9 @@ func (s *recordState) accept(r Record) error {
 	if r.ElapsedNS < s.elapsed || r.Timestamp.IsZero() {
 		return errors.New("invalid MTR session timestamp")
 	}
+	if r.ProbeAgeNS != nil && (r.Type != trace.MTRSessionProbeEvent || *r.ProbeAgeNS < 0) {
+		return errors.New("invalid MTR session probe age")
+	}
 	if s.seq == 0 {
 		if err := s.acceptStart(r); err != nil {
 			return err

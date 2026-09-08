@@ -84,6 +84,7 @@ type Record struct {
 	Seq           uint64    `json:"seq"`
 	ElapsedNS     int64     `json:"elapsed_ns"`
 	Timestamp     time.Time `json:"timestamp"`
+	ProbeAgeNS    *int64    `json:"probe_age_ns,omitempty"`
 	trace.MTRSessionEvent
 	Session *Session `json:"session,omitempty"`
 	End     *End     `json:"end,omitempty"`
