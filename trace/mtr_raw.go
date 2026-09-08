@@ -36,6 +36,8 @@ type MTRRawOptions struct {
 	RunRound func(method Method, cfg Config) (*Result, error)
 	// OnPathEnd is called when the semantic path edge changes. nil reopens it.
 	OnPathEnd func(*StopReason)
+	// OnEvent records applied per-hop session changes. An error stops probing.
+	OnEvent func(MTRSessionEvent) error
 }
 
 // MTRRawRecord is one stream record emitted by MTR raw mode.
@@ -71,6 +73,9 @@ var mtrRawTracerouteFn = Traceroute
 func RunMTRRaw(ctx context.Context, method Method, cfg Config, opts MTRRawOptions, onRecord MTRRawOnRecord) error {
 	if opts.HopInterval > 0 {
 		return runMTRRawPerHop(ctx, method, cfg, opts, onRecord)
+	}
+	if opts.OnEvent != nil {
+		return fmt.Errorf("mtr raw: session recording requires per-hop scheduling")
 	}
 	return runMTRRawRoundBased(ctx, method, cfg, opts, onRecord)
 }
@@ -125,6 +130,7 @@ func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRaw
 		FillGeo:          true,
 		BaseConfig:       roundCfg,
 		OnPathEnd:        opts.OnPathEnd,
+		OnEvent:          opts.OnEvent,
 		StartErrorPrefix: "mtr raw",
 	}, nil, func(result mtrProbeResult, iteration int, _ time.Time) {
 		if onRecord == nil {
