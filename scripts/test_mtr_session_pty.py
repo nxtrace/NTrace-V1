@@ -178,6 +178,9 @@ def main(binary):
         result = subprocess.run([binary, "--mtr-replay", flag], capture_output=True,
                                 text=True, timeout=5, check=True)
         assert result.stdout.strip(), f"Replay {flag} produced no output"
+        if flag == "--help":
+            assert "--mtr-replay FILE" in result.stdout
+            assert "Offline only." in result.stdout
     # ntr selects MTR by default and deliberately omits the mode flag.
     explicit_mtr = bool(re.search(r"^\s+-t\s+--mtr\s", help_result.stdout, re.M))
     mode = ["--mtr"] if explicit_mtr else []
