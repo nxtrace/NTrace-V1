@@ -133,6 +133,10 @@ func Query(ctx context.Context, cfg Request) (Route, error) {
 	if err = unix.Sendto(fd, b, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return r, err
 	}
+	return readRouteReply(ctx, fd, r)
+}
+
+func readRouteReply(ctx context.Context, fd int, r Route) (Route, error) {
 	buf := make([]byte, 65536)
 	for {
 		n, e := ReadDatagram(ctx, fd, buf)
@@ -146,6 +150,9 @@ func Query(ctx context.Context, cfg Request) (Route, error) {
 		for _, m := range msgs {
 			if m.Header.Seq != 1 {
 				continue
+			}
+			if m.Header.Type == unix.NLMSG_DONE {
+				return r, ErrNoRoute
 			}
 			if m.Header.Type == unix.NLMSG_ERROR {
 				if len(m.Data) < 4 {

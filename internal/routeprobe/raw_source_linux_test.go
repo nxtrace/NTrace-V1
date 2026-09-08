@@ -88,3 +88,25 @@ func TestRawSourceSocketIntegration(t *testing.T) {
 		}
 	}
 }
+
+func TestDisconnectRouteSocketClearsPeer(t *testing.T) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	for range 100 {
+		if err := unix.Connect(fd, &unix.SockaddrInet4{Port: 9, Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := unix.Getpeername(fd); err != nil {
+			t.Fatal(err)
+		}
+		if err := disconnectRawRouteSocket(fd); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := unix.Getpeername(fd); !errors.Is(err, unix.ENOTCONN) {
+			t.Fatalf("peer retained after disconnect: %v", err)
+		}
+	}
+}

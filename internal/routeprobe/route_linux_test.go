@@ -3,11 +3,13 @@
 package routeprobe
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"net"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -209,5 +211,32 @@ func TestRouteHeaderIncludedProtocol(t *testing.T) {
 		if protocol != tc.protocol || ports != wantPorts {
 			t.Fatalf("%+v: kernel protocol=%d ports=%d", tc, protocol, ports)
 		}
+	}
+}
+
+func TestRouteReplyDoneWithoutMatchingRoute(t *testing.T) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fds[0])
+	defer unix.Close(fds[1])
+	message := func(kind uint16, seq uint32) []byte {
+		b := make([]byte, unix.NLMSG_HDRLEN)
+		binary.NativeEndian.PutUint32(b, uint32(len(b)))
+		binary.NativeEndian.PutUint16(b[4:], kind)
+		binary.NativeEndian.PutUint32(b[8:], seq)
+		return b
+	}
+	// An unrelated route must not win over the matching completion message.
+	data := append(message(unix.RTM_NEWROUTE, 2), message(unix.NLMSG_DONE, 1)...)
+	if err := unix.Send(fds[1], data, 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, err = readRouteReply(ctx, fds[0], Route{})
+	if !errors.Is(err, ErrNoRoute) {
+		t.Fatalf("got %v, want no route before timeout", err)
 	}
 }
