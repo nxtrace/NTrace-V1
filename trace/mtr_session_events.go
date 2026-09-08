@@ -146,6 +146,13 @@ func (s *MTRReplayState) applyProbe(event MTRSessionEvent) error {
 	if probe.Response != nil && !probe.Success {
 		return fmt.Errorf("mtr replay: failed probe cannot carry a response")
 	}
+	if response := probe.Response; response != nil {
+		switch response.Kind {
+		case MTRResponseTransit, MTRResponseDestination, MTRResponseUnreachable:
+		default:
+			return fmt.Errorf("mtr replay: invalid response kind %q", response.Kind)
+		}
+	}
 	response := mtrProbeResponseWithPeer(probe.Response, addr)
 	if s.tracker.observe(probe.TTL, response) {
 		if reason := s.tracker.pathEnd(); reason != nil && reason.Reason == StopReasonDestination {
