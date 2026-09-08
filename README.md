@@ -677,6 +677,18 @@ JSON always includes all available metadata (FULL), ignores `-y`, and honors Geo
 
 NDJSON emits `start`, `probe`, `path_end`, and `end` objects with consecutive `seq` values. Reports emit exactly one object, including partial statistics on interruption or failure. Diagnostics go to stderr. Exit codes: completion `0`, runtime/initialization error `1`, invalid arguments `2`, SIGINT `130`, SIGTERM `143`. Completion does not imply reachability; use `path_end`. See the [MTR JSON v1 contract and examples](docs/mtr-json.md).
 
+Save and reopen an MTR session in any build:
+
+```sh
+nexttrace --mtr --mtr-record session.jsonl 1.1.1.1
+nexttrace --mtr-replay session.jsonl
+nexttrace --mtr-replay session.jsonl -r --json
+```
+
+`--mtr-record` creates a new private file alongside the selected TUI, report, RAW or JSON output. It does not enable MTR by itself; full/tiny require `-t`, `-r` or `-w`, while ntr uses its default mode. Existing files are never overwritten. A recording write failure stops probing and returns an error, preserving the written prefix.
+
+Replay uses recorded probe results and metadata without probing or DNS/Geo/PTR queries. In a terminal it opens paused at the final statistics; Space plays at original speed (from the beginning at EOF), `p` pauses playback, `r` rewinds, and `j/J` seeks to an elapsed `HH:MM:SS[.mmm]`. Existing host, column and history controls remain available. Non-TTY and `-r/-w` output one report; `--json` emits a separate offline report with recording completeness and playback position. Truncated tails are recoverable, explicitly marked incomplete, and return nonzero. The three-minute history window follows the playback position; the file retains the whole recorded session. See the [session format and recovery contract](docs/mtr-session.md).
+
 Select and reorder human-readable MTR columns:
 
 ```sh

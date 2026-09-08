@@ -12,35 +12,13 @@ import (
 	"time"
 
 	"github.com/nxtrace/NTrace-core/config"
+	"github.com/nxtrace/NTrace-core/internal/mtrsession"
 	"github.com/nxtrace/NTrace-core/trace"
 )
 
 const mtrJSONSchemaVersion = 1
 
-type mtrJSONParameters struct {
-	FWMark           *uint32 `json:"fwmark,omitempty"`
-	MaxPerHop        int     `json:"max_per_hop"`
-	HopIntervalMs    int     `json:"hop_interval_ms"`
-	TimeoutMs        int64   `json:"timeout_ms"`
-	BeginHop         int     `json:"begin_hop"`
-	MaxHops          int     `json:"max_hops"`
-	ParallelRequests int     `json:"parallel_requests"`
-	SourceAddress    string  `json:"source_address"`
-	SourceDevice     string  `json:"source_device,omitempty"`
-	SourcePort       *int    `json:"source_port,omitempty"`
-	Port             *int    `json:"port,omitempty"`
-	PacketSize       int     `json:"packet_size"`
-	RandomPacketSize bool    `json:"random_packet_size"`
-	TOS              int     `json:"tos"`
-	ICMPMode         *int    `json:"icmp_mode,omitempty"`
-	DataProvider     string  `json:"data_provider"`
-	Language         string  `json:"language"`
-	DotServer        string  `json:"dot_server,omitempty"`
-	RDNS             bool    `json:"rdns"`
-	AlwaysWaitRDNS   bool    `json:"always_wait_rdns"`
-	DisableMPLS      bool    `json:"disable_mpls"`
-	DN42             bool    `json:"dn42"`
-}
+type mtrJSONParameters = mtrsession.Parameters
 
 type mtrJSONSession struct {
 	Version             string             `json:"version"`

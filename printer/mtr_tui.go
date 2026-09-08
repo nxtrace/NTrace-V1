@@ -52,6 +52,9 @@ type MTRTUIHeader struct {
 	HistoryChartMode int
 	History          []MTRHistoryTTL
 	HistoryNow       time.Time
+	Now              time.Time // zero uses the live clock
+	Replay           *MTRReplayStatus
+	ReplayEditor     MTRReplayEditor
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +378,12 @@ func mtrTUIRenderWithWidth(w io.Writer, header MTRTUIHeader, stats []trace.MTRHo
 	var b strings.Builder
 
 	writeMTRTUIFramePrefix(&b)
+	if header.ReplayEditor.Active {
+		tuiLine(&b, "%s", buildMTRTUITitleLine(header, lo.termWidth))
+		renderMTRReplayEditor(&b, header.ReplayEditor, lo.termWidth)
+		_, _ = fmt.Fprint(w, b.String())
+		return
+	}
 	if header.ColumnEditor.Active {
 		tuiLine(&b, "%s", buildMTRTUITitleLine(header, lo.termWidth))
 		tuiLine(&b, "%s", mtrTUIStatusText(header.Status))
@@ -427,7 +436,7 @@ func writeMTRTUIFramePrefix(b *strings.Builder) {
 
 func renderMTRTUIHeader(b *strings.Builder, header MTRTUIHeader, termWidth int) {
 	tuiLine(b, "%s", buildMTRTUITitleLine(header, termWidth))
-	tuiLine(b, "%s", buildMTRTUIRouteLine(header, termWidth, time.Now()))
+	tuiLine(b, "%s", buildMTRTUIRouteLine(header, termWidth, mtrTUIClock(header)))
 	tuiLine(b, "%s", buildMTRTUIControlsLine(header, termWidth))
 }
 
@@ -459,6 +468,9 @@ func resolveMTRTUITitleParts(header MTRTUIHeader) (string, string) {
 		ver = "dev"
 	}
 	titlePart := fmt.Sprintf("NextTrace [%s]", ver)
+	if header.Replay != nil {
+		titlePart += " Replay"
+	}
 	if header.APIInfo == "" {
 		return titlePart, ""
 	}
@@ -515,6 +527,9 @@ func resolveMTRTUIDestinationLabel(header MTRTUIHeader) string {
 }
 
 func buildMTRTUIControlsLine(header MTRTUIHeader, termWidth int) string {
+	if header.Replay != nil {
+		return buildMTRReplayControls(header, termWidth)
+	}
 	const keysPrefix = "Keys:  "
 	items := buildMTRTUIKeyItems(header, mtrTUIKeyHiColor)
 	plainItems := buildMTRTUIKeyItems(header, fmt.Sprint)

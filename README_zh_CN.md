@@ -668,6 +668,18 @@ JSON 固定输出完整可用元数据（FULL），忽略 `-y`，仍遵守 Geo/P
 
 NDJSON 输出 `start`、`probe`、`path_end`、`end` 事件，`seq` 连续递增。报告只输出一个对象，中断或失败时保留已有统计。诊断写入 stderr。退出码：完成 `0`，初始化/执行错误 `1`，参数错误 `2`，SIGINT `130`，SIGTERM `143`。完成不表示目的地可达，可达性读取 `path_end`。详见 [MTR JSON v1 契约及示例](docs/mtr-json.md)。
 
+三个版本均支持保存和离线重开 MTR 会话：
+
+```sh
+nexttrace --mtr --mtr-record session.jsonl 1.1.1.1
+nexttrace --mtr-replay session.jsonl
+nexttrace --mtr-replay session.jsonl -r --json
+```
+
+`--mtr-record` 在当前 TUI、报告、RAW 或 JSON 输出之外新建私有记录文件，不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认模式。已有文件不会被覆盖。记录写入失败立即停止探测并报错，保留已写部分。
+
+回放只读取已保存的探测和元数据，不探测、不查询 DNS/Geo/PTR。终端默认显示最终统计并暂停；空格原速播放，末尾按空格从头播放；`p` 暂停播放，`r` 返回开头，`j/J` 输入相对会话开始时间 `HH:MM:SS[.mmm]` 定位。Host、统计列和历史视图操作继续可用。非 TTY 或 `-r/-w` 一次输出报告；`--json` 使用独立离线报告，包含记录完整性和回放位置。末尾截断可恢复完整部分，明确标记不完整并返回非零。历史窗口仍为三分钟，随回放位置移动；记录文件保留整个会话。详见[会话格式与恢复规则](docs/mtr-session.md)。
+
 选择并排列 MTR 文字统计列：
 
 ```sh

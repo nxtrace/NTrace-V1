@@ -46,10 +46,15 @@ func NewMTRHistoryStore(window time.Duration) *MTRHistoryStore {
 }
 
 func (s *MTRHistoryStore) AddProbeEvent(event trace.MTRProbeEvent) {
+	s.AddProbeEventAt(event, time.Now())
+}
+
+// AddProbeEventAt uses the caller's clock, allowing offline history to retain
+// samples from the recording instead of pruning them against wall time.
+func (s *MTRHistoryStore) AddProbeEventAt(event trace.MTRProbeEvent, now time.Time) {
 	if s == nil || event.TTL <= 0 {
 		return
 	}
-	now := time.Now()
 	at := event.Timestamp
 	if at.IsZero() || at.After(now) {
 		at = now

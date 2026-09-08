@@ -97,7 +97,7 @@ func (k *mtrKeyInput) expireEscape(u *mtrUI, now time.Time) {
 	if k.parser.state == mtrStateEsc && !k.escapeAt.IsZero() && now.Sub(k.escapeAt) >= mtrEscapeDelay {
 		k.parser.state = mtrStateGround
 		k.escapeAt = time.Time{}
-		u.editColumn(27, false)
+		u.editMTRInput(27, false)
 		u.requestRedraw()
 	}
 }
@@ -112,10 +112,10 @@ func (k *mtrKeyInput) feed(u *mtrUI, b byte, now time.Time) bool {
 		return false
 	}
 	k.expireEscape(u, now)
-	_, editor := u.columnSnapshot()
-	k.parser.trackPaste = editor.Active
-	if k.parser.state == mtrStateGround && b != 27 && editor.Active {
-		u.editColumn(b, false)
+	editing := u.isMTREditing()
+	k.parser.trackPaste = editing
+	if k.parser.state == mtrStateGround && b != 27 && editing {
+		u.editMTRInput(b, false)
 	} else {
 		action := k.parser.Feed(b)
 		if action == mtrActionPasteStart {
@@ -139,7 +139,7 @@ func (k *mtrKeyInput) feedPaste(u *mtrUI, b byte) {
 	const end = "\x1b[201~"
 	k.pasteEnd += string(b)
 	for k.pasteEnd != "" && !strings.HasPrefix(end, k.pasteEnd) {
-		u.editColumn(k.pasteEnd[0], true)
+		u.editMTRInput(k.pasteEnd[0], true)
 		k.pasteEnd = k.pasteEnd[1:]
 	}
 	if k.pasteEnd == end {
@@ -149,6 +149,9 @@ func (k *mtrKeyInput) feedPaste(u *mtrUI, b byte) {
 }
 
 func (u *mtrUI) applyInputAction(action mtrInputAction) bool {
+	if u.replay != nil && u.applyReplayAction(action) {
+		return false
+	}
 	switch action {
 	case mtrActionQuit:
 		if u.cancel != nil {

@@ -32,6 +32,12 @@ type mtrJSONOptions struct {
 	DataProvider       string
 	PowProvider        string
 	DotServer          string
+	RecordPath         string
+	RecordDisplay      mtrRecordingDisplay
+	PrepareAsync       bool
+	CompactReport      bool
+	HumanOutput        bool
+	OnEvent            func(trace.MTRSessionEvent) error
 }
 
 var runMTRJSONRawFn = trace.RunMTRRaw
@@ -40,11 +46,16 @@ var runMTRJSONRawFn = trace.RunMTRRaw
 // remain the authority for selecting an output mode.
 func requestsMTRJSON(args []string) bool {
 	jsonOutput, mtr := false, !enableTraceroute && defaultMTR
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
 			break
 		}
-		name, _, _ := strings.Cut(arg, "=")
+		name, _, inline := strings.Cut(arg, "=")
+		if strings.HasPrefix(arg, "-") && !inline && doctorValueOption(strings.TrimLeft(name, "-")) {
+			i++
+			continue
+		}
 		switch name {
 		case "-j", "--json":
 			jsonOutput = true
@@ -60,6 +71,12 @@ func requestsMTRJSON(args []string) bool {
 }
 
 func runMTRJSONCLI(opts mtrJSONOptions) int {
+	return runMTRCLIWithSignals(func(ctx context.Context) int {
+		return runMTRJSON(ctx, opts, os.Stdout, os.Stderr)
+	})
+}
+
+func runMTRCLIWithSignals(run func(context.Context) int) int {
 	// Let a closed stdout pipe return EPIPE to the writer so the runner can
 	// cancel and join its workers instead of the runtime exiting on SIGPIPE.
 	pipeSignals := make(chan os.Signal, 1)
@@ -74,6 +91,8 @@ func runMTRJSONCLI(opts mtrJSONOptions) int {
 		select {
 		case sig := <-signals:
 			cancel(&mtrJSONSignal{signal: sig})
+		case <-pipeSignals:
+			cancel(io.ErrClosedPipe)
 		case <-ctx.Done():
 		}
 	}()
@@ -82,7 +101,7 @@ func runMTRJSONCLI(opts mtrJSONOptions) int {
 		cancel(nil)
 		<-done
 	}()
-	return runMTRJSON(ctx, opts, os.Stdout, os.Stderr)
+	return run(ctx)
 }
 
 func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.Writer) int {
@@ -92,9 +111,27 @@ func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.W
 	stage := "validation"
 	var cleanup func()
 	err := normalizeMTRJSONOptions(&opts, stderr)
+	var recording *mtrRecording
+	if err == nil && opts.RecordPath != "" {
+		stage = "record"
+		recording, err = openMTRRecording(opts.RecordPath)
+		if recording != nil {
+			defer recording.close()
+			opts.OnEvent = recording.event
+		}
+	}
 	if err == nil {
 		stage = "resolve"
 		cleanup, err = prepareMTRJSON(ctx, &opts, out, &stage, stderr)
+	}
+	if recording != nil {
+		display := opts.RecordDisplay
+		if err == nil {
+			display.sourceIP = resolveSrcIP(opts.Config)
+		}
+		if startErr := recording.start(out, display); startErr != nil {
+			err, stage = startErr, "record"
+		}
 	}
 	if err == nil {
 		out.startStream()
@@ -105,6 +142,7 @@ func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.W
 			out.report.Stats, out.report.PathEnd, err = collectMTRReport(ctx, opts.Method, opts.Config, trace.MTROptions{
 				HopInterval: time.Duration(opts.HopIntervalMs) * time.Millisecond,
 				MaxPerHop:   opts.MaxPerHop,
+				OnEvent:     opts.OnEvent,
 			})
 		} else {
 			err = runMTRJSONStream(ctx, opts, out)
@@ -118,6 +156,11 @@ func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.W
 	}
 	if cleanup != nil {
 		cleanup()
+	}
+	if recording != nil {
+		if recordErr := recording.finish(err, stage); recordErr != nil {
+			err, stage = recordErr, "record"
+		}
 	}
 	return out.finish(err, stage, stderr)
 }
@@ -135,6 +178,7 @@ func runMTRJSONStream(ctx context.Context, opts mtrJSONOptions, out *mtrJSONOutp
 	}
 	err := runMTRJSONRawFn(ctx, opts.Method, opts.Config, trace.MTRRawOptions{
 		HopInterval: time.Duration(opts.HopIntervalMs) * time.Millisecond,
+		OnEvent:     opts.OnEvent,
 		MaxPerHop:   opts.MaxPerHop, OnPathEnd: func(reason *trace.StopReason) {
 			flushPath()
 			pending, pathChanged = copyMTRPathEnd(reason), true
@@ -194,7 +238,11 @@ func normalizeMTRJSONOptions(opts *mtrJSONOptions, stderr io.Writer) error {
 		cfg.ParallelRequests = 1
 	}
 	applyDefaultPort(&cfg.DstPort, opts.Method == trace.UDPTrace)
-	if opts.Method != trace.ICMPTrace && (cfg.SrcPort < 0 || cfg.SrcPort > 65535 || cfg.DstPort < 1 || cfg.DstPort > 65535) {
+	minimumSourcePort := 0
+	if opts.HumanOutput {
+		minimumSourcePort = -1
+	}
+	if opts.Method != trace.ICMPTrace && (cfg.SrcPort < minimumSourcePort || cfg.SrcPort > 65535 || cfg.DstPort < 1 || cfg.DstPort > 65535) {
 		return errors.New("probe ports must be between 1 and 65535 (source port 0 selects automatically)")
 	}
 	if cfg.ICMPMode <= 0 && util.EnvICMPMode > 0 {
@@ -215,7 +263,7 @@ func prepareMTRJSON(ctx context.Context, opts *mtrJSONOptions, out *mtrJSONOutpu
 	if err := ctx.Err(); err != nil {
 		return cleanup, context.Cause(ctx)
 	}
-	ip, err := lookupTargetIP(ctx, normalizeCLITarget(opts.Target), opts.IPv4Only, opts.IPv6Only, opts.DotServer, true)
+	ip, err := lookupTargetIP(ctx, normalizeCLITarget(opts.Target), opts.IPv4Only, opts.IPv6Only, opts.DotServer, !opts.HumanOutput)
 	if err != nil {
 		return cleanup, err
 	}
@@ -259,7 +307,7 @@ func prepareMTRJSON(ctx context.Context, opts *mtrJSONOptions, out *mtrJSONOutpu
 		}
 		opts.DataProvider, cfg.DN42 = "DN42", true
 	}
-	conn := initNextTraceAPIV3WebSocket(ctx, &opts.DataProvider, &opts.PowProvider, false)
+	conn := initNextTraceAPIV3WebSocket(ctx, &opts.DataProvider, &opts.PowProvider, opts.PrepareAsync)
 	cleanup = func() { closeNextTraceAPIV3WebSocket(conn); restoreOutput() }
 	// Runtime provider fallback can select DN42 as well.
 	if !cfg.DN42 && isDN42Provider(opts.DataProvider) {
@@ -271,7 +319,7 @@ func prepareMTRJSON(ctx context.Context, opts *mtrJSONOptions, out *mtrJSONOutpu
 	descriptor := ipgeo.GetSourceDescriptorSession(opts.DataProvider)
 	session := trace.CachedGeoSourceSession(descriptor)
 	cfg.IPGeoSource, cfg.IPGeoDescriptor, cfg.RefreshIPGeoSource = session.Source, descriptor.Current, session.Refresh
-	*cfg = normalizeMTRReportConfig(*cfg, true)
+	*cfg = normalizeMTRReportConfig(*cfg, !opts.CompactReport)
 	util.SrcPort, util.DstIP = cfg.SrcPort, ip.String()
 	params := &mtrJSONParameters{
 		MaxPerHop: opts.MaxPerHop, HopIntervalMs: opts.HopIntervalMs, TimeoutMs: cfg.Timeout.Milliseconds(),
