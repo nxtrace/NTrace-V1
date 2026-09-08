@@ -690,7 +690,7 @@ nexttrace --mtr-replay session.jsonl
 nexttrace --mtr-replay session.jsonl -r --json
 ```
 
-`--mtr-record` 在当前 TUI、报告、RAW 或 JSON 输出之外新建私有记录文件，不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认模式。已有文件不会被覆盖。记录写入失败立即停止探测并报错，保留已写部分。
+`--mtr-record` 在当前 TUI、报告、RAW 或 JSON 输出之外新建私有记录文件，不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认模式。已有文件不会被覆盖。记录写入失败立即停止探测并报错，保留已写部分。首个会话错误及阶段不会被后续录制启动或结束错误覆盖。
 
 回放只读取已保存的探测和元数据，不探测、不查询 DNS/Geo/PTR。终端默认显示最终统计并暂停；空格原速播放，末尾按空格从头播放；`p` 暂停播放，`r` 返回开头，`j/J` 输入相对会话开始时间 `HH:MM:SS[.mmm]` 定位。Host、统计列和历史视图操作继续可用。非 TTY 或 `-r/-w` 一次输出报告；`--json` 使用独立离线报告，包含记录完整性和回放位置。末尾截断可恢复完整部分，明确标记不完整并返回非零。历史窗口仍为三分钟，随回放位置移动；记录文件保留整个会话。详见[会话格式与恢复规则](docs/mtr-session.md)。
 
@@ -931,7 +931,7 @@ usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  [-j|--json] [-c|--classic] [--dn42] [--raw] [-f|--first
                  <integer>] [-M|--map] [-e|--disable-mpls] [-V|--version]
                  [-x|--setup-api-v4-token] [-l|--dns] [--speed] [--nali]
-                 [-s|--source "<value>"] [--source-port <integer>] [-D|--dev
+                 [-s|--source "<value>"] [--fwmark "<value>"] [--source-port <integer>] [-D|--dev
                  "<value>"] [--listen "<value>"] [--deploy-token "<value>"]
                  [--mcp] [--deploy] [-z|--send-time <integer>] [-i|--ttl-time
                  <integer>] [--timeout <integer>] [--psize <integer>] [-Q|--tos
@@ -939,7 +939,7 @@ usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  (dnssb|aliyun|dnspod|google|cloudflare)] [-g|--language
                  (en|cn)] [-C|--no-color] [--from "<value>"] [-t|--mtr]
                  [-r|--report] [-w|--wide] [--show-ips] [--mtr-columns <string>] [-y|--ipinfo <integer>]
-                 [--file "<value>"] [TARGET "<value>"]
+                 [--mtr-record "<value>"] [--file "<value>"] [TARGET "<value>"]
 
                  An open source visual route tracking CLI tool
 
@@ -1021,6 +1021,8 @@ Arguments:
                                      NextTrace GeoIP data
   -s  --source                       Use source address src_addr for outgoing
                                      packets
+      --fwmark                       Linux probe socket mark (decimal or 0x
+                                     hex); traceroute/MTR only
       --source-port                  Use source port src_port for outgoing
                                      packets
   -D  --dev                          Use the specified network device for
@@ -1081,11 +1083,16 @@ Arguments:
                                      TUI only; ignored in --report/--raw/--json.
                                      0:IP/PTR 1:ASN 2:City 3:Owner 4:Full.
                                      Default: 0
+      --mtr-record                   Save this MTR session to a new file for
+                                     offline replay
       --file                         Read IP Address or domain name from file
       TARGET                         Trace target: IPv4 address (e.g. 8.8.8.8),
                                      IPv6 address (e.g. 2001:db8::1), domain
                                      name (e.g. example.com), or URL (e.g.
                                      https://example.com)
+
+  --doctor  Check local probe prerequisites without sending probes; see --doctor --help
+  --mtr-replay FILE  Open a saved MTR session offline; see --mtr-replay --help
 ```
 
 ## 项目截图

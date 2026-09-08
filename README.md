@@ -699,7 +699,7 @@ nexttrace --mtr-replay session.jsonl
 nexttrace --mtr-replay session.jsonl -r --json
 ```
 
-`--mtr-record` creates a new private file alongside the selected TUI, report, RAW or JSON output. It does not enable MTR by itself; full/tiny require `-t`, `-r` or `-w`, while ntr uses its default mode. Existing files are never overwritten. A recording write failure stops probing and returns an error, preserving the written prefix.
+`--mtr-record` creates a new private file alongside the selected TUI, report, RAW or JSON output. It does not enable MTR by itself; full/tiny require `-t`, `-r` or `-w`, while ntr uses its default mode. Existing files are never overwritten. A recording write failure stops probing and returns an error, preserving the written prefix. Later recording start/finish errors do not replace the first session error or its stage.
 
 Replay uses recorded probe results and metadata without probing or DNS/Geo/PTR queries. In a terminal it opens paused at the final statistics; Space plays at original speed (from the beginning at EOF), `p` pauses playback, `r` rewinds, and `j/J` seeks to an elapsed `HH:MM:SS[.mmm]`. Existing host, column and history controls remain available. Non-TTY and `-r/-w` output one report; `--json` emits a separate offline report with recording completeness and playback position. Truncated tails are recoverable, explicitly marked incomplete, and return nonzero. The three-minute history window follows the playback position; the file retains the whole recorded session. See the [session format and recovery contract](docs/mtr-session.md).
 
@@ -956,7 +956,7 @@ usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  [-j|--json] [-c|--classic] [--dn42] [--raw] [-f|--first
                  <integer>] [-M|--map] [-e|--disable-mpls] [-V|--version]
                  [-x|--setup-api-v4-token] [-l|--dns] [--speed] [--nali]
-                 [-s|--source "<value>"] [--source-port <integer>] [-D|--dev
+                 [-s|--source "<value>"] [--fwmark "<value>"] [--source-port <integer>] [-D|--dev
                  "<value>"] [--listen "<value>"] [--deploy-token "<value>"]
                  [--mcp] [--deploy] [-z|--send-time <integer>] [-i|--ttl-time
                  <integer>] [--timeout <integer>] [--psize <integer>] [-Q|--tos
@@ -964,7 +964,7 @@ usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  (dnssb|aliyun|dnspod|google|cloudflare)] [-g|--language
                  (en|cn)] [-C|--no-color] [--from "<value>"] [-t|--mtr]
                  [-r|--report] [-w|--wide] [--show-ips] [--mtr-columns <string>] [-y|--ipinfo <integer>]
-                 [--file "<value>"] [TARGET "<value>"]
+                 [--mtr-record "<value>"] [--file "<value>"] [TARGET "<value>"]
 
                  An open source visual route tracking CLI tool
 
@@ -1046,6 +1046,8 @@ Arguments:
                                      NextTrace GeoIP data
   -s  --source                       Use source address src_addr for outgoing
                                      packets
+      --fwmark                       Linux probe socket mark (decimal or 0x
+                                     hex); traceroute/MTR only
       --source-port                  Use source port src_port for outgoing
                                      packets
   -D  --dev                          Use the specified network device for
@@ -1106,11 +1108,16 @@ Arguments:
                                      TUI only; ignored in --report/--raw/--json.
                                      0:IP/PTR 1:ASN 2:City 3:Owner 4:Full.
                                      Default: 0
+      --mtr-record                   Save this MTR session to a new file for
+                                     offline replay
       --file                         Read IP Address or domain name from file
       TARGET                         Trace target: IPv4 address (e.g. 8.8.8.8),
                                      IPv6 address (e.g. 2001:db8::1), domain
                                      name (e.g. example.com), or URL (e.g.
                                      https://example.com)
+
+  --doctor  Check local probe prerequisites without sending probes; see --doctor --help
+  --mtr-replay FILE  Open a saved MTR session offline; see --mtr-replay --help
 ```
 
 ## Project screenshot
