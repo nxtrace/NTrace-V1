@@ -32,21 +32,22 @@ func renderMTRColumnEditor(b *strings.Builder, header MTRTUIHeader, width, heigh
 	remaining := max(0, height-1)
 	line := func(text string) {
 		if remaining > 0 {
-			tuiLine(b, "%s", truncateByDisplayWidth(text, width))
+			tuiLine(b, "%s", text)
 			remaining--
 		}
 	}
+	// Header builders already fit visible width before adding ANSI colors.
 	if height >= 9 {
 		line(buildMTRTUITitleLine(header, width))
 		if width < 40 {
-			line(buildMTRTUIRouteText(header))
+			line(truncateByDisplayWidth(buildMTRTUIRouteText(header), width))
 		} else {
 			line(buildMTRTUIRouteLine(header, width, mtrTUIClock(header)))
 		}
 	}
 	line(fields)
 	if editor.Error != "" {
-		line(editor.Error)
+		line(truncateByDisplayWidth(editor.Error, width))
 	}
 	// Keep editing controls visible even when the field list does not fit.
 	controls := []string{"Enter: apply Esc: cancel", "Backspace: delete", "Ctrl-U: clear  Ctrl-C: quit"}
@@ -67,13 +68,13 @@ func renderMTRColumnEditor(b *strings.Builder, header MTRTUIHeader, width, heigh
 		if column == MTRColumnSpace {
 			code = "<sp>"
 		}
-		line("  " + code + ": " + def.description)
+		line(truncateByDisplayWidth("  "+code+": "+def.description, width))
 	}
 	if count < len(order) && remaining > len(controls) {
-		line("Enlarge terminal for help")
+		line(truncateByDisplayWidth("Enlarge terminal for help", width))
 	}
 	for _, help := range controls {
-		line(help)
+		line(truncateByDisplayWidth(help, width))
 	}
 }
 

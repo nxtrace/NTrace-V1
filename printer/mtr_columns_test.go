@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/nxtrace/NTrace-core/trace"
@@ -296,6 +297,35 @@ func TestMTRFieldsPageDimensions(t *testing.T) {
 						t.Fatalf("missing %s: %s", label, out)
 					}
 				}
+			}
+		}
+	}
+}
+
+func TestMTRFieldsPagePreservesColoredHeader(t *testing.T) {
+	oldTitle := mtrTUITitleColor
+	t.Cleanup(func() { mtrTUITitleColor = oldTitle })
+	style := color.New(color.FgHiWhite)
+	style.EnableColor()
+	mtrTUITitleColor = style.SprintFunc()
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	for _, width := range []int{40, 80, 200} {
+		header := MTRTUIHeader{Target: "192.0.2.1", SrcHost: "中文主机.example", Version: strings.Repeat("v", 30), Now: time.Unix(1, 0), ColumnEditor: MTRColumnEditor{Active: true, Draft: "LS DGJMXI"}}
+		var b strings.Builder
+		renderMTRColumnEditor(&b, header, width, 24)
+		lines := strings.Split(b.String(), "\r\n")
+		want := []string{buildMTRTUITitleLine(header, width), buildMTRTUIRouteLine(header, width, header.Now)}
+		for i := range want {
+			if i == 0 && !strings.Contains(want[i], "\x1b[") {
+				t.Fatal("color output not exercised")
+			}
+			if lines[i] != want[i] {
+				t.Fatalf("colored header changed at width %d: got %q want %q", width, lines[i], want[i])
+			}
+		}
+		for _, line := range lines {
+			if displayWidth(ansi.ReplaceAllString(line, "")) > width {
+				t.Fatalf("colored overflow: %q", line)
 			}
 		}
 	}
