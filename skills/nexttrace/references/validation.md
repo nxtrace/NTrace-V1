@@ -64,7 +64,7 @@ node --test server/web/assets/*.test.cjs
 | Replay sanitation, seek and text columns | `go test ./cmd ./printer` | `scripts/test_mtr_session_pty.py` and `scripts/test_mtr_columns_pty.py` |
 | Doctor route/backend checks | `go test ./internal/doctor ./trace/internal ./cmd` | Test workflow loopback route and privileged backend smoke; NO_INSTALL Windows checks |
 | Linux fwmark and source constraints | `go test ./internal/routeprobe ./trace ./trace/internal ./cmd` | Linux fwmark workflow: native marks, permission failures, dual-stack dual-egress captures |
-| TOS, zero restoration and engine replacement | `go test ./trace ./trace/internal` | TOS packet acceptance: Linux/macOS/Windows amd64 full-byte dual-stack captures |
+| TOS, zero restoration and engine replacement | `go test ./trace ./trace/internal` | TOS packet acceptance: Linux/macOS/Windows amd64 full-byte dual-stack captures; Linux/macOS also require real closed-socket send-loop failures for ICMP/TCP/UDP in both families |
 | Linux legacy socketcall pointer lifetime | Cross-compile and vet `internal/routeprobe` for 386/s390x | Linux fwmark workflow executes route tests on amd64 and 386; s390x compile only |
 
 Privilege-gated tests skip in ordinary `go test` runs. Cross-compilation,

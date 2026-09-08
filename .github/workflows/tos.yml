@@ -46,7 +46,7 @@ jobs:
       - name: Reusing sockets restores TOS to zero
         run: sudo env NEXTTRACE_TOS_SOCKET_INTEGRATION=1 "$RUNNER_TEMP/tos-socket.test" -test.run '^TestTOSSocketReuse$' -test.v
       - name: MTR configuration failure is terminal
-        run: sudo env NEXTTRACE_TOS_INTEGRATION=1 "$RUNNER_TEMP/tos-trace.test" -test.run '^TestMTRTOSConfigurationFailureIsTerminal$' -test.v
+        run: sudo env NEXTTRACE_TOS_INTEGRATION=1 "$RUNNER_TEMP/tos-trace.test" -test.run '^(TestMTRTOSConfigurationFailureIsTerminal|TestTraceSendTOSConfigurationFailureIsTerminal)$' -test.v
       - name: Validate packet assertions
         run: python3 -m unittest discover -s scripts/regression -p 'test_tos_capture.py' -v
       - name: Capture IPv4 and IPv6 traceroute and MTR

@@ -126,7 +126,9 @@ conclusion.
 
 Session errors preserve partial statistics and have `error.stage` and
 `error.message`. Probe-resource initialization and replacement failures use
-`stage: "initialize"`; other runner failures use `stage: "probe"`.
+`stage: "initialize"`, including TOS/Traffic Class setup failures in TCP/UDP
+per-hop fallback probes. These failures terminate probing without adding a
+timeout or loss sample. Other runner failures use `stage: "probe"`.
 Signals use `signal: "SIGINT"` or `"SIGTERM"`. Internal
 cancellation retains its error cause and is not reported as user interruption.
 Recording failures use `record` when no earlier session error exists. A later

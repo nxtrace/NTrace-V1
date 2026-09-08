@@ -68,7 +68,7 @@ func (t *TCPTracer) PrintFunc(ctx context.Context, cancel context.CancelCauseFun
 	}
 }
 
-func (t *TCPTracer) launchTTL(ctx context.Context, s *internal.TCPSpec, ttl int) {
+func (t *TCPTracer) launchTTL(ctx context.Context, cancel context.CancelCauseFunc, s *internal.TCPSpec, ttl int) {
 	t.wg.Add(1)
 	go func(ttl int) {
 		defer t.wg.Done()
@@ -86,6 +86,11 @@ func (t *TCPTracer) launchTTL(ctx context.Context, s *internal.TCPSpec, ttl int)
 			go func(ttl, i int) {
 				defer t.wg.Done()
 				err := t.send(ctx, s, ttl, i)
+				if IsInitializationError(err) {
+					cancel(err)
+					t.res.settleAttempt(ttl, i)
+					return
+				}
 				if err != nil && !errors.Is(err, context.Canceled) {
 					if util.EnvDevMode {
 						panic(err)
@@ -321,7 +326,7 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 	go func() {
 		defer t.wg.Done()
 		// 立即启动 BeginHop 对应的 TTL 组
-		t.launchTTL(ctx, s, t.BeginHop)
+		t.launchTTL(ctx, cancel, s, t.BeginHop)
 
 		for ttl := t.BeginHop + 1; ttl <= t.MaxHops; ttl++ {
 			// 之后按 TTLInterval 周期启动后续 TTL 组
@@ -336,7 +341,7 @@ func (t *TCPTracer) Execute() (res *Result, err error) {
 			}
 
 			// 并发启动这个 TTL 的所有测量
-			t.launchTTL(ctx, s, ttl)
+			t.launchTTL(ctx, cancel, s, ttl)
 		}
 	}()
 
