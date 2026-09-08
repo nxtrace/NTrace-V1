@@ -287,6 +287,8 @@ func (s *ICMPSpec) ensureICMPSendHandle(ipv6 bool) error {
 	return s.ensureICMPSendHandleWithFlags(ipv6, 0)
 }
 
+// ensureICMPSendHandleWithFlags applies extraFlags only when opening a handle.
+// Callers requiring those flags (doctor NO_INSTALL) must use a fresh spec.
 func (s *ICMPSpec) ensureICMPSendHandleWithFlags(ipv6 bool, extraFlags uint64) error {
 	if s.sendHandle != 0 {
 		return nil

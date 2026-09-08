@@ -23,6 +23,16 @@ Do not pass `tos` to:
 
 If TOS fails because of platform privileges or socket support, report that limitation. Do not remove `tos` or switch tools unless the user asks for a fallback.
 
+## Linux socket marks
+
+`--fwmark` accepts `0..4294967295` in decimal or hexadecimal for local CLI
+traceroute/MTR only. Omission and explicit zero differ: zero still sets SO_MARK
+and requires permission. Matching system policy rules must already exist.
+Linux requires CAP_NET_ADMIN, or CAP_NET_RAW on Linux 5.17+. Automatic source
+selection uses the marked route; explicit source/device constraints are kept.
+Doctor, MTU, DNS, speed, deploy/MCP, Globalping, Fast Trace and file targets
+reject the option. See the [CLI workflow](cli-fallback.md).
+
 ## Packet Size
 
 `packet_size` is local traceroute/MTR input. It means total bytes including IP and active probe protocol headers.

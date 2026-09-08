@@ -22,7 +22,10 @@ Opening the recording precedes network initialization and probing.
 
 Each accepted event is written as a complete UTF-8 JSON line. A failed encode or
 write cancels probing. The file is synchronized and closed at the end, and
-sync/close errors are reported as failures. No events are silently dropped.
+sync/close errors are reported as failures. The first session error and its
+stage take precedence over later recording start or finish errors. When file
+writes already failed, no complete error end record is guaranteed. No events
+are silently dropped.
 There is no rotation, compression, append mode, or periodic durable checkpoint.
 Crash recovery is limited to complete records that remain readable from disk.
 
@@ -107,7 +110,26 @@ nexttrace --mtr-replay session.jsonl -r --json
 `--mtr-replay --help` and `--mtr-replay --version` need no file. For a file named
 `--help` or `--version`, use `--mtr-replay=--help` or a path such as `./--help`.
 
-Replay accepts presentation options, not a target or probe configuration. It
+Replay accepts presentation options, not a target or probe configuration.
+
+| Option | Behavior |
+| --- | --- |
+| `-r`, `--report` | Print the final compact text report |
+| `-w`, `--wide` | Print the final text report without host truncation |
+| `-j`, `--json` | Print the offline JSON document, taking precedence over report/wide |
+| `--mtr-columns` | Select text columns; incompatible with JSON |
+| `-y`, `--ipinfo` | Initial TUI host mode `0..4` |
+| `--show-ips` | Display PTR and IP together |
+| `-g`, `--language` | Display `cn` or `en` using recorded metadata |
+| `-C`, `--no-color` | Disable TUI colors; text reports already have no ANSI |
+
+Omitted host mode, PTR/IP display, columns and language inherit the recording's
+initial settings; MPLS display also starts from the recorded setting. Live column
+edits are session-local and are not recorded as replay control events. Explicit
+`-r` chooses compact output; without `-r/-w`, non-TTY output inherits the
+recorded wide setting. Both source and responder host names are truncated in
+compact output. No target, `--raw`, probe options, `--mtr-record`, stdin (`-`),
+pipe or non-regular input file is accepted. It
 does not initialize probing, resolve addresses, query metadata, or discover a
 source interface. Recorded missing metadata stays missing. It can run without
 raw-socket privileges and without network connectivity.
@@ -134,6 +156,26 @@ that continues growing after it is opened.
 Non-TTY or explicit `-r/-w` produces one final report. `--json` produces a
 separate offline document with session information, statistics, path state,
 playback position and recording completeness, rather than emitting live NDJSON.
+
+### Offline JSON fields
+
+The output is one object plus a newline, with `schema_version: 1` and
+`type: "mtr_replay"`. It contains:
+
+| Field | Meaning |
+| --- | --- |
+| `session` | Original session header and initial display/effective parameters |
+| `complete` | Whether a valid end record was read |
+| `cursor_ns`, `duration_ns` | Final valid playback position and duration, in nanoseconds |
+| `generation`, `recorded_paused` | Final reducer generation and recorded probe-pause state |
+| `path_end` | Reconstructed conclusion, or `null` |
+| `stats` | Final MTR statistics; always an array, including `[]` |
+| `end` | Original end payload, omitted when absent |
+
+Replay text/TUI and diagnostics replace Unicode control (`Cc`) and format
+(`Cf`, including bidi overrides and isolates) characters with spaces. Only
+display copies are sanitized; recorded data and offline JSON retain original
+values. JSON consumers must apply their own display escaping.
 
 ## Incomplete and invalid files
 

@@ -195,6 +195,10 @@ Document Language: [English](README.md) | 简体中文
 | MTR 报告（`-r`）        |          ✅           |        ✅         |     ✅     |
 | MTR 宽报告（`-w`）      |          ✅           |        ✅         |     ✅     |
 | MTR 原始输出（`--raw`） |          ✅           |        ✅         |     ✅     |
+| MTR JSON / NDJSON | ✅ | ✅ | ✅ |
+| MTR 自定义列（`--mtr-columns`） | ✅ | ✅ | ✅ |
+| MTR 录制 / 回放（`--mtr-record` / `--mtr-replay`） | ✅ | ✅ | ✅ |
+| Linux 策略路由（`--fwmark`，仅本地探测） | ✅ | ✅ | ✅ |
 | Globalping（`--from`）  |          ✅           |        —         |     —      |
 | WebUI（`--deploy`）/ MCP（`--deploy --mcp`） |          ✅           |        —         |     —      |
 | 快速跟踪（`-F`）        |          ✅           |        ✅        |     —      |
@@ -214,7 +218,7 @@ ntr --doctor --dev eth0 example.com
 
 `--doctor` 输出纯文本诊断报告后退出，分别列出请求配置、目标解析与源地址选择、系统路由预测及实际后端初始化结果。自检不发送探测包、不读取捕获流量、不访问 GeoIP/API 服务，也不验证目标可达性；DNS/DoT 解析可能访问网络。
 
-三个版本均支持。可用参数限于 `--ipv4`/`--ipv6`、`--tcp`/`--udp`、`--port`、`--source`、`--source-port`、`--dev`、`--tos`、`--dot-server`、`--timeout`、`--language`、`--no-color`、Windows 的 `--icmp-mode` 及对应短参数，详见 `--doctor --help`。目标仅接受域名或 IP，不接受 URL 和带区域后缀的 IPv6 地址。其他运行模式、JSON/RAW/文件输出及无关探测参数不能与自检组合。
+三个版本均支持。可用参数限于 `--ipv4`/`--ipv6`、`--tcp`/`--udp`、`--port`、`--source`、`--source-port`、`--dev`、`--tos`、`--dot-server`、`--timeout`、`--language`、`--no-color`、Windows 的 `--icmp-mode` 及对应短参数，详见 `--doctor --help`。目标仅接受域名或 IP，不接受 URL 和带区域后缀的 IPv6 地址。其他运行模式、JSON/RAW/文件输出及无关探测参数不能与自检组合。`--fwmark` 在自检中不受支持，不能用 Doctor 验证带标记的选路或 `SO_MARK` 权限；Doctor 的 `--source-port` 仅接受 `0..65535`，不接受探测模式的随机值 `-1`。
 
 默认使用 ICMP、中文文本，每项网络检查超时为 5000ms。多个解析候选全部列出，自动选择首个符合地址族的地址，不进行交互选择。目标 DoT 失败不回退系统 DNS。单项失败后继续独立检查；报告写入 stdout，参数与报告写入错误写入 stderr。报告包含目标、源地址和接口信息，不包含 token 或代理凭据。
 
@@ -464,7 +468,7 @@ nexttrace --udp 1.0.0.1
 # 可以自行指定目标端口[此处为5353]，默认33494端口
 nexttrace --udp --port 5353 1.0.0.1
 
-# TCP/UDP Trace 可以自行指定源端口，默认使用随机一个固定的端口(如需每次发包随机使用不同的源端口，请设置`ENV` `NEXTTRACE_RANDOMPORT`)
+# TCP/UDP Trace 可以自行指定源端口，默认使用随机一个固定的端口；`--source-port -1` 或环境变量 `NEXTTRACE_RANDOMPORT` 启用逐包随机源端口，适用于传统 traceroute 及 MTR 文本、JSON、录制
 nexttrace --tcp --source-port 14514 www.bing.com
 ```
 
@@ -712,7 +716,7 @@ ntr --mtr-columns received 1.1.1.1
 - **`p`** — 暂停探测
 - **空格** — 恢复探测
 - **`r`** — 重置统计（计数器清零，显示模式保持不变）
-- **`y`** — 循环切换主机显示模式：ASN → City → Owner → Full
+- **`y`** — 循环切换主机显示模式：IP/PTR → ASN → City → Owner → Full
 - **`n`** — 切换主机名显示方式：
   - 默认：PTR（无 PTR 时回退 IP）↔ 仅 IP
   - 启用 `--show-ips`：PTR (IP) ↔ 仅 IP
@@ -849,6 +853,8 @@ export GLOBALPING_TOKEN=your_token_here
 ```
 
 ### 环境变量总览
+
+启用 `NEXTTRACE_DEBUG` 时，已知 token、IPDB 凭据及代理 URL 的环境变量读取日志只显示变量名和存在状态，不输出其值。其他诊断仍可能包含目标、源地址和接口信息。
 
 NextTrace 当前会读取下列环境变量。对于 `NEXTTRACE_*` 布尔开关，只识别 `1` 和 `0`，其他值会回退到内置默认值。为了避免混淆，修改后建议重启 NextTrace。
 

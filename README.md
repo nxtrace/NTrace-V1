@@ -194,6 +194,10 @@ Starting from this release, NextTrace is published in **three flavors** under th
 | MTR report (`-r`)     |         ✅         |        ✅         |      ✅      |
 | MTR wide (`-w`)       |         ✅         |        ✅         |      ✅      |
 | MTR raw (`--raw`)     |         ✅         |        ✅         |      ✅      |
+| MTR JSON / NDJSON | ✅ | ✅ | ✅ |
+| MTR custom columns (`--mtr-columns`) | ✅ | ✅ | ✅ |
+| MTR recording / replay (`--mtr-record` / `--mtr-replay`) | ✅ | ✅ | ✅ |
+| Linux policy routing (`--fwmark`, local probes only) | ✅ | ✅ | ✅ |
 | Globalping (`--from`) |         ✅         |        —         |      —       |
 | WebUI (`--deploy`) / MCP (`--deploy --mcp`) |        ✅         |        —         |      —       |
 | Fast Trace (`-F`)     |         ✅         |        ✅        |      —       |
@@ -329,7 +333,7 @@ ntr --doctor --dev eth0 example.com
 
 `--doctor` generates a plain-text report and exits without tracing. It separates requested settings, DNS/source selection, system route predictions, and actual local backend initialization. It does not send probe packets, read captured traffic, query GeoIP/API services, or verify target reachability. DNS/DoT queries can use the network.
 
-All three builds support `--doctor`. Options are limited to `--ipv4`/`--ipv6`, `--tcp`/`--udp`, `--port`, `--source`, `--source-port`, `--dev`, `--tos`, `--dot-server`, `--timeout`, `--language`, `--no-color`, and Windows `--icmp-mode`, plus their listed short aliases. Use `--doctor --help` for details. The target must be a domain or IP literal; URLs and IPv6 zone suffixes are not accepted. Doctor is incompatible with other execution modes, JSON/RAW/file output, and unrelated probe options.
+All three builds support `--doctor`. Options are limited to `--ipv4`/`--ipv6`, `--tcp`/`--udp`, `--port`, `--source`, `--source-port`, `--dev`, `--tos`, `--dot-server`, `--timeout`, `--language`, `--no-color`, and Windows `--icmp-mode`, plus their listed short aliases. Use `--doctor --help` for details. The target must be a domain or IP literal; URLs and IPv6 zone suffixes are not accepted. Doctor is incompatible with other execution modes, JSON/RAW/file output, and unrelated probe options. It rejects `--fwmark`, so it cannot verify marked routing or `SO_MARK` privileges. Doctor accepts source ports `0..65535`, not the probe mode's random value `-1`.
 
 The default is ICMP, Chinese text, and 5000 ms per network check. Multiple DNS candidates are listed; the first matching the requested family is selected without prompting. Target DoT failures do not fall back to system DNS. A failed check does not prevent independent checks from completing. The report goes to stdout; usage and output-write errors go to stderr. Reports include target/source/interface addresses, but no token or proxy credentials.
 
@@ -466,7 +470,7 @@ nexttrace --udp 1.0.0.1
 nexttrace --udp --port 5353 1.0.0.1
 
 # For TCP/UDP Trace, you can specify the source port; by default, a fixed random port is used
-# (If you need to use a different random source port for each packet, please set the ENV variable NEXTTRACE_RANDOMPORT, or set the source port to -1)
+# (If you need to use a different random source port for each packet, please set the ENV variable NEXTTRACE_RANDOMPORT, or set the source port to -1; this also applies to MTR text, JSON and recording)
 nexttrace --tcp --source-port 14514 www.bing.com
 ```
 
@@ -721,7 +725,7 @@ When running in a terminal (TTY), MTR mode uses an **interactive full-screen TUI
 - **`p`** — pause probing
 - **`SPACE`** — resume probing
 - **`r`** — reset statistics (counters are cleared, display mode is preserved)
-- **`y`** — cycle host display mode: ASN → City → Owner → Full
+- **`y`** — cycle host display mode: IP/PTR → ASN → City → Owner → Full
 - **`n`** — toggle host name display:
   - default: PTR (or IP fallback) ↔ IP only
   - with `--show-ips`: PTR (IP) ↔ IP only
@@ -874,6 +878,8 @@ NextTrace API v3 utilizes the Proof of Work (PoW) mechanism to prevent abuse, wi
 All NextTrace IP geolocation `API DEMO` can refer to [here](https://github.com/nxtrace/NTrace-core/blob/main/ipgeo/)
 
 ### Environment Variables
+
+With `NEXTTRACE_DEBUG`, environment-read logs for known tokens, IPDB credentials and proxy URLs show only the variable name and presence, never their values. Other diagnostics can still contain target/source addresses and interface names.
 
 NextTrace currently reads the following environment variables. For `NEXTTRACE_*` boolean switches, only `1` and `0` are recognized; other values fall back to the built-in default. For consistency, restart NextTrace after changing them.
 

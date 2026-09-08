@@ -44,7 +44,10 @@ output, with no retry of the final event/report.
 
 Each RAW callback maps to one `probe` in the same order. `iteration` keeps its
 RAW meaning and is not a unique event identifier. A probe precedes the path
-change it triggers; final max-hops conclusions precede `end`. There are no separate Geo/PTR
+change it triggers; final max-hops conclusions precede `end`. When recording
+failure prevents a RAW probe callback, its pending destination/unreachable or
+reopening change is discarded from stdout and the final stream path state. A
+max-hops conclusion can still be emitted after the last callback. There are no separate Geo/PTR
 update events, no retained event history, and no final stream statistics.
 
 Example finite stream with metadata queries disabled (version/times illustrative):
@@ -96,7 +99,7 @@ do not synthesize timeout events for in-flight probes. RTT units are millisecond
 | `max_per_hop`, `hop_interval_ms`, `timeout_ms` | Normalized count (0 unlimited), interval and timeout |
 | `begin_hop`, `max_hops`, `parallel_requests` | TTL range and concurrency |
 | `source_address`, optional `source_device` | Selected source address and applicable device binding |
-| `source_port`, `port` | TCP/UDP only; source 0 means automatic selection |
+| `source_port`, `port` | TCP/UDP only; source `0` selects one automatic port, `-1` selects a random port per probe, `1..65535` selects a fixed port; destination `1..65535` |
 | `packet_size`, `random_packet_size` | Total IP+protocol+payload size; negative size means randomized up to its absolute value |
 | `tos`, optional `icmp_mode` | Traffic class; ICMP listener setting where supported |
 | `data_provider`, `language`, optional `dot_server` | Effective metadata provider, language and DNS override |
@@ -126,6 +129,10 @@ Session errors preserve partial statistics and have `error.stage` and
 `stage: "initialize"`; other runner failures use `stage: "probe"`.
 Signals use `signal: "SIGINT"` or `"SIGTERM"`. Internal
 cancellation retains its error cause and is not reported as user interruption.
+Recording failures use `record` when no earlier session error exists. A later
+recording start, sync or close failure does not replace the original error or
+its stage. A recording failure may leave only a recoverable file prefix; a
+writable stdout still follows the JSON error lifecycle.
 Syntax and conflicting-mode errors occur before a session: stdout is empty,
 stderr carries the diagnostic, and exit code is 2. Help/version retain their
 existing output behavior. All session diagnostics go to stderr.
@@ -133,3 +140,17 @@ existing output behavior. All session diagnostics go to stderr.
 ### Linux socket mark
 
 For supported Linux traceroute/MTR CLI sessions, an explicit `--fwmark` is recorded in MTR `effective_parameters.fwmark` as an optional uint32 JSON number. Decimal and hexadecimal CLI spellings produce the same value. Explicit zero is included; omission leaves the field absent. Schema version remains 1. This records the requested socket setting, not proof of the observed egress route. Mark/source initialization errors use the existing `initialize` error stage and nonzero exit status; no human-readable lines are inserted into JSON or NDJSON.
+
+## Combined examples
+
+```sh
+# Random TCP source ports, finite NDJSON and an independent replay file
+nexttrace --mtr --json --tcp --source-port -1 -q 10 --mtr-record tcp-session.jsonl example.com
+# Linux: marked wide JSON report with DSCP 46 / ECN 0
+nexttrace -w --json --fwmark 0x100 --tos 184 -q 10 example.com
+```
+
+The TCP/UDP source-port value is preserved in effective parameters; it is not a
+list of the randomly selected ports. `--mtr-columns` is rejected with JSON,
+including offline JSON replay. CLI JSON, session recordings, offline replay
+JSON and MCP structured output are distinct contracts.

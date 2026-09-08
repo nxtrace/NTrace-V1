@@ -28,6 +28,44 @@ nexttrace --mtr --raw -q 5 example.com
 
 When `-q` is omitted, `--mtr --raw` runs continuously, while `--report/--wide` (including with `--raw`) defaults to 10 probes per hop. Set an explicit `-q` for bounded automation. MTR raw stdout remains a fixed 12-column stream. Semantic unreachable diagnostics are written to stderr so stdout parsers remain compatible. In unbounded MTR, an unreachable edge is provisional and later transit evidence can reopen the path; use the final `path_end` from bounded structured output as the authoritative boundary.
 
+### JSON, recording and replay
+
+```sh
+nexttrace --mtr --json -q 10 example.com
+nexttrace -r --json -q 10 example.com
+nexttrace --mtr --tcp --source-port -1 --mtr-record session.jsonl -q 10 example.com
+nexttrace --mtr-replay session.jsonl --json
+nexttrace -r --mtr-columns loss,received,avg example.com
+```
+
+All three builds support these CLI capabilities; full/tiny require explicit MTR
+for live runs, while `ntr --json` defaults to streaming MTR. JSON streams and
+reports have different count/error contracts. Do not use live NDJSON as a replay
+file: only `--mtr-record` creates that format. Replay accepts presentation flags
+only and never probes or queries metadata; it can run without network access or
+probe privileges. Incomplete files return nonzero with the valid prefix marked
+incomplete. Text columns do not change RAW/JSON schemas and cannot accompany
+those output modes. See [JSON](../../../docs/mtr-json.md) and
+[recording/replay](../../../docs/mtr-session.md) for schemas and lifecycle rules.
+
+### Environment check and Linux marks
+
+```sh
+nexttrace --doctor --tcp --port 443 --language en example.com
+nexttrace -r --json --fwmark 0x100 -q 10 example.com
+```
+
+Doctor is plain text and performs local setup checks only; DNS/DoT may access
+the network. It does not send probes or verify delivery. Exit codes are 0 for
+required checks passed, 1 for failure, 2 for invalid arguments, 3 for unconfirmed
+required checks, and 130/143 for handled signals. On Windows, WinDivert checks
+use NO_INSTALL. Doctor rejects `--fwmark` and random source port `-1`.
+
+`--fwmark` is Linux-only local traceroute/MTR CLI input, not an MCP parameter.
+Do not silently drop it or send an unmarked MCP request. It supports decimal or
+hex uint32 values, including explicit zero; source/device constraints remain in
+force. Mark setup errors stop probing. It does not mark DNS/Geo/API traffic.
+
 ## MTU
 
 `--mtu` is available in the `nexttrace` and `nexttrace-tiny` flavors. It is not supported by `ntr`.
