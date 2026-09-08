@@ -99,7 +99,9 @@ func (s *MTRReplayState) Apply(event MTRSessionEvent) error {
 			return fmt.Errorf("mtr replay: invalid metadata address")
 		}
 		patch := event.Metadata
-		s.agg.PatchMetadataByIP(patch.IP, patch.Host, patch.Geo)
+		if !s.agg.PatchMetadataByIP(patch.IP, patch.Host, patch.Geo) {
+			return fmt.Errorf("mtr replay: metadata does not update an existing responder")
+		}
 	case MTRSessionPauseEvent:
 		s.paused = true
 	case MTRSessionResumeEvent:
@@ -115,8 +117,13 @@ func (s *MTRReplayState) Apply(event MTRSessionEvent) error {
 func (s *MTRReplayState) applyPathEnd(reason *StopReason) error {
 	expected := s.tracker.pathEnd()
 	if expected == nil && s.tracker.bounded && reason != nil && reason.Reason == StopReasonMaxHops {
-		// Bounded completion is the only conclusion without response evidence.
-		expected = &StopReason{Hop: s.maxHops, Reason: StopReasonMaxHops}
+		// Max-hops needs an accepted probe at that TTL, but no reply is required.
+		for _, stat := range s.agg.Snapshot() {
+			if stat.TTL == s.maxHops && stat.Snt > 0 {
+				expected = &StopReason{Hop: s.maxHops, Reason: StopReasonMaxHops}
+				break
+			}
+		}
 	}
 	if !reflect.DeepEqual(expected, cloneStopReason(reason)) {
 		return fmt.Errorf("mtr replay: path end does not match probe evidence")

@@ -52,6 +52,12 @@ Every record includes `type`, `seq`, `generation`, `elapsed_ns`, and `timestamp`
 | `path_end` | `path_end`: destination/unreachable/max-hops conclusion, or explicit `null` for reopening |
 | `end` | `end`: end time, reason, final path conclusion and optional error/signal |
 
+The end time must equal its record timestamp, and the final path must match the
+reconstructed state. `completed` has no error or signal; `interrupted` has no
+error and optionally `SIGINT` or `SIGTERM`; `error` requires a nonempty error
+stage/message and no signal. Metadata events must actually update an existing
+responder. Contradictory or unapplied events are rejected.
+
 When present, a probe's `response.kind` must be `transit`, `destination`, or
 `unreachable`; empty or unknown kinds are invalid records. A response also
 requires `success: true` and a valid responder IP; timeouts cannot carry path

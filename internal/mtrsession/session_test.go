@@ -587,3 +587,69 @@ func TestReaderProbeAgeIndependentOfWallClock(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectContradictoryFooter(t *testing.T) {
+	for _, scenario := range []string{"timestamp", "unknown_reason", "completed_error", "completed_signal", "interrupted_error", "interrupted_signal", "error_missing", "error_stage", "error_message", "error_signal"} {
+		t.Run(scenario, func(t *testing.T) {
+			path := writeFixture(t, true)
+			records, _, err := readRecords(t, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := &records[len(records)-1]
+			switch scenario {
+			case "timestamp":
+				record.End.EndedAt = record.End.EndedAt.Add(time.Second)
+			case "unknown_reason":
+				record.End.EndReason = "future_reason"
+			case "completed_error":
+				record.End.Error = &Error{Stage: "run", Message: "failed"}
+			case "completed_signal":
+				record.End.Signal = "SIGINT"
+			case "interrupted_error":
+				record.End.EndReason = "interrupted"
+				record.End.Error = &Error{Stage: "run", Message: "failed"}
+			case "interrupted_signal":
+				record.End.EndReason = "interrupted"
+				record.End.Signal = "SIGKILL"
+			case "error_missing":
+				record.End.EndReason = "error"
+			case "error_stage":
+				record.End.EndReason = "error"
+				record.End.Error = &Error{Message: "failed"}
+			case "error_message":
+				record.End.EndReason = "error"
+				record.End.Error = &Error{Stage: "run"}
+			case "error_signal":
+				record.End.EndReason = "error"
+				record.End.Error = &Error{Stage: "run", Message: "failed"}
+				record.End.Signal = "SIGINT"
+			}
+			var data bytes.Buffer
+			for _, r := range records {
+				if err := json.NewEncoder(&data).Encode(r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(path, data.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readRecords(t, path); err == nil {
+				t.Fatal("reader accepted contradictory footer")
+			}
+			if scenario != "timestamp" { // Finish supplies one timestamp for both fields.
+				writer, err := Open(filepath.Join(t.TempDir(), "invalid.jsonl"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = writer.Close() }()
+				if err := writer.Start(testSession()); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Finish(*record.End); err == nil {
+					t.Fatal("writer accepted contradictory footer")
+				}
+			}
+		})
+	}
+}

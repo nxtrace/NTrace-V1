@@ -79,7 +79,7 @@ func (s *recordState) acceptEvent(r Record) error {
 		return errors.New("invalid MTR session generation")
 	}
 	if r.Type == EndEvent {
-		if r.End == nil || r.Probe != nil || r.Metadata != nil || r.PathEnd != nil || r.End.EndedAt.IsZero() || r.End.EndReason == "" {
+		if r.End == nil || r.Probe != nil || r.Metadata != nil || r.PathEnd != nil || !r.End.EndedAt.Equal(r.Timestamp) || !validEndReason(r.End) {
 			return errors.New("invalid MTR session end")
 		}
 		s.ended = true
@@ -119,4 +119,18 @@ func (s *recordState) acceptEvent(r Record) error {
 		return fmt.Errorf("unknown MTR session event %q", r.Type)
 	}
 	return nil
+}
+
+// validEndReason accepts only combinations emitted by the recording lifecycle.
+func validEndReason(end *End) bool {
+	switch end.EndReason {
+	case "completed":
+		return end.Error == nil && end.Signal == ""
+	case "interrupted":
+		return end.Error == nil && (end.Signal == "" || end.Signal == "SIGINT" || end.Signal == "SIGTERM")
+	case "error":
+		return end.Signal == "" && end.Error != nil && end.Error.Stage != "" && end.Error.Message != ""
+	default:
+		return false
+	}
 }

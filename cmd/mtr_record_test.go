@@ -178,6 +178,7 @@ func TestMTRJSONRecordedReportRebuildsSameSnapshot(t *testing.T) {
 		return nil
 	}
 	opts := testMTRJSONOptions()
+	opts.Config.MaxHops = 1
 	opts.Report = true
 	opts.RecordDisplay = mtrRecordingDisplay{hostMode: 4, showIPs: true, wide: true}
 	var plain, recorded, stderr bytes.Buffer

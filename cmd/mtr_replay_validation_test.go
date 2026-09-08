@@ -30,7 +30,7 @@ func TestMTRReplayHelpLikeFilename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, filename := range []string{"--help", "--version", "-h", "-V"} {
+	for _, filename := range []string{"--help", "--version", "-h", "-V", "--json", "--language", "-r"} {
 		if err := os.WriteFile(filename, data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -107,6 +107,35 @@ func TestMTRReplayRejectsPathEndWithoutEvidence(t *testing.T) {
 	}
 }
 
+func TestMTRReplayRejectsContradictoryFooterPath(t *testing.T) {
+	file := replayFixture(t, time.Now(), true)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rewritten bytes.Buffer
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var record mtrsession.Record
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.End != nil {
+			record.End.PathEnd = &trace.StopReason{Hop: 1, Reason: trace.StopReasonDestination}
+		}
+		if err := json.NewEncoder(&rewritten).Encode(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(file, rewritten.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output, diagnostic bytes.Buffer
+	_, code := maybeRunMTRReplayMode([]string{"--mtr-replay", file, "--json"}, &output, &diagnostic)
+	if code != 1 || output.Len() != 0 || !strings.Contains(diagnostic.String(), "path") {
+		t.Fatalf("code=%d output=%q diagnostic=%q", code, output.String(), diagnostic.String())
+	}
+}
+
 func TestMTRReplayRejectsResponseWithoutSuccessfulPeer(t *testing.T) {
 	for _, kind := range []string{trace.MTRResponseTransit, trace.MTRResponseDestination, trace.MTRResponseUnreachable} {
 		for _, peer := range []struct {
@@ -140,6 +169,17 @@ func TestMTRReplayRejectsResponseWithoutSuccessfulPeer(t *testing.T) {
 			if !handled || code != 1 || output.Len() != 0 || diagnostic.Len() == 0 {
 				t.Fatalf("kind=%q peer=%+v code=%d output=%q diagnostic=%q", kind, peer, code, output.String(), diagnostic.String())
 			}
+		}
+	}
+}
+
+func TestMTRReplayMissingFileBeforeOptions(t *testing.T) {
+	for _, tail := range [][]string{{"--json"}, {"-j"}, {"--report"}, {"--language", "en"}, {"--ipinfo=2"}, {"--mtr-columns", "avg"}, {"--"}} {
+		args := append([]string{"--mtr-replay"}, tail...)
+		var output, diagnostic bytes.Buffer
+		handled, code := maybeRunMTRReplayMode(args, &output, &diagnostic)
+		if !handled || code != 2 || output.Len() != 0 || diagnostic.Len() == 0 {
+			t.Fatalf("args=%v code=%d output=%q diagnostic=%q", args, code, output.String(), diagnostic.String())
 		}
 	}
 }

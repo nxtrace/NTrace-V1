@@ -268,6 +268,13 @@ func TestMTRReplayRejectsInvalidEvents(t *testing.T) {
 }
 
 func TestMTRReplayPathEndRequiresProbeEvidence(t *testing.T) {
+	empty := NewMTRReplayState(true, 5)
+	if err := empty.Apply(MTRSessionEvent{Type: MTRSessionPathEndEvent, PathEnd: &StopReason{Hop: 5, Reason: StopReasonMaxHops}}); err == nil {
+		t.Fatal("accepted max-hops without probing the maximum TTL")
+	}
+	if empty.PathEnd() != nil {
+		t.Fatal("invalid max-hops event changed the path")
+	}
 	for _, bounded := range []bool{false, true} {
 		for _, kind := range []string{MTRResponseTransit, MTRResponseDestination, MTRResponseUnreachable} {
 			state := NewMTRReplayState(bounded, 5)
@@ -417,5 +424,49 @@ func TestMTRSessionRecordsAppliedMetadataDuringCancellation(t *testing.T) {
 	rt.processMetadataResult(mtrMetadataResult{gen: 0, kind: mtrMetadataKindHost, patch: mtrMetadataPatch{ip: "192.0.2.1", host: "router.example"}})
 	if !reflect.DeepEqual(state.Snapshot().Stats, rt.snapshotStats()) || state.Snapshot().Stats[0].Host != "router.example" {
 		t.Fatalf("cancel lost applied metadata: replay=%+v live=%+v", state.Snapshot(), rt.snapshotStats())
+	}
+}
+
+func TestMTRReplayRejectsUnappliedMetadata(t *testing.T) {
+	for _, scenario := range []string{"before_probe", "unknown_peer", "after_reset", "already_applied", "empty_patch"} {
+		t.Run(scenario, func(t *testing.T) {
+			state := NewMTRReplayState(false, 3)
+			generation := uint64(0)
+			patch := &MTRSessionMetadata{IP: "192.0.2.1", Host: "router.invalid"}
+			if scenario != "before_probe" {
+				for _, ttl := range []int{1, 2} {
+					if err := state.Apply(MTRSessionEvent{Type: MTRSessionProbeEvent, Probe: &MTRSessionProbe{TTL: ttl, IP: patch.IP, Success: true}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			switch scenario {
+			case "unknown_peer":
+				patch.IP = "192.0.2.2"
+			case "after_reset":
+				generation = 1
+				if err := state.Apply(MTRSessionEvent{Type: MTRSessionResetEvent, Generation: generation}); err != nil {
+					t.Fatal(err)
+				}
+			case "already_applied":
+				if err := state.Apply(MTRSessionEvent{Type: MTRSessionMetadataEvent, Metadata: patch}); err != nil {
+					t.Fatal(err)
+				}
+				for _, stat := range state.Snapshot().Stats {
+					if stat.Host != patch.Host || stat.Snt != 1 {
+						t.Fatalf("cross-TTL patch: %+v", stat)
+					}
+				}
+			case "empty_patch":
+				patch.Host = ""
+			}
+			before := state.Snapshot()
+			if err := state.Apply(MTRSessionEvent{Type: MTRSessionMetadataEvent, Generation: generation, Metadata: patch}); err == nil {
+				t.Fatal("accepted unapplied metadata")
+			}
+			if !reflect.DeepEqual(before, state.Snapshot()) {
+				t.Fatal("rejected metadata changed statistics")
+			}
+		})
 	}
 }

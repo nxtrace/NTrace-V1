@@ -43,7 +43,7 @@ func containsMTRReplayFlag(args []string) bool {
 	return false
 }
 
-func normalizeMTRReplayHelpArgs(args []string) []string {
+func normalizeMTRReplayArgs(fs *flag.FlagSet, args []string) []string {
 	result := append([]string(nil), args...)
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--" {
@@ -54,15 +54,14 @@ func normalizeMTRReplayHelpArgs(args []string) []string {
 			continue
 		}
 		if name == "mtr-replay" {
-			// Help/version needs no file. An explicit = preserves literal
-			// filenames such as --help instead of interpreting them as options.
+			// Do not consume a recognized option as a missing filename.
+			// Explicit = or ./ still permits option-like filenames.
 			if i+1 == len(args) {
 				result[i] += "="
 				continue
 			}
-			next, _, _ := strings.Cut(args[i+1], "=")
-			switch next {
-			case "--help", "-h", "--version", "-V":
+			next, _, _ := strings.Cut(strings.TrimLeft(args[i+1], "-"), "=")
+			if strings.HasPrefix(args[i+1], "-") && (args[i+1] == "--" || fs.Lookup(next) != nil) {
 				result[i] += "="
 				continue
 			}
@@ -107,7 +106,7 @@ func maybeRunMTRReplayMode(args []string, stdout, stderr io.Writer) (bool, int) 
 	}
 	fs.BoolVar(&o.showIPs, "show-ips", false, "Show PTR and IP together")
 	fs.StringVar(&o.columns, "mtr-columns", "", "Select text statistic columns")
-	ordered, err := doctorArgs(fs, normalizeMTRReplayHelpArgs(args))
+	ordered, err := doctorArgs(fs, normalizeMTRReplayArgs(fs, args))
 	if err == nil {
 		err = fs.Parse(ordered)
 	}

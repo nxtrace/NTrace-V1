@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/nxtrace/NTrace-core/internal/mtrsession"
@@ -82,6 +83,15 @@ func (c *mtrReplayCursor) apply(record mtrsession.Record) error {
 		c.state = trace.NewMTRReplayState(bounded, maxHops)
 		return nil
 	case mtrsession.EndEvent:
+		recorded, rebuilt := record.End.PathEnd, c.state.PathEnd()
+		matched := recorded == nil && rebuilt == nil
+		if recorded != nil && rebuilt != nil {
+			matched = recorded.Hop == rebuilt.Hop && recorded.Reason == rebuilt.Reason &&
+				slices.Equal(recorded.Responses, rebuilt.Responses) && slices.Equal(recorded.Markers, rebuilt.Markers)
+		}
+		if !matched {
+			return errors.New("recording footer path does not match replay state")
+		}
 		c.end = record.End
 		return nil
 	}
