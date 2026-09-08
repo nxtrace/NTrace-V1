@@ -5,6 +5,7 @@ package internal
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +28,12 @@ import (
 )
 
 var windowsTOSValues = []int{0, 1, 2, 3, 16, 46, 184, 255, 0}
+
+// The pinned windivert-go binding incorrectly defines ShutdownRecv as zero.
+// WinDivert 2.x uses a bitmask: RECV=1, SEND=2, BOTH=3. Passing zero returns
+// ERROR_INVALID_PARAMETER rather than cancelling the blocked observer.
+// https://github.com/basil00/WinDivert/blob/v2.2.2/include/windivert.h#L204
+const windowsTOSShutdownRecv wd.Shutdown = 0x1
 
 // TestTOSWindowsNativeICMPv4 records what Winsock actually emits. This witness
 // remains independent of the production sender selection so a backend change
@@ -124,6 +132,85 @@ func TestTOSWindowsPacketCapture(t *testing.T) {
 	}
 }
 
+// This observes four probes across the persistent MTR ICMP engine's real
+// sequence rollover. The child fixture records the expected echo IDs/sequences;
+// the independent observer must see every one with its requested Traffic Class.
+func TestTOSWindowsMTRRebuildCapture(t *testing.T) {
+	requireWindowsTOSFixture(t)
+	bin := os.Getenv("NEXTTRACE_TOS_REBUILD_BINARY")
+	if bin == "" {
+		t.Fatal("NEXTTRACE_TOS_REBUILD_BINARY is required")
+	}
+	for _, version := range []int{4, 6} {
+		t.Run(fmt.Sprintf("ipv%d", version), func(t *testing.T) {
+			filter := "outbound and ip.DstAddr == 127.0.0.1 and icmp.Type == 8"
+			if version == 6 {
+				filter = "outbound and ipv6.DstAddr == ::1 and icmpv6.Type == 128"
+			}
+			expected := make(map[[2]int]bool)
+			expectedIDs := make(map[int]bool)
+			packets := captureWindowsTOS(t, filter, 184, 4, func() error {
+				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+				defer cancel()
+				args := []string{"-test.v", fmt.Sprintf("-test.run=^TestMTRTOSRebuildIntegration$/^ipv%d$", version), "-test.timeout=25s"}
+				cmd := exec.CommandContext(ctx, bin, args...)
+				cmd.Env = append(os.Environ(), "NEXTTRACE_TOS_REBUILD_INTEGRATION=1")
+				output, err := cmd.CombinedOutput()
+				if writeErr := os.WriteFile(windowsTOSArtifact(t, ".txt"), output, 0600); writeErr != nil {
+					return writeErr
+				}
+				if err != nil {
+					return fmt.Errorf("MTR rebuild fixture: %w\n%s", err, output)
+				}
+				for _, line := range strings.Split(string(output), "\n") {
+					_, event, found := strings.Cut(line, "TOS_REBUILD ")
+					if !found {
+						continue
+					}
+					var probe struct {
+						EchoID   int `json:"echo_id"`
+						Sequence int `json:"sequence"`
+						TOS      int `json:"tos"`
+					}
+					if err := json.Unmarshal([]byte(strings.TrimSpace(event)), &probe); err != nil {
+						return err
+					}
+					if probe.TOS != 184 || probe.EchoID < 0 || probe.EchoID > 65535 || probe.Sequence < 0 || probe.Sequence > 65535 {
+						return fmt.Errorf("invalid expected rebuild probe: %s", event)
+					}
+					expected[[2]int{probe.EchoID, probe.Sequence}] = true
+					expectedIDs[probe.EchoID] = true
+				}
+				if len(expected) != 4 || len(expectedIDs) != 2 {
+					return fmt.Errorf("fixture recorded %d probes across %d echo IDs, want 4 across 2", len(expected), len(expectedIDs))
+				}
+				return nil
+			})
+			observed := make(map[[2]int]bool)
+			for _, packet := range packets {
+				if len(packet) == 0 {
+					t.Fatal("empty captured packet")
+				}
+				offset := 40
+				if version == 4 {
+					offset = int(packet[0]&15) * 4
+				}
+				if len(packet) < offset+8 {
+					t.Fatalf("truncated ICMP probe: %x", packet)
+				}
+				id := int(binary.BigEndian.Uint16(packet[offset+4 : offset+6]))
+				sequence := int(binary.BigEndian.Uint16(packet[offset+6 : offset+8]))
+				observed[[2]int{id, sequence}] = true
+			}
+			for probe := range expected {
+				if !observed[probe] {
+					t.Errorf("missing captured rebuild probe echo_id=%d sequence=%d", probe[0], probe[1])
+				}
+			}
+		})
+	}
+}
+
 func runWindowsTOSCLI(t *testing.T, bin string, args []string, mode string, tos, run int) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -204,7 +291,7 @@ type windowsTOSCapture struct {
 
 // A negative want records native capability only; production cases always
 // pass their nonnegative requested TOS and require every captured byte to match.
-func captureWindowsTOS(t *testing.T, filter string, want, minPackets int, emit func() error) {
+func captureWindowsTOS(t *testing.T, filter string, want, minPackets int, emit func() error) [][]byte {
 	t.Helper()
 	// Production injection handles use priority 0. A lower-priority independent
 	// SNIFF handle observes their injected packets as well as native socket sends.
@@ -212,7 +299,14 @@ func captureWindowsTOS(t *testing.T, filter string, want, minPackets int, emit f
 	if err != nil {
 		t.Fatalf("open independent packet observer: %v", err)
 	}
-	defer func() { _ = handle.Close() }()
+	// Close may also be needed after a shutdown failure or a receive timeout.
+	// A Windows HANDLE can be reused immediately, so no path may close it twice.
+	closeObserver := sync.OnceValue(handle.Close)
+	defer func() {
+		if err := closeObserver(); err != nil {
+			t.Errorf("close observer: %v", err)
+		}
+	}()
 	done := make(chan windowsTOSCapture, 1)
 	arrived := make(chan struct{})
 	var shutdownRequested atomic.Bool
@@ -245,15 +339,15 @@ func captureWindowsTOS(t *testing.T, filter string, want, minPackets int, emit f
 	}
 	// ShutdownRecv stops new arrivals and lets Recv drain every queued packet.
 	shutdownRequested.Store(true)
-	if err := handle.Shutdown(wd.ShutdownRecv); err != nil {
+	if err := handle.Shutdown(windowsTOSShutdownRecv); err != nil {
 		t.Errorf("stop observer: %v", err)
-		_ = handle.Close()
+		_ = closeObserver()
 	}
 	var capture windowsTOSCapture
 	select {
 	case capture = <-done:
 	case <-time.After(5 * time.Second):
-		_ = handle.Close()
+		_ = closeObserver()
 		t.Fatal("observer did not stop after shutdown")
 	}
 	if !capture.shutdownRequested || (!errors.Is(capture.err, wd.Error(windows.ERROR_NO_DATA)) && !errors.Is(capture.err, wd.Error(windows.ERROR_OPERATION_ABORTED))) {
@@ -290,4 +384,5 @@ func captureWindowsTOS(t *testing.T, filter string, want, minPackets int, emit f
 		t.Errorf("captured %d distinct matching probes (%d observations), want at least %d", len(distinct), len(capture.packets), minPackets)
 	}
 	t.Logf("observed TOS byte counts=%v, captured=%d, distinct=%d, filter=%s", observed, len(capture.packets), len(distinct), filter)
+	return capture.packets
 }

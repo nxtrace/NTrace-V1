@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Strict on-wire TOS assertions; no packet parsing dependency or SKIP path."""
 import argparse
+from contextlib import contextmanager
 import ipaddress
 import json
 import os
@@ -123,6 +124,78 @@ def assert_capture(path, family, protocol, tos, source, target, minimum=2, fragm
     return dict(packets=len(selected), distinct_probes=len(identities), tos=tos)
 
 
+@contextmanager
+def capture_packets(tcpdump, interface, target, capture, log):
+    with log.open("wb") as capture_log:
+        process = subprocess.Popen([tcpdump, "--immediate-mode", "-n", "-U", "-s", "0",
+                                    "-i", interface, "-w", str(capture), "dst host " + target],
+                                   stdout=capture_log, stderr=capture_log)
+        try:
+            deadline = time.monotonic() + 5
+            while "listening on" not in log.read_text():
+                assert process.poll() is None, log.read_text()
+                assert time.monotonic() < deadline, "capture failed to become ready"
+                time.sleep(0.025)
+            yield
+            time.sleep(0.1)
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+            process.wait(timeout=5)
+    assert process.returncode == 0, log.read_text()
+
+
+def assert_rebuild_capture(capture, output, family, target):
+    expected = []
+    for line in output.splitlines():
+        if "TOS_REBUILD " in line:
+            expected.append(json.loads(line.split("TOS_REBUILD ", 1)[1]))
+    assert len(expected) == 4, ("missing rebuild probe markers", expected)
+    identities = {(p["echo_id"], p["sequence"]) for p in expected}
+    assert len(identities) == 4 and len({p[0] for p in identities}) == 2, expected
+    assert all(p["family"] == family and p["tos"] == 184 for p in expected), expected
+    observed = set()
+    for packet in packets(capture):
+        body = packet["body"]
+        if (packet["family"] != family or packet["protocol"] != (1 if family == 4 else 58)
+                or packet["source"] != target or packet["target"] != target
+                or len(body) < 8 or body[0] != (8 if family == 4 else 128)):
+            continue
+        identity = struct.unpack_from("!HH", body, 4)
+        if identity in identities:
+            assert packet["tos"] == 184, (capture, identity, packet["tos"])
+            observed.add(identity)
+    assert observed == identities, (capture, "missing rebuild probes", identities - observed)
+    return dict(distinct_probes=len(observed), generations=2, tos=184)
+
+
+def run_rebuild(binary, artifacts):
+    binary, artifacts = Path(binary).resolve(), Path(artifacts).resolve()
+    artifacts.mkdir(parents=True, exist_ok=True)
+    assert os.geteuid() == 0, "packet capture and raw probes require root"
+    tcpdump = shutil.which("tcpdump")
+    assert tcpdump, "tcpdump is required; this test must not skip"
+    assert binary.is_file(), f"test binary does not exist: {binary}"
+    interface = {"Darwin": "lo0", "Linux": "lo"}.get(platform.system())
+    assert interface, "this runner supports Linux and macOS"
+    for family in (4, 6):
+        target = "127.0.0.1" if family == 4 else "::1"
+        label = f"ipv{family}-mtr-rebuild-tos184"
+        capture, log = artifacts / (label + ".pcap"), artifacts / (label + ".capture.log")
+        with capture_packets(tcpdump, interface, target, capture, log):
+            result = subprocess.run([str(binary), "-test.v", "-test.run",
+                                     f"^TestMTRTOSRebuildIntegration/ipv{family}$"],
+                                    env=dict(os.environ, NEXTTRACE_TOS_REBUILD_INTEGRATION="1"),
+                                    capture_output=True, text=True, timeout=20)
+            (artifacts / (label + ".out")).write_text(result.stdout)
+            (artifacts / (label + ".err")).write_text(result.stderr)
+            assert result.returncode == 0, (label, result.stdout, result.stderr)
+        evidence = assert_rebuild_capture(capture, result.stdout, family, target)
+        with (artifacts / "summary.jsonl").open("a") as summary:
+            summary.write(json.dumps(dict(case=label, status="PASS", **evidence)) + "\n")
+        print("PASS", label, evidence, flush=True)
+
+
 def run_matrix(binary, artifacts):
     binary, artifacts = Path(binary).resolve(), Path(artifacts).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -158,32 +231,17 @@ def run_matrix(binary, artifacts):
                     source_ports = (47464, 47465) if mode == "report" and protocol != "icmp" else ()
                     commands = [(f"{label}-port{port}", args[:-1] + ["--source-port", str(port), target])
                                 for port in source_ports] if source_ports else [(label, args)]
-                    with log.open("wb") as capture_log:
-                        process = subprocess.Popen([tcpdump, "--immediate-mode", "-n", "-U", "-s", "0",
-                                                    "-i", interface, "-w", str(capture),
-                                                    "dst host " + target], stdout=capture_log, stderr=capture_log)
-                        try:
-                            deadline = time.monotonic() + 5
-                            while "listening on" not in log.read_text():
-                                assert process.poll() is None, log.read_text()
-                                assert time.monotonic() < deadline, "capture failed to become ready"
-                                time.sleep(0.025)
-                            for run_label, command in commands:
-                                result = subprocess.run(command, capture_output=True, timeout=15)
-                                (artifacts / (run_label + ".out")).write_bytes(result.stdout)
-                                (artifacts / (run_label + ".err")).write_bytes(result.stderr)
-                                assert result.returncode == 0, (run_label, result.returncode, result.stderr.decode(errors="replace"))
-                                output = json.loads(result.stdout)
-                                if mode == "report":
-                                    assert output["end_reason"] == "completed", (run_label, output)
-                                    assert output["effective_parameters"]["tos"] == tos, (run_label, output)
-                                    assert sum(row["snt"] for row in output["stats"]) == 2, (run_label, output)
-                            time.sleep(0.1)
-                        finally:
-                            if process.poll() is None:
-                                process.send_signal(signal.SIGINT)
-                            process.wait(timeout=5)
-                    assert process.returncode == 0, log.read_text()
+                    with capture_packets(tcpdump, interface, target, capture, log):
+                        for run_label, command in commands:
+                            result = subprocess.run(command, capture_output=True, timeout=15)
+                            (artifacts / (run_label + ".out")).write_bytes(result.stdout)
+                            (artifacts / (run_label + ".err")).write_bytes(result.stderr)
+                            assert result.returncode == 0, (run_label, result.returncode, result.stderr.decode(errors="replace"))
+                            output = json.loads(result.stdout)
+                            if mode == "report":
+                                assert output["end_reason"] == "completed", (run_label, output)
+                                assert output["effective_parameters"]["tos"] == tos, (run_label, output)
+                                assert sum(row["snt"] for row in output["stats"]) == 2, (run_label, output)
                     result = assert_capture(capture, family, protocol, tos, target, target,
                                             source_ports=source_ports)
                     with (artifacts / "summary.jsonl").open("a") as summary:
@@ -197,6 +255,9 @@ def main():
     run = subparsers.add_parser("run")
     run.add_argument("binary")
     run.add_argument("artifacts")
+    rebuild = subparsers.add_parser("rebuild")
+    rebuild.add_argument("binary")
+    rebuild.add_argument("artifacts")
     check = subparsers.add_parser("check")
     check.add_argument("pcap")
     check.add_argument("family", type=int, choices=(4, 6))
@@ -210,6 +271,8 @@ def main():
     args = parser.parse_args()
     if args.command == "run":
         run_matrix(args.binary, args.artifacts)
+    elif args.command == "rebuild":
+        run_rebuild(args.binary, args.artifacts)
     else:
         print(json.dumps(assert_capture(args.pcap, args.family, args.protocol, args.tos,
                                         args.source, args.target, args.minimum, args.fragmented,

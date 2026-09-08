@@ -80,9 +80,10 @@ func TestTOSSocketReuse(t *testing.T) {
 				if version == 6 {
 					packetProtocol = layers.IPProtocolICMPv6
 				}
-				if protocol == "tcp" {
+				switch protocol {
+				case "tcp":
 					packetProtocol = layers.IPProtocolTCP
-				} else if protocol == "udp" {
+				case "udp":
 					packetProtocol = layers.IPProtocolUDP
 				}
 				var closedProbe ipLayer

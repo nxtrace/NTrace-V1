@@ -24,6 +24,8 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version: '1.27.1'
@@ -36,6 +38,11 @@ jobs:
           go build -o "$RUNNER_TEMP/nexttrace-tos" .
           go test -c -o "$RUNNER_TEMP/tos-trace.test" ./trace
           go test -c -o "$RUNNER_TEMP/tos-socket.test" ./trace/internal
+      - name: Validate Linux raw socket source queries
+        if: runner.os == 'Linux'
+        run: |
+          go test -c -o "$RUNNER_TEMP/tos-route.test" ./internal/routeprobe
+          sudo env NEXTTRACE_TOS_ROUTE_INTEGRATION=1 "$RUNNER_TEMP/tos-route.test" -test.run '^TestRawSourceSocketIntegration$' -test.v
       - name: Reusing sockets restores TOS to zero
         run: sudo env NEXTTRACE_TOS_SOCKET_INTEGRATION=1 "$RUNNER_TEMP/tos-socket.test" -test.run '^TestTOSSocketReuse$' -test.v
       - name: MTR configuration failure is terminal
@@ -44,6 +51,9 @@ jobs:
         run: python3 -m unittest discover -s scripts/regression -p 'test_tos_capture.py' -v
       - name: Capture IPv4 and IPv6 traceroute and MTR
         run: sudo python3 scripts/regression/tos_capture.py run "$RUNNER_TEMP/nexttrace-tos" "$RUNNER_TEMP/tos-results/packets"
+      - name: Capture TOS across MTR engine rebuilds
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: sudo python3 scripts/regression/tos_capture.py rebuild "$RUNNER_TEMP/tos-trace.test" "$RUNNER_TEMP/tos-results/rebuild"
       - name: Verify Linux policy routes and UDP fragments
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.build.outcome == 'success' }}
         run: sudo bash scripts/regression/tos_linux.sh "$RUNNER_TEMP/nexttrace-tos" "$RUNNER_TEMP/tos-results/routes"
@@ -59,6 +69,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version: '1.27.1'
@@ -72,6 +84,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'build failed' }
           go test -c -o "$dir\internal.test.exe" ./trace/internal
           if ($LASTEXITCODE -ne 0) { throw 'test build failed' }
+          go test -c -o "$dir\trace.test.exe" ./trace
+          if ($LASTEXITCODE -ne 0) { throw 'trace test build failed' }
           & "$dir\nexttrace.exe" --init
           if ($LASTEXITCODE -ne 0) { throw 'WinDivert setup failed' }
       - name: Independently capture IPv4 and IPv6 traceroute and MTR
@@ -80,11 +94,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:NEXTTRACE_TOS_PACKET_INTEGRATION = '1'
           $env:NEXTTRACE_TOS_BINARY = Join-Path $env:RUNNER_TEMP 'tos-bin\nexttrace.exe'
+          $env:NEXTTRACE_TOS_REBUILD_BINARY = Join-Path $env:RUNNER_TEMP 'tos-bin\trace.test.exe'
           $env:NEXTTRACE_TOS_ARTIFACTS = Join-Path $env:RUNNER_TEMP 'tos-results'
           New-Item -ItemType Directory -Force $env:NEXTTRACE_TOS_ARTIFACTS | Out-Null
           git rev-parse HEAD | Out-File "$env:NEXTTRACE_TOS_ARTIFACTS\revision.txt"
           [Environment]::OSVersion.VersionString | Out-File "$env:NEXTTRACE_TOS_ARTIFACTS\environment.txt"
-          & "$env:RUNNER_TEMP\tos-bin\internal.test.exe" '-test.run=^TestTOSWindows(NativeICMPv4|PacketCapture)$' '-test.v' '-test.timeout=15m' 2>&1 | Tee-Object "$env:NEXTTRACE_TOS_ARTIFACTS\tests.txt"
+          & "$env:RUNNER_TEMP\tos-bin\internal.test.exe" '-test.run=^TestTOSWindows(NativeICMPv4|PacketCapture|MTRRebuildCapture)$' '-test.v' '-test.timeout=15m' 2>&1 | Tee-Object "$env:NEXTTRACE_TOS_ARTIFACTS\tests.txt"
           if ($LASTEXITCODE -ne 0) { throw 'TOS capture acceptance failed' }
       - uses: actions/upload-artifact@v7
         if: always()

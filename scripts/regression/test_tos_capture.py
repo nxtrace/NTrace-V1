@@ -1,11 +1,12 @@
 """Guard against false passes in the packet acceptance checker."""
 import ipaddress
+import json
 from pathlib import Path
 import struct
 import tempfile
 import unittest
 
-from tos_capture import assert_capture, packets
+from tos_capture import assert_capture, assert_rebuild_capture, packets
 
 
 class CaptureAssertions(unittest.TestCase):
@@ -27,9 +28,9 @@ class CaptureAssertions(unittest.TestCase):
                          64, 17, 0, b'\x7f\0\0\1', b'\x7f\0\0\1')
         return b'\0' * 12 + b'\x08\0' + ip + body
 
-    def ipv6_echo(self, tos, seq, reply=False):
+    def ipv6_echo(self, tos, seq, reply=False, echo_id=1):
         addr = ipaddress.IPv6Address('::1').packed
-        body = struct.pack('!BBHHH', 129 if reply else 128, 0, 0, 1, seq)
+        body = struct.pack('!BBHHH', 129 if reply else 128, 0, 0, echo_id, seq)
         ip = struct.pack('!IHBB16s16s', (6 << 28) | (tos << 20), len(body), 58, 64, addr, addr)
         return struct.pack('<I', 30) + ip + body
 
@@ -67,6 +68,21 @@ class CaptureAssertions(unittest.TestCase):
                                 source_ports=(47464, 47465))
         self.assertEqual(result['distinct_probes'], 2)
         self.assertEqual(result['packets'], 4)
+
+    def test_rebuild_requires_both_generations_on_wire(self):
+        identities = [(101, 65534), (101, 65535), (102, 1), (102, 2)]
+        output = "\n".join("fixture.go:1: TOS_REBUILD " + json.dumps(dict(
+            family=6, generation=index // 2, echo_id=echo_id, sequence=seq, tos=184))
+            for index, (echo_id, seq) in enumerate(identities))
+        frames = [self.ipv6_echo(184, seq, echo_id=echo_id) for echo_id, seq in identities]
+        self.pcap(frames, link=0)
+        self.assertEqual(assert_rebuild_capture(self.path, output, 6, '::1')['generations'], 2)
+        self.pcap(frames[:2] * 2, link=0)
+        with self.assertRaisesRegex(AssertionError, 'missing rebuild probes'):
+            assert_rebuild_capture(self.path, output, 6, '::1')
+        self.pcap(frames[:3] + [self.ipv6_echo(0, 2, echo_id=102)], link=0)
+        with self.assertRaises(AssertionError):
+            assert_rebuild_capture(self.path, output, 6, '::1')
 
     def test_all_eight_bits_checked(self):
         self.pcap([self.ipv4_udp(184, 1), self.ipv4_udp(185, 2)])
