@@ -228,7 +228,11 @@ def run_matrix(binary, artifacts):
                     # Fallback MTR repeats the same TCP sequence/UDP payload in
                     # separate one-probe rounds. Distinct session source ports
                     # identify real probes without counting loopback duplicates.
-                    source_ports = (47464, 47465) if mode == "report" and protocol != "icmp" else ()
+                    # Constrain traceroute too: loopback can carry unrelated UDP
+                    # traffic from system services while tcpdump is running.
+                    source_ports = ()
+                    if protocol != "icmp":
+                        source_ports = (47464, 47465) if mode == "report" else (47464,)
                     commands = [(f"{label}-port{port}", args[:-1] + ["--source-port", str(port), target])
                                 for port in source_ports] if source_ports else [(label, args)]
                     with capture_packets(tcpdump, interface, target, capture, log):
