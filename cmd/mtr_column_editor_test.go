@@ -115,15 +115,36 @@ func TestMTRKeyLoopCancelWhileReadBlocked(t *testing.T) {
 	defer func() { _ = r.Close() }()
 	defer func() { _ = w.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	u := newMTRUI(cancel, 0)
 	done := make(chan struct{})
 	go func() { u.readKeysLoop(ctx, r); close(done) }()
-	_, _ = w.Write([]byte("o\x1b"))
-	time.Sleep(75 * time.Millisecond)
-	_, e := u.columnSnapshot()
-	if e.Active {
-		t.Fatal("bare Esc did not cancel without another read")
+	waitEditor := func(active bool) {
+		t.Helper()
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		for {
+			_, editor := u.columnSnapshot()
+			if editor.Active == active {
+				return
+			}
+			select {
+			case <-u.redraw:
+			case <-timer.C:
+				t.Fatalf("editor did not become active=%v without another read", active)
+			}
+		}
 	}
+	if _, err := w.Write([]byte("o")); err != nil {
+		t.Fatal(err)
+	}
+	waitEditor(true)
+	if _, err := w.Write([]byte("\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the parser's redraw instead of assuming a scheduler deadline.
+	// Escape timing itself is covered with explicit timestamps above.
+	waitEditor(false)
 	cancel()
 	select {
 	case <-done:
