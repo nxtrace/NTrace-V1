@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version: '1.27.1'
@@ -26,6 +28,11 @@ jobs:
           go build -o "$RUNNER_TEMP/nexttrace-fwmark" .
           go test -c -o "$RUNNER_TEMP/fwmark-socket.test" ./trace/internal
           go test -c -o "$RUNNER_TEMP/fwmark-trace.test" ./trace
+      - name: Route reply and socketcall regressions
+        run: |
+          go test ./internal/routeprobe
+          GOARCH=386 CGO_ENABLED=0 go test ./internal/routeprobe
+          GOARCH=s390x CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/routeprobe-s390x.test" ./internal/routeprobe
       - name: Native sockets and MTR rotation
         run: |
           sudo env NEXTTRACE_FWMARK_INTEGRATION=1 "$RUNNER_TEMP/fwmark-socket.test" -test.run '^TestFWMarkNativeSockets$' -test.v

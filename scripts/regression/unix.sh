@@ -227,7 +227,7 @@ check_mtr_json() {
     record "${name}" FAIL "MTR JSON exit=${rc}"
     return
   fi
-  if python3 - "${out}" "${mode}" <<'PY'
+  if python3 - "${out}" "${mode}" >"${out}.assert" 2>&1 <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as f:
@@ -247,7 +247,7 @@ PY
   then
     record "${name}" PASS "MTR JSON ${mode} contract"
   else
-    record "${name}" FAIL "MTR JSON ${mode} contract"
+    record "${name}" FAIL "MTR JSON ${mode} contract; $(tail -n 1 "${out}.assert")"
   fi
 }
 
