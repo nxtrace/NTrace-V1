@@ -43,6 +43,9 @@ func TestTOSSourceRouteConditions(t *testing.T) {
 							if req.Method != string(method) || !req.DstIP.Equal(cfg.DstIP) || req.TOS != tos || req.FWMark != mark.value || req.FWMarkSet != mark.set {
 								t.Fatalf("lost route condition: %+v", req)
 							}
+							if req.HeaderIncluded != (method == UDPTrace && cfg.DstIP.To4() != nil) {
+								t.Fatalf("wrong header-inclusion route hint: %+v", req)
+							}
 							if req.SrcPort != 0 || req.DstPort != 0 {
 								t.Fatalf("raw route unexpectedly includes ports: %+v", req)
 							}

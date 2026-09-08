@@ -12,8 +12,8 @@ import (
 )
 
 // This supplements the CLI packet-capture matrix by keeping each native socket
-// alive across nonzero-to-zero transitions. It intentionally covers socket
-// option paths; Unix UDPv4 writes a complete IP header instead.
+// alive across nonzero-to-zero transitions, including the socket TOS used to
+// route UDPv4 packets whose serialized header is supplied with IP_HDRINCL.
 func TestTOSSocketReuse(t *testing.T) {
 	if os.Getenv("NEXTTRACE_TOS_SOCKET_INTEGRATION") != "1" {
 		t.Skip("opt-in privileged native socket fixture")
@@ -24,12 +24,10 @@ func TestTOSSocketReuse(t *testing.T) {
 			src = net.IPv6loopback
 		}
 		for _, protocol := range []string{"icmp", "tcp", "udp"} {
-			if version == 4 && protocol == "udp" {
-				continue
-			}
 			t.Run(protocol+"/"+src.String(), func(t *testing.T) {
 				var send func(ipLayer) (time.Time, error)
 				var read func() (int, error)
+				var closeUDP func()
 				switch protocol {
 				case "icmp":
 					s := NewICMPSpec(version, 1, 0x746f, src, src)
@@ -68,15 +66,33 @@ func TestTOSSocketReuse(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer s.Close()
-					read = s.udp6.TrafficClass
+					closeUDP = s.Close
+					if version == 4 {
+						read = s.udp4.TOS
+					} else {
+						read = s.udp6.TrafficClass
+					}
 					send = func(ip ipLayer) (time.Time, error) {
 						return s.SendUDP(t.Context(), ip, &layers.UDP{SrcPort: 47464, DstPort: 33494}, []byte{0, 1})
 					}
 				}
+				packetProtocol := layers.IPProtocolICMPv4
+				if version == 6 {
+					packetProtocol = layers.IPProtocolICMPv6
+				}
+				if protocol == "tcp" {
+					packetProtocol = layers.IPProtocolTCP
+				} else if protocol == "udp" {
+					packetProtocol = layers.IPProtocolUDP
+				}
+				var closedProbe ipLayer
 				for _, tos := range []uint8{184, 255, 0} {
-					var ip ipLayer = &layers.IPv4{Version: 4, TOS: tos, TTL: 1, SrcIP: src, DstIP: src, Protocol: layers.IPProtocolICMPv4}
+					var ip ipLayer = &layers.IPv4{Version: 4, TOS: tos, TTL: 1, SrcIP: src, DstIP: src, Protocol: packetProtocol}
 					if version == 6 {
-						ip = &layers.IPv6{Version: 6, TrafficClass: tos, HopLimit: 1, SrcIP: src, DstIP: src, NextHeader: layers.IPProtocolICMPv6}
+						ip = &layers.IPv6{Version: 6, TrafficClass: tos, HopLimit: 1, SrcIP: src, DstIP: src, NextHeader: packetProtocol}
+					}
+					if tos == 184 {
+						closedProbe = ip
 					}
 					if _, err := send(ip); err != nil {
 						t.Fatalf("TOS=%d: send: %v", tos, err)
@@ -85,6 +101,11 @@ func TestTOSSocketReuse(t *testing.T) {
 					if err != nil || got != int(tos) {
 						t.Fatalf("TOS=%d: socket readback=%d: %v", tos, got, err)
 					}
+				}
+				if version == 4 && protocol == "udp" {
+					closeUDP()
+					start, err := send(closedProbe)
+					assertTOSSetupFailure(t, start, err, "IPv4 TOS")
 				}
 			})
 		}

@@ -78,9 +78,13 @@ func RequestBytes(cfg Request, seq uint32) ([]byte, error) {
 	case "udp":
 		proto = unix.IPPROTO_UDP
 	}
+	headerIncluded := family == unix.AF_INET && cfg.HeaderIncluded
+	if headerIncluded {
+		proto = unix.IPPROTO_RAW
+	}
 	body = append(body, routeAttr(unix.RTA_IP_PROTO, []byte{proto})...)
 	body = append(body, routeAttr(unix.RTA_UID, routeUint(uint32(os.Geteuid())))...)
-	if cfg.Method != "icmp" {
+	if cfg.Method != "icmp" && !headerIncluded {
 		for _, p := range []struct {
 			kind uint16
 			port int

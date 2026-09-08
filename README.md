@@ -392,7 +392,7 @@ The routing visualization function requires the geographical coordinates of each
 - **For Administrator Mode:**  
   **TCP/UDP mode** requires `WinDivert`.  
   **ICMP mode** supports `1=Socket` and `2=WinDivert` (`0=Auto`). If running in Socket mode, the firewall must allow `ICMP/ICMPv6`.  
-  On `Windows`, `ICMPv6` without `--tos` (or with `--tos 0`) keeps using the native Socket send path. A non-zero `ICMPv6 --tos` requires `WinDivert` send support in addition to administrator privilege.  
+  On `Windows amd64`, ICMPv4 and ICMPv6 without `--tos` (or with `--tos 0`) keep using the native Socket send path. Nonzero ICMP `--tos` uses `WinDivert` to preserve the complete field and requires administrator privilege, including when `--icmp-mode 1` selects socket reception. Native Windows ICMPv4 was observed sending zero for every tested nonzero TOS value.
   `WinDivert` can be automatically configured using the `--init` parameter, which extracts the runtime to the executable directory.
 
 #### `NextTrace` now supports quick testing, and friends who have a one-time backhaul routing test requirement can use it
@@ -432,7 +432,7 @@ BSD and Android expose the native options but have not completed this native pac
 
 `--fwmark 256` or `--fwmark 0x100` sets a 32-bit socket mark on local traceroute and MTR probes. It supports ICMP/TCP/UDP over IPv4/IPv6 in all applicable builds. Configure matching Linux `ip rule` and route tables separately; NextTrace does not edit them. The same mark need not change the route when no rule selects a different path.
 
-Automatic source selection uses the marked route. Explicit `--source` and `--dev` remain constraints; a mark does not override them. Marked sessions do not use the legacy process-wide source cache. The query includes protocol and TOS, but omits TCP/UDP ports to match the native raw sockets: their kernel route lookup does not see the transport headers serialized in user space. Later policy changes and ECMP can still affect path selection.
+Automatic source selection uses the marked route. Explicit `--source` and `--dev` remain constraints; a mark does not override them. Marked sessions do not use the legacy process-wide source cache. The query includes the kernel send protocol and TOS (IPv4 UDP with IP_HDRINCL uses protocol 255), but omits TCP/UDP ports to match the native raw sockets: their kernel route lookup does not see the transport headers serialized in user space. Later policy changes and ECMP can still affect path selection.
 
 Values range from `0` to `4294967295`; decimal and `0x` hexadecimal are accepted, without masks. Omission leaves socket marking untouched; explicit `0` sets zero and still requires permission. Linux requires `CAP_NET_ADMIN`, or `CAP_NET_RAW` on Linux 5.17 and newer. Mark initialization failure terminates probing rather than falling back to unmarked traffic.
 
@@ -618,7 +618,7 @@ export NO_COLOR=1
 | `--ttl-time` | Gap between TTL groups in traceroute; per-hop interval in MTR | traceroute: `300ms`; MTR: `1000ms` when omitted | Lower to speed up; raise on remote/rate-limited paths |
 | `--timeout` | Per-probe timeout | `1000ms` | Raise to `2000-3000ms` for intercontinental or high-loss paths |
 | `--psize` | Probe packet size | Protocol/IP-family minimum | Inclusive IP + probe headers; negative values randomize each probe up to `abs(value)`; sizes above the egress/path MTU may fragment on wire |
-| `-Q`, `--tos` | IP TOS / traffic class | `0` | Set DSCP/TOS style marking in the IP header; on Windows only `ICMPv6` with a non-zero value requires `WinDivert` |
+| `-Q`, `--tos` | IP TOS / traffic class | `0` | Set the full 8-bit IP field (DSCP*4+ECN); nonzero ICMP on Windows amd64 requires `WinDivert` |
 
 These probe knobs are CLI-only today; `nt_config.yaml` does not yet store them. If you want reusable profiles, keep them in shell aliases or small wrapper scripts.
 

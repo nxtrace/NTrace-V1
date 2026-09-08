@@ -36,3 +36,11 @@ func TestTOSSocketFailuresAreInitializationErrors(t *testing.T) {
 		assertTOSSetupFailure(t, start, err, "IPv6 Traffic Class")
 	})
 }
+
+func TestICMPv4TOSFailureIsInitializationError(t *testing.T) {
+	conn := closedTOSSocket(t)
+	s := ICMPSpec{IPVersion: 4, icmp: conn, icmp4: ipv4.NewPacketConn(conn)}
+	hdr := &layers.IPv4{Version: 4, TOS: 184, TTL: 1}
+	start, err := s.SendICMP(t.Context(), hdr, &layers.ICMPv4{TypeCode: layers.CreateICMPv4TypeCode(8, 0)}, nil, nil)
+	assertTOSSetupFailure(t, start, err, "IPv4 TOS")
+}

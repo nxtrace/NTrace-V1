@@ -39,5 +39,6 @@ func probeRouteRequest(method Method, cfg Config) routeprobe.Request {
 	return routeprobe.Request{
 		Method: string(method), DstIP: cfg.DstIP, SrcAddr: cfg.SrcAddr, SourceDevice: cfg.SourceDevice,
 		TOS: cfg.TOS, FWMark: cfg.FWMark, FWMarkSet: cfg.FWMarkSet,
+		HeaderIncluded: method == UDPTrace && cfg.DstIP.To4() != nil,
 	}
 }

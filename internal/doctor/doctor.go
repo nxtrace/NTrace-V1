@@ -145,6 +145,7 @@ func run(ctx context.Context, opts Options, deps dependencies) Report {
 	}
 	cfg := opts.Config
 	cfg.DstIP = r.Target
+	cfg.Context = ctx
 	cfg, err = deps.normalize(opts.Method, cfg)
 	if err == nil && cfg.SrcAddr != "" {
 		ip := net.ParseIP(cfg.SrcAddr)
@@ -165,6 +166,8 @@ func run(ctx context.Context, opts Options, deps dependencies) Report {
 		r.SourceBasis = "explicit_source"
 	case opts.Config.SourceDevice != "":
 		r.SourceBasis = "device_source"
+	case cfg.SrcAddr != "":
+		r.SourceBasis = "route_prediction"
 	default:
 		r.SourceBasis = "socket_prediction"
 		sourceCtx, stop := context.WithTimeout(ctx, opts.Config.Timeout)

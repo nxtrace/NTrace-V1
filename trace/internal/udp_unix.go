@@ -133,6 +133,15 @@ func (s *UDPSpec) sendUDPIPv4(ipHdr *layers.IPv4, udpHdr *layers.UDP, payload []
 		return time.Time{}, err
 	}
 
+	// IP_HDRINCL preserves the serialized header, but Linux selects the route
+	// using the socket TOS before copying that header. Keep route selection and
+	// every fragment of this probe under the same per-socket lock.
+	s.hopLimitLock.Lock()
+	defer s.hopLimitLock.Unlock()
+	if err := s.udp4.SetTOS(int(ipHdr.TOS)); err != nil {
+		return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv4 TOS %d: %w", ipHdr.TOS, err)}
+	}
+
 	if len(packet) <= s.mtu {
 		start := time.Now()
 		if err := s.udp4.WriteTo(hdr, body, nil); err != nil {

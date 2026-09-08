@@ -32,6 +32,8 @@ Do not pass `packet_size` to:
 
 ## Windows
 
+On Windows amd64, nonzero ICMP TOS requires WinDivert sending and administrator privilege for both IPv4 and IPv6, even with socket reception. Default and zero TOS retain native socket sending. This does not imply WinDivert availability in Windows arm64 builds.
+
 Windows device selection is source-address-based for many paths. Treat `source_device` as a hint unless the returned source path proves otherwise.
 
 Do not summarize Windows `source_device` as guaranteed device binding. Say it is source-address-based behavior unless the result proves otherwise.
