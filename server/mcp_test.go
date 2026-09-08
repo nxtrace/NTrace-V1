@@ -72,7 +72,7 @@ func (s *recordingMCPService) MTRReport(_ context.Context, input service.MTRRepo
 		Target:     "example.com",
 		ResolvedIP: "93.184.216.34",
 		Protocol:   "icmp",
-		Stats:      []trace.MTRHopStat{{TTL: 1, Snt: 3, Received: 2, Dropped: 1, GMean: 1.5, Jitter: 0.5, JitterAvg: 0.25, JitterMax: 0.5, JitterInterarrival: 0.5, Geo: &ipgeo.IPGeoData{Router: map[string][]string{}}}},
+		Stats:      []trace.MTRHopStat{{TTL: 1, Snt: 3, Received: 2, Dropped: 1, Loss: 100.0 / 3.0, GMean: 1.5, Jitter: 0.5, JitterAvg: 0.25, JitterMax: 0.5, JitterInterarrival: 0.5, Geo: &ipgeo.IPGeoData{Router: map[string][]string{}}}},
 		PathEnd:    &service.TraceStopReason{Hop: 4, Reason: trace.StopReasonDestination},
 	}, nil
 }
