@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/fatih/color"
 	"github.com/nxtrace/NTrace-core/trace"
@@ -134,7 +133,11 @@ func renderMTRSelectedHeader(b *strings.Builder, header MTRTUIHeader, width int)
 	if width < 40 {
 		tuiLine(b, "%s", truncateByDisplayWidth(buildMTRTUIRouteText(header), width))
 	} else {
-		tuiLine(b, "%s", buildMTRTUIRouteLine(header, width, time.Now()))
+		tuiLine(b, "%s", buildMTRTUIRouteLine(header, width, mtrTUIClock(header)))
+	}
+	if header.Replay != nil {
+		tuiLine(b, "%s", buildMTRReplayControls(header, width))
+		return
 	}
 	if width >= 160 {
 		tuiLine(b, "%s", buildMTRTUIControlsLine(header, width))

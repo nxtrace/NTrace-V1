@@ -20,6 +20,7 @@ on:
       - "nt_install.sh"
       - ".cross_compile.sh"
       - "scripts/test_nt_install.sh"
+      - "scripts/test_mtr_session_pty.py"
       - "scripts/perf/**"
       - ".github/workflows/*.yml"
   pull_request:
@@ -33,6 +34,7 @@ on:
       - "nt_install.sh"
       - ".cross_compile.sh"
       - "scripts/test_nt_install.sh"
+      - "scripts/test_mtr_session_pty.py"
       - "scripts/perf/**"
       - ".github/workflows/*.yml"
   workflow_dispatch:
@@ -149,6 +151,36 @@ jobs:
           python -m pip install pywinpty==3.0.5
           go build -o "$env:RUNNER_TEMP/nexttrace-mtr-columns.exe" .
           python scripts/test_mtr_columns_pty.py "$env:RUNNER_TEMP/nexttrace-mtr-columns.exe"
+
+      - name: MTR session recording and replay PTY smoke
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          for flavor in full tiny ntr; do
+            binary="${RUNNER_TEMP}/nexttrace-mtr-session-${flavor}"
+            tags=()
+            if [[ "${flavor}" != full ]]; then
+              tags=(-tags "flavor_${flavor}")
+            fi
+            go build -buildvcs=false "${tags[@]}" -o "${binary}" .
+            sudo python3 scripts/test_mtr_session_pty.py "${binary}"
+          done
+
+      - name: MTR session recording and replay ConPTY smoke
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          foreach ($flavor in @("full", "tiny", "ntr")) {
+            $binary = "$env:RUNNER_TEMP/nexttrace-mtr-session-$flavor.exe"
+            $buildArgs = @("build", "-buildvcs=false", "-o", $binary)
+            if ($flavor -ne "full") {
+              $buildArgs += @("-tags", "flavor_$flavor")
+            }
+            go @buildArgs .
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python scripts/test_mtr_session_pty.py $binary
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Test with windows
         if: ${{ matrix.os == 'windows-latest' }}

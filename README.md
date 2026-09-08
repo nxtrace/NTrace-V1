@@ -687,6 +687,18 @@ JSON always includes all available metadata (FULL), ignores `-y`, and honors Geo
 
 NDJSON emits `start`, `probe`, `path_end`, and `end` objects with consecutive `seq` values. Reports emit exactly one object, including partial statistics on interruption or failure. Diagnostics go to stderr. Exit codes: completion `0`, runtime/initialization error `1`, invalid arguments `2`, SIGINT `130`, SIGTERM `143`. Completion does not imply reachability; use `path_end`. See the [MTR JSON v1 contract and examples](docs/mtr-json.md).
 
+Save and reopen an MTR session in any build:
+
+```sh
+nexttrace --mtr --mtr-record session.jsonl 1.1.1.1
+nexttrace --mtr-replay session.jsonl
+nexttrace --mtr-replay session.jsonl -r --json
+```
+
+`--mtr-record` creates a new private file alongside the selected TUI, report, RAW or JSON output. It does not enable MTR by itself; full/tiny require `-t`, `-r` or `-w`, while ntr uses its default mode. Existing files are never overwritten. A recording write failure stops probing and returns an error, preserving the written prefix.
+
+Replay uses recorded probe results and metadata without probing or DNS/Geo/PTR queries. In a terminal it opens paused at the final statistics; Space plays at original speed (from the beginning at EOF), `p` pauses playback, `r` rewinds, and `j/J` seeks to an elapsed `HH:MM:SS[.mmm]`. Existing host, column and history controls remain available. Non-TTY and `-r/-w` output one report; `--json` emits a separate offline report with recording completeness and playback position. Truncated tails are recoverable, explicitly marked incomplete, and return nonzero. The three-minute history window follows the playback position; the file retains the whole recorded session. See the [session format and recovery contract](docs/mtr-session.md).
+
 Select and reorder human-readable MTR columns:
 
 ```sh
@@ -697,7 +709,7 @@ ntr --mtr-columns received 1.1.1.1
 
 `--mtr-columns` accepts any nonempty selection of `loss,snt,received,last,avg,best,wrst,stdev`, in the supplied order. Names ignore case and surrounding spaces; unknown names, duplicates and empty entries are errors. `received` is displayed as `Rcv`. The default remains `Loss%, Snt, Last, Avg, Best, Wrst, StDev`.
 
-The option applies to TUI, non-TTY tables and report/wide output. It does not enable MTR: full/tiny require `-t`, `-r` or `-w`; ntr uses its default MTR mode. RAW, JSON, traditional traceroute and standalone modes reject it before initialization. Custom TUI columns keep complete numbers and at least 8 Host cells; a narrow terminal shows a notice until widened or fewer columns are selected.
+The option applies to TUI, non-TTY tables and report/wide output, including offline replay text output. It does not enable MTR: full/tiny require `-t`, `-r` or `-w`; ntr uses its default MTR mode. RAW, JSON, traditional traceroute and other standalone modes reject it before initialization. Custom TUI columns keep complete numbers and at least 8 Host cells; a narrow terminal shows a notice until widened or fewer columns are selected.
 
 Press `o/O` to edit the current column codes: `L=Loss S=Snt R=Received N=Last A=Avg B=Best W=Wrst V=StDev`. Codes ignore case; spaces separate codes. Enter validates and applies, Esc cancels, Backspace deletes and Ctrl-U clears. Invalid or duplicate codes and an empty draft keep the editor open. Bracketed paste converts newlines to spaces without submitting. The draft is limited to 256 ASCII characters.
 

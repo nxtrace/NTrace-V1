@@ -22,6 +22,8 @@ type mtrUI struct {
 	columnsMu    sync.Mutex
 	columns      []printer.MTRColumn
 	columnEditor printer.MTRColumnEditor
+	replayEditor printer.MTRReplayEditor
+	replay       *mtrReplayControls
 	redraw       chan struct{}
 	isTTY        bool
 	oldState     *term.State // raw mode 之前的终端状态
@@ -230,6 +232,7 @@ const (
 	mtrActionHistoryToggle                       // d
 	mtrActionHistoryChart                        // g
 	mtrActionColumns
+	mtrActionReplayJump
 	mtrActionPasteStart
 )
 
@@ -383,6 +386,8 @@ func mapKeyToAction(b byte) mtrInputAction {
 		return mtrActionHistoryChart
 	case 'o', 'O':
 		return mtrActionColumns
+	case 'j', 'J':
+		return mtrActionReplayJump
 	default:
 		return mtrActionNone
 	}

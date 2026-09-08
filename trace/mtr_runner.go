@@ -49,6 +49,8 @@ type MTROptions struct {
 	// OnPathEnd is called whenever the semantic path edge changes. A nil value
 	// means that a provisional unreachable edge was reopened or reset.
 	OnPathEnd func(*StopReason)
+	// OnEvent records applied per-hop session changes. An error stops probing.
+	OnEvent func(MTRSessionEvent) error
 }
 
 // MTROnSnapshot 每轮完成后的回调，用于刷新 CLI 表格。
@@ -107,6 +109,9 @@ func RunMTR(ctx context.Context, method Method, baseConfig Config, opts MTROptio
 	if opts.HopInterval > 0 {
 		return runMTRPerHop(ctx, method, baseConfig, opts, onSnapshot)
 	}
+	if opts.OnEvent != nil {
+		return fmt.Errorf("mtr: session recording requires per-hop scheduling")
+	}
 	return runMTRRoundBased(ctx, method, baseConfig, opts, onSnapshot)
 }
 
@@ -164,6 +169,7 @@ func runMTRPerHop(ctx context.Context, method Method, baseConfig Config, opts MT
 		IsPaused:         opts.IsPaused,
 		IsResetRequested: opts.IsResetRequested,
 		OnPathEnd:        opts.OnPathEnd,
+		OnEvent:          opts.OnEvent,
 		StartErrorPrefix: "mtr",
 	}, onSnapshot, mtrProbeCallbackFromOptions(opts))
 }
