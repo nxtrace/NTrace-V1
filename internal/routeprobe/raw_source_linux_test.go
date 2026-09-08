@@ -94,7 +94,7 @@ func TestDisconnectRouteSocketClearsPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	for range 100 {
 		if err := unix.Connect(fd, &unix.SockaddrInet4{Port: 9, Addr: [4]byte{127, 0, 0, 1}}); err != nil {
 			t.Fatal(err)

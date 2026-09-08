@@ -219,8 +219,8 @@ func TestRouteReplyDoneWithoutMatchingRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(fds[0])
-	defer unix.Close(fds[1])
+	defer func() { _ = unix.Close(fds[0]) }()
+	defer func() { _ = unix.Close(fds[1]) }()
 	message := func(kind uint16, seq uint32) []byte {
 		b := make([]byte, unix.NLMSG_HDRLEN)
 		binary.NativeEndian.PutUint32(b, uint32(len(b)))
