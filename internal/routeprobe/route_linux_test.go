@@ -174,6 +174,12 @@ func TestRouteHeaderIncludedProtocol(t *testing.T) {
 	} {
 		cfg := Request{Method: tc.method, DstIP: net.ParseIP(tc.target), HeaderIncluded: tc.headerIncluded, SrcPort: 40000, DstPort: 443}
 		b, err := RequestBytes(cfg, 1)
+		if tc.headerIncluded && cfg.DstIP.To4() != nil {
+			if err == nil {
+				t.Fatal("IPv4 HDRINCL must use the raw socket source lookup, not an unsupported netlink protocol")
+			}
+			continue
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

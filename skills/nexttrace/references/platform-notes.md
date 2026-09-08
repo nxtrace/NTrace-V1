@@ -14,6 +14,8 @@ Use `tos` only with local traceroute/MTR tools. It is the complete 8-bit IPv4 TO
 
 On Linux, nonzero TOS participates in automatic source selection while preserving explicit source/device constraints. Configuration failures terminate the probe; do not summarize them as packet loss. The JSON `tos` value is the requested configuration, not proof of the emitted packet field.
 
+Linux IPv4 UDP uses a raw socket connection without sending packets to select its source, because netlink does not accept the backend's protocol 255. This confirms the selected source only; doctor cannot confirm the route interface or gateway from this API.
+
 Do not pass `tos` to:
 
 - Globalping tools

@@ -152,6 +152,9 @@ done
 # Linux IPv4 IP_HDRINCL routes as IPPROTO_RAW (255), even when the serialized
 # packet is UDP. IPv6 UDP uses the ordinary protocol 17 route lookup.
 for family in 4 6; do
+  # A new raw socket starts with a synthetic source port equal to protocol
+  # 255. The no-packet source query must clear it before connect/getsockname.
+  ip -n "$S" "-$family" rule add priority 79 sport 255 lookup main
   ip -n "$S" "-$family" rule add priority 80 ipproto udp lookup main
   ip -n "$S" "-$family" rule add priority 81 ipproto 255 lookup 200
   ip -n "$S" "-$family" rule show >"$ART/ipv$family-protocol-rules.txt"
@@ -161,6 +164,7 @@ for mode in trace report; do
   run_case "6-udp-$mode-header-protocol" 6 udp "$mode" 16 none sa
 done
 for family in 4 6; do
+  ip -n "$S" "-$family" rule del priority 79
   ip -n "$S" "-$family" rule del priority 80
   ip -n "$S" "-$family" rule del priority 81
 done

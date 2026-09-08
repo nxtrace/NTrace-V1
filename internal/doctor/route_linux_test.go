@@ -21,6 +21,15 @@ func TestLinuxDoctorRouteMatchesRawProbeSocket(t *testing.T) {
 				t.Fatalf("lost doctor route condition: %+v", request)
 			}
 			b, err := routeprobe.RequestBytes(request, 1)
+			if method == trace.UDPTrace && cfg.DstIP.To4() != nil {
+				if !request.HeaderIncluded || err == nil {
+					t.Fatal("IPv4 UDP doctor must use raw source lookup instead of an unsupported netlink protocol")
+				}
+				continue
+			}
+			if request.HeaderIncluded {
+				t.Fatal("unexpected raw source lookup for a non-HDRINCL backend")
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -37,13 +46,11 @@ func TestLinuxDoctorRouteMatchesRawProbeSocket(t *testing.T) {
 			if cfg.DstIP.To4() == nil {
 				wantProtocol = unix.IPPROTO_ICMPV6
 			}
-			if method == trace.TCPTrace {
+			switch method {
+			case trace.TCPTrace:
 				wantProtocol = unix.IPPROTO_TCP
-			} else if method == trace.UDPTrace {
+			case trace.UDPTrace:
 				wantProtocol = unix.IPPROTO_UDP
-				if cfg.DstIP.To4() != nil {
-					wantProtocol = unix.IPPROTO_RAW
-				}
 			}
 			var gotProtocol byte
 			for _, attr := range attrs {

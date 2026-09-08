@@ -68,6 +68,7 @@ var labels = map[string][2]string{
 	"protocol, ports and TOS are not included; --dev selects a source address, not an interface binding": {"本次查询未包含协议、端口及 TOS；设备参数仅用于源地址选择", "Protocol, ports and TOS are not included; --dev selects a source address, not an interface binding"},
 	"source port selected during probing; ECMP prediction may differ":                                    {"源端口在探测时确定，多路径选择可能不同", "Source port selected during probing; ECMP prediction may differ"},
 	"raw socket lookup omits transport ports; ECMP prediction may differ":                                {"原始套接字选路不使用传输层端口，多路径选择可能不同", "Raw socket lookup omits transport ports; ECMP prediction may differ"},
+	"raw socket selected the source; route interface and gateway are unavailable":                        {"原始套接字已选择源地址；出口接口及网关未知", "Raw socket selected the source; route interface and gateway are unavailable"},
 }
 
 func textLabel(key, lang string) string {

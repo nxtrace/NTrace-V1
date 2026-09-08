@@ -218,7 +218,7 @@ ntr --doctor --dev eth0 example.com
 
 默认使用 ICMP、中文文本，每项网络检查超时为 5000ms。多个解析候选全部列出，自动选择首个符合地址族的地址，不进行交互选择。目标 DoT 失败不回退系统 DNS。单项失败后继续独立检查；报告写入 stdout，参数与报告写入错误写入 stderr。报告包含目标、源地址和接口信息，不包含 token 或代理凭据。
 
-路由查询分别使用 Linux netlink、macOS 路由 socket 和 Windows `GetBestRoute2`，无法确认的信息显示“未知”。macOS/Windows 的预测不能覆盖全部协议、端口、源策略或 TOS 条件，报告会列明限制。socket 或过滤器初始化成功仅代表该步骤成功，不代表实际出口、收发能力或 TOS 生效。网络等待设有超时；原生同步初始化调用不承诺可被强制取消。
+路由查询分别使用 Linux netlink、macOS 路由 socket 和 Windows `GetBestRoute2`。Linux IPv4 UDP 的内核协议 255 不支持 netlink 查询，因此通过 raw socket 的 `connect` 选源，全程不发送报文；该接口只返回源地址，`--doctor` 将出口接口及网关保留为未知。无法确认的信息显示“未知”。macOS/Windows 的预测不能覆盖全部协议、端口、源策略或 TOS 条件，报告会列明限制。socket 或过滤器初始化成功仅代表该步骤成功，不代表实际出口、收发能力或 TOS 生效。网络等待设有超时；原生同步初始化调用不承诺可被强制取消。
 
 Windows 的 `--dev` 仅用于源地址选择，不能表述为设备绑定已验证。所有 WinDivert 自检使用 `NO_INSTALL`，不解压或安装驱动，不执行 `--init`。驱动尚未安装时标记为未验证，因为普通探测可能自动安装；Socket 备选结果单独报告。后端名称以实际构建架构为准，目前 WinDivert 探测路径编译于 Windows amd64。
 
