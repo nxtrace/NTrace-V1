@@ -36,6 +36,8 @@ type MTRRawOptions struct {
 	RunRound func(method Method, cfg Config) (*Result, error)
 	// OnPathEnd is called when the semantic path edge changes. nil reopens it.
 	OnPathEnd func(*StopReason)
+	// OnEvent records applied per-hop session changes. An error stops probing.
+	OnEvent func(MTRSessionEvent) error
 }
 
 // MTRRawRecord is one stream record emitted by MTR raw mode.
@@ -72,12 +74,21 @@ func RunMTRRaw(ctx context.Context, method Method, cfg Config, opts MTRRawOption
 	if opts.HopInterval > 0 {
 		return runMTRRawPerHop(ctx, method, cfg, opts, onRecord)
 	}
+	if opts.OnEvent != nil {
+		return fmt.Errorf("mtr raw: session recording requires per-hop scheduling")
+	}
 	return runMTRRawRoundBased(ctx, method, cfg, opts, onRecord)
 }
 
 // runMTRRawPerHop uses per-hop scheduling for raw streaming.
 func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRawOptions, onRecord MTRRawOnRecord) error {
 	normalizeRuntimeConfig(&cfg)
+	cfg.Context = ctx
+	var sourceErr error
+	cfg, sourceErr = PrepareProbeSourceConfig(method, cfg)
+	if sourceErr != nil {
+		return sourceErr
+	}
 	roundCfg := cfg
 	roundCfg.NumMeasurements = 1
 	roundCfg.MaxAttempts = 1
@@ -119,6 +130,7 @@ func runMTRRawPerHop(ctx context.Context, method Method, cfg Config, opts MTRRaw
 		FillGeo:          true,
 		BaseConfig:       roundCfg,
 		OnPathEnd:        opts.OnPathEnd,
+		OnEvent:          opts.OnEvent,
 		StartErrorPrefix: "mtr raw",
 	}, nil, func(result mtrProbeResult, iteration int, _ time.Time) {
 		if onRecord == nil {
@@ -134,6 +146,12 @@ func runMTRRawRoundBased(ctx context.Context, method Method, cfg Config, opts MT
 	session := newMTRWorkerSession(ctx)
 	defer session.shutdown(nil)
 	normalizeRuntimeConfig(&cfg)
+	cfg.Context = ctx
+	var sourceErr error
+	cfg, sourceErr = PrepareProbeSourceConfig(method, cfg)
+	if sourceErr != nil {
+		return sourceErr
+	}
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
 	}

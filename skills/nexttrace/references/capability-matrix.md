@@ -38,3 +38,7 @@ Current important gaps:
 
 - No Globalping location search/list MCP tool.
 - MCP transport is HTTP deploy mode only, not stdio.
+- Doctor, Linux `--fwmark`, CLI MTR JSON/NDJSON, recording/replay and interactive
+  column editing have no equivalent MCP input/tool in this release. Use the
+  [CLI workflow](cli-fallback.md) for an explicitly requested capability; MCP
+  report/raw structured content is not a CLI replay file.

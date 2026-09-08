@@ -119,7 +119,10 @@ func ResolveConfiguredSrcAddr(dstIP net.IP, srcAddr, srcDev string) (resolved st
 	return ResolveFallbackSrcAddr(dstIP), false, nil
 }
 
-func NormalizeExplicitSourceConfig(_ Method, config Config) (Config, error) {
+func NormalizeExplicitSourceConfig(method Method, config Config) (Config, error) {
+	if usesPolicyRouteSource(config) {
+		return PrepareProbeSourceConfig(method, config)
+	}
 	config.SrcAddr = strings.TrimSpace(config.SrcAddr)
 	config.SourceDevice = strings.TrimSpace(config.SourceDevice)
 	explicitSource := config.SrcAddr != ""

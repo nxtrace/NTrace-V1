@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +29,12 @@ const (
 
 // MTRTUIHeader 包含帧顶部显示的元信息。
 type MTRTUIHeader struct {
-	Target    string
-	StartTime time.Time
-	Status    MTRTUIStatus
-	Iteration int
+	Columns      []MTRColumn // nil preserves the original metrics layout
+	ColumnEditor MTRColumnEditor
+	Target       string
+	StartTime    time.Time
+	Status       MTRTUIStatus
+	Iteration    int
 	// 以下为 v2 新增字段
 	Domain   string // 用户输入的域名（可为空）
 	TargetIP string // 解析后的目标 IP
@@ -49,6 +52,9 @@ type MTRTUIHeader struct {
 	HistoryChartMode int
 	History          []MTRHistoryTTL
 	HistoryNow       time.Time
+	Now              time.Time // zero uses the live clock
+	Replay           *MTRReplayStatus
+	ReplayEditor     MTRReplayEditor
 }
 
 // ---------------------------------------------------------------------------
@@ -125,11 +131,7 @@ func tuiPrefixWidthForMaxTTL(maxTTL int) int {
 // sntWidthForMax returns the display width needed for the given max Snt value.
 // Minimum is tuiSntDefault (3).
 func sntWidthForMax(maxSnt int) int {
-	w := tuiSntDefault
-	for v := 1000; maxSnt >= v; v *= 10 {
-		w++
-	}
-	return w
+	return max(tuiSntDefault, len(strconv.Itoa(maxSnt)))
 }
 
 func computeLayout(termWidth, prefixW, sntHint int) mtrTUILayout {
@@ -376,14 +378,35 @@ func mtrTUIRenderWithWidth(w io.Writer, header MTRTUIHeader, stats []trace.MTRHo
 	var b strings.Builder
 
 	writeMTRTUIFramePrefix(&b)
-	renderMTRTUIHeader(&b, header, lo.termWidth)
+	if header.ReplayEditor.Active {
+		tuiLine(&b, "%s", buildMTRTUITitleLine(header, lo.termWidth))
+		renderMTRReplayEditor(&b, header.ReplayEditor, lo.termWidth)
+		_, _ = fmt.Fprint(w, b.String())
+		return
+	}
+	if header.ColumnEditor.Active {
+		tuiLine(&b, "%s", buildMTRTUITitleLine(header, lo.termWidth))
+		tuiLine(&b, "%s", mtrTUIStatusText(header.Status))
+		renderMTRColumnEditor(&b, header.ColumnEditor, lo.termWidth)
+		_, _ = fmt.Fprint(w, b.String())
+		return
+	}
+	if header.Columns != nil && !header.HistoryMode {
+		renderMTRSelectedHeader(&b, header, lo.termWidth)
+	} else {
+		renderMTRTUIHeader(&b, header, lo.termWidth)
+	}
 	if header.HistoryMode {
 		renderMTRTUIHistory(&b, header, stats, lo.termWidth)
 		fmt.Fprint(w, b.String())
 		return
 	}
-	renderDualHeader(&b, lo)
-	renderMTRTUIRows(&b, header, stats, lo)
+	if header.Columns != nil {
+		renderMTRSelectedColumns(&b, header, stats, lo.termWidth)
+	} else {
+		renderDualHeader(&b, lo)
+		renderMTRTUIRows(&b, header, stats, lo)
+	}
 	fmt.Fprint(w, b.String())
 }
 
@@ -413,7 +436,7 @@ func writeMTRTUIFramePrefix(b *strings.Builder) {
 
 func renderMTRTUIHeader(b *strings.Builder, header MTRTUIHeader, termWidth int) {
 	tuiLine(b, "%s", buildMTRTUITitleLine(header, termWidth))
-	tuiLine(b, "%s", buildMTRTUIRouteLine(header, termWidth, time.Now()))
+	tuiLine(b, "%s", buildMTRTUIRouteLine(header, termWidth, mtrTUIClock(header)))
 	tuiLine(b, "%s", buildMTRTUIControlsLine(header, termWidth))
 }
 
@@ -445,6 +468,9 @@ func resolveMTRTUITitleParts(header MTRTUIHeader) (string, string) {
 		ver = "dev"
 	}
 	titlePart := fmt.Sprintf("NextTrace [%s]", ver)
+	if header.Replay != nil {
+		titlePart += " Replay"
+	}
 	if header.APIInfo == "" {
 		return titlePart, ""
 	}
@@ -501,30 +527,44 @@ func resolveMTRTUIDestinationLabel(header MTRTUIHeader) string {
 }
 
 func buildMTRTUIControlsLine(header MTRTUIHeader, termWidth int) string {
+	if header.Replay != nil {
+		return buildMTRReplayControls(header, termWidth)
+	}
 	const keysPrefix = "Keys:  "
-	keyLine := strings.Join(buildMTRTUIKeyItems(header), "  ")
+	items := buildMTRTUIKeyItems(header, mtrTUIKeyHiColor)
+	plainItems := buildMTRTUIKeyItems(header, fmt.Sprint)
+	keyLine := strings.Join(items, "  ")
 	statusText := mtrTUIStatusText(header.Status)
 	statusTag := mtrTUIStatusColor("[" + statusText + "]")
-	pad := termWidth - displayWidth(keysPrefix) - displayWidth(keyLine) - len("["+statusText+"]")
+	pad := termWidth - displayWidth(keysPrefix) - displayWidth(strings.Join(plainItems, "  ")) - len("["+statusText+"]")
 	if pad < 2 {
-		pad = 2
+		keyLine = strings.Join(items, " ")
+		pad = termWidth - displayWidth(keysPrefix) - displayWidth(strings.Join(plainItems, " ")) - len("["+statusText+"]")
+	}
+	if pad < 2 {
+		compact := "O:cols Q:quit"
+		if header.HistoryMode {
+			compact += " G-chart(" + mtrTUIHistoryChartLabel(header.HistoryChartMode) + ")"
+		}
+		return truncateByDisplayWidth(compact+" "+statusText, termWidth)
 	}
 	return keysPrefix + keyLine + strings.Repeat(" ", pad) + statusTag
 }
 
-func buildMTRTUIKeyItems(header MTRTUIHeader) []string {
+func buildMTRTUIKeyItems(header MTRTUIHeader, highlight func(...any) string) []string {
 	items := []string{
-		mtrTUIKeyHiColor("Q") + "uit",
-		mtrTUIKeyHiColor("P") + "ause",
-		mtrTUIKeyHiColor("Space") + "-resume",
-		mtrTUIKeyHiColor("R") + "eset",
-		mtrTUIKeyHiColor("Y") + "-display(" + mtrTUIDisplayModeLabel(header.DisplayMode) + ")",
-		mtrTUIKeyHiColor("N") + "-host(" + mtrTUINameModeLabel(header.NameMode, header.ShowIPs) + ")",
-		mtrTUIKeyHiColor("E") + "-mpls(" + mtrTUIMPLSLabel(header.DisableMPLS) + ")",
-		mtrTUIKeyHiColor("D") + "-history(" + mtrTUIHistoryModeLabel(header.HistoryMode) + ")",
+		highlight("Q") + "uit",
+		highlight("O") + "-columns",
+		highlight("P") + "ause",
+		highlight("Space") + "-resume",
+		highlight("R") + "eset",
+		highlight("Y") + "-display(" + mtrTUIDisplayModeLabel(header.DisplayMode) + ")",
+		highlight("N") + "-host(" + mtrTUINameModeLabel(header.NameMode, header.ShowIPs) + ")",
+		highlight("E") + "-mpls(" + mtrTUIMPLSLabel(header.DisableMPLS) + ")",
+		highlight("D") + "-history(" + mtrTUIHistoryModeLabel(header.HistoryMode) + ")",
 	}
 	if header.HistoryMode {
-		items = append(items, mtrTUIKeyHiColor("G")+"-chart("+mtrTUIHistoryChartLabel(header.HistoryChartMode)+")")
+		items = append(items, highlight("G")+"-chart("+mtrTUIHistoryChartLabel(header.HistoryChartMode)+")")
 	}
 	return items
 }
@@ -1062,7 +1102,7 @@ func truncateStr(s string, maxLen int) string {
 func MTRTUIPrinter(target, domain, targetIP, version string, startTime time.Time,
 	srcHost, srcIP, lang string, apiInfo func() string, showIPs bool,
 	isPaused func() bool, displayMode func() int, nameMode func() int, isMPLSDisabled func() bool,
-	isHistoryMode func() bool, historyChartMode func() int, historySnapshot func(time.Time) []MTRHistoryTTL) func(iteration int, stats []trace.MTRHopStat) {
+	isHistoryMode func() bool, historyChartMode func() int, historySnapshot func(time.Time) []MTRHistoryTTL, columnState ...func() ([]MTRColumn, MTRColumnEditor)) func(iteration int, stats []trace.MTRHopStat) {
 	var apiInfoMu sync.Mutex
 	var cachedAPIInfo string
 	var cachedAPIInfoAt time.Time
@@ -1113,7 +1153,14 @@ func MTRTUIPrinter(target, domain, targetIP, version string, startTime time.Time
 			history = historySnapshot(now)
 		}
 		headerAPIInfo := getAPIInfo()
+		var columns []MTRColumn
+		var editor MTRColumnEditor
+		if len(columnState) > 0 && columnState[0] != nil {
+			columns, editor = columnState[0]()
+		}
 		MTRTUIRender(os.Stdout, MTRTUIHeader{
+			Columns:          columns,
+			ColumnEditor:     editor,
 			Target:           target,
 			StartTime:        startTime,
 			Status:           status,

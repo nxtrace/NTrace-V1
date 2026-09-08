@@ -7,10 +7,8 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"os/signal"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/google/gopacket/layers"
@@ -36,20 +34,8 @@ type ICMPTracerv6 struct {
 	readyICMP chan struct{}
 }
 
-func (t *ICMPTracerv6) waitAllReady(ctx context.Context) {
-	timeout := time.After(5 * time.Second)
-	waiting := 1
-	for waiting > 0 {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.readyICMP:
-			waiting--
-		case <-timeout:
-			return
-		}
-	}
-	<-time.After(100 * time.Millisecond)
+func (t *ICMPTracerv6) waitAllReady(ctx context.Context) error {
+	return waitProbeListeners(ctx, t.readyICMP)
 }
 
 func (t *ICMPTracerv6) ttlComp(ttl int) bool {
@@ -82,7 +68,7 @@ func (t *ICMPTracerv6) PrintFunc(ctx context.Context, cancel context.CancelCause
 	}
 }
 
-func (t *ICMPTracerv6) launchTTL(ctx context.Context, s *internal.ICMPSpec, ttl int) {
+func (t *ICMPTracerv6) launchTTL(ctx context.Context, cancel context.CancelCauseFunc, s *internal.ICMPSpec, ttl int) {
 	t.wg.Add(1)
 	go func(ttl int) {
 		defer t.wg.Done()
@@ -100,6 +86,11 @@ func (t *ICMPTracerv6) launchTTL(ctx context.Context, s *internal.ICMPSpec, ttl 
 			go func(ttl, i int) {
 				defer t.wg.Done()
 				err := t.send(ctx, s, ttl, i)
+				if IsInitializationError(err) {
+					cancel(err)
+					t.res.settleAttempt(ttl, i)
+					return
+				}
 				if err != nil && !errors.Is(err, context.Canceled) {
 					if util.EnvDevMode {
 						panic(err)
@@ -255,7 +246,11 @@ func (t *ICMPTracerv6) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && !util.IsIPv6(SrcAddr) {
 		return nil, errors.New("invalid IPv6 SrcAddr: " + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPortv6(t.DstIP, SrcAddr, "icmp6")
+	var sourceErr error
+	t.SrcIP, sourceErr = resolveProbeSource(ICMPTrace, &t.Config, SrcAddr)
+	if sourceErr != nil {
+		return nil, wrapProbeSetupError(sourceErr)
+	}
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv6 address")
 	}
@@ -268,16 +263,18 @@ func (t *ICMPTracerv6) Execute() (res *Result, err error) {
 		t.DstIP,
 	)
 	applyICMPSourceDevice(s, t.OSType, t.SourceDevice)
+	s.FWMark, s.FWMarkSet = t.FWMark, t.FWMarkSet
 
-	s.InitICMP()
-	defer s.Close()
-
-	baseCtx := t.Context
-	if baseCtx == nil {
-		baseCtx = context.Background()
+	closeSpec := sync.OnceFunc(s.Close)
+	defer closeSpec()
+	if err := s.InitICMP(); err != nil {
+		return nil, wrapProbeSetupError(err)
 	}
-	sigCtx, stop := signal.NotifyContext(baseCtx, os.Interrupt, syscall.SIGTERM)
+
+	sigCtx, stop := traceSignalContext(t.Context)
 	ctx, cancel := context.WithCancelCause(sigCtx)
+	defer stop()
+	defer cancel(nil)
 	t.final.Store(-1)
 
 	workerN := 16
@@ -288,12 +285,19 @@ func (t *ICMPTracerv6) Execute() (res *Result, err error) {
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
-		s.ListenICMP(ctx, t.readyICMP, func(msg internal.ReceivedMessage, finish time.Time, seq int) {
+		if err := s.ListenICMP(ctx, t.readyICMP, func(msg internal.ReceivedMessage, finish time.Time, seq int) {
 			t.handleICMPMessage(msg, finish, seq)
 		},
-		)
+		); err != nil {
+			cancel(wrapProbeSetupError(err))
+		}
 	}()
-	t.waitAllReady(ctx)
+	if err := t.waitAllReady(ctx); err != nil {
+		cancel(err)
+		closeSpec()
+		t.wg.Wait()
+		return &t.res, err
+	}
 	t.wg.Add(1)
 	go t.PrintFunc(ctx, cancel)
 
@@ -303,7 +307,7 @@ func (t *ICMPTracerv6) Execute() (res *Result, err error) {
 	go func() {
 		defer t.wg.Done()
 		// 立即启动 BeginHop 对应的 TTL 组
-		t.launchTTL(ctx, s, t.BeginHop)
+		t.launchTTL(ctx, cancel, s, t.BeginHop)
 
 		for ttl := t.BeginHop + 1; ttl <= t.MaxHops; ttl++ {
 			// 之后按 TTLInterval 周期启动后续 TTL 组
@@ -318,7 +322,7 @@ func (t *ICMPTracerv6) Execute() (res *Result, err error) {
 			}
 
 			// 并发启动这个 TTL 的所有测量
-			t.launchTTL(ctx, s, ttl)
+			t.launchTTL(ctx, cancel, s, ttl)
 		}
 	}()
 

@@ -23,6 +23,8 @@ type ICMPSpec struct {
 	SrcIP        net.IP
 	DstIP        net.IP
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	icmp4        *ipv4.PacketConn
 	icmp6        *ipv6.PacketConn
@@ -34,11 +36,13 @@ func ListenPacket(network string, laddr string) (net.PacketConn, error) {
 }
 
 func (s *ICMPSpec) Close() {
-	_ = s.icmp.Close()
+	if s.icmp != nil {
+		_ = s.icmp.Close()
+	}
 }
 
-func (s *ICMPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, seq int)) {
-	s.listenICMPSock(ctx, ready, onICMP)
+func (s *ICMPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, seq int)) error {
+	return s.listenICMPSock(ctx, ready, onICMP)
 }
 
 func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, icmpHdr, icmpEcho gopacket.SerializableLayer, payload []byte) (time.Time, error) {
@@ -71,7 +75,7 @@ func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, ic
 		defer s.hopLimitLock.Unlock()
 
 		if err := s.icmp4.SetTOS(int(ip4.TOS)); err != nil {
-			return time.Time{}, err
+			return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv4 TOS %d: %w", ip4.TOS, err)}
 		}
 		if err := s.icmp4.SetTTL(ttl); err != nil {
 			return time.Time{}, err
@@ -116,7 +120,7 @@ func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, ic
 	defer s.hopLimitLock.Unlock()
 
 	if err := s.icmp6.SetTrafficClass(int(ip6.TrafficClass)); err != nil {
-		return time.Time{}, err
+		return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv6 Traffic Class %d: %w", ip6.TrafficClass, err)}
 	}
 	if err := s.icmp6.SetHopLimit(ttl); err != nil {
 		return time.Time{}, err

@@ -29,10 +29,13 @@ type ICMPSpec struct {
 	SrcIP        net.IP
 	DstIP        net.IP
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	icmp4        *ipv4.PacketConn
 	icmp6        *ipv6.PacketConn
 	sendHandle   wd.Handle
+	closed       bool // protected by hopLimitLock, including lazy send-handle initialization
 	sendAddr     wd.Address
 	hopLimitLock sync.Mutex
 }
@@ -42,7 +45,15 @@ func ListenPacket(network string, laddr string) (net.PacketConn, error) {
 }
 
 func (s *ICMPSpec) Close() {
-	_ = s.icmp.Close()
+	s.hopLimitLock.Lock()
+	defer s.hopLimitLock.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.icmp != nil {
+		_ = s.icmp.Close()
+	}
 	if s.sendHandle != 0 {
 		_ = s.sendHandle.Close()
 	}
@@ -50,7 +61,11 @@ func (s *ICMPSpec) Close() {
 
 // winDivertAvailable 通过尝试打开一个 WinDivert 嗅探 handle 来判断 WinDivert 是否可用
 func winDivertAvailable() (bool, error) {
-	h, err := OpenWinDivertHandle("false", wd.FlagSniff|wd.FlagRecvOnly)
+	return winDivertAvailableWithFlags(0)
+}
+
+func winDivertAvailableWithFlags(extraFlags uint64) (bool, error) {
+	h, err := OpenWinDivertHandle("false", wd.FlagSniff|wd.FlagRecvOnly|extraFlags)
 	if err != nil {
 		return false, err
 	}
@@ -89,17 +104,21 @@ func (s *ICMPSpec) resolveICMPMode() int {
 	return 2
 }
 
-func (s *ICMPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, seq int)) {
+func (s *ICMPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, seq int)) error {
 	switch s.resolveICMPMode() {
 	case 1:
-		s.listenICMPSock(ctx, ready, onICMP)
+		return s.listenICMPSock(ctx, ready, onICMP)
 	case 2:
-		s.listenICMPWinDivert(ctx, ready, onICMP)
+		return s.listenICMPWinDivert(ctx, ready, onICMP)
 	}
+	return nil
 }
 
-func (s *ICMPSpec) listenICMPWinDivert(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, seq int)) {
-	handle, closeHandle := openWinDivertSniffHandle(ctx, winDivertICMPFilter(s.IPVersion, s.SrcIP), "ListenICMP")
+func (s *ICMPSpec) listenICMPWinDivert(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, seq int)) error {
+	handle, closeHandle, err := openWinDivertSniffHandle(ctx, winDivertICMPFilter(s.IPVersion, s.SrcIP), "ListenICMP")
+	if err != nil {
+		return err
+	}
 	defer closeHandle()
 	close(ready)
 
@@ -107,12 +126,12 @@ func (s *ICMPSpec) listenICMPWinDivert(ctx context.Context, ready chan struct{},
 	var addr wd.Address
 
 	for {
-		raw, finish, ok := receiveWinDivertPacket(ctx, handle, buf, &addr)
-		if !ok {
+		raw, finish, err := receiveWinDivertPacket(ctx, handle, buf, &addr)
+		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
-			continue
+			return err
 		}
 
 		packet, ok := decodeWinDivertICMPPacket(s.IPVersion, raw)
@@ -148,6 +167,9 @@ func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, ic
 		if !ok || ip4 == nil {
 			return time.Time{}, errors.New("SendICMP: expect *layers.IPv4 when s.IPVersion==4")
 		}
+		if shouldUseICMPv4RawSend(ip4) {
+			return s.sendICMPWithWinDivert(false, ip4, icmpHdr, gopacket.Payload(payload))
+		}
 		ttl := int(ip4.TTL)
 
 		buf := gopacket.NewSerializeBuffer()
@@ -166,7 +188,7 @@ func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, ic
 		defer s.hopLimitLock.Unlock()
 
 		if err := s.icmp4.SetTOS(int(ip4.TOS)); err != nil {
-			return time.Time{}, err
+			return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv4 TOS %d: %w", ip4.TOS, err)}
 		}
 		if err := s.icmp4.SetTTL(ttl); err != nil {
 			return time.Time{}, err
@@ -196,7 +218,7 @@ func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, ic
 	}
 
 	if shouldUseICMPv6RawSend(ip6) {
-		return s.sendICMPv6WithWinDivert(ip6, icmpHdr, icmpEcho, payload)
+		return s.sendICMPWithWinDivert(true, ip6, icmpHdr, icmpEcho, gopacket.Payload(payload))
 	}
 
 	buf := gopacket.NewSerializeBuffer()
@@ -227,19 +249,22 @@ func (s *ICMPSpec) SendICMP(ctx context.Context, ipHdr gopacket.NetworkLayer, ic
 }
 
 func shouldUseICMPv4RawSend(ip4 *layers.IPv4) bool {
-	return false
+	return ip4 != nil && ip4.TOS != 0
 }
 
 func shouldUseICMPv6RawSend(ip6 *layers.IPv6) bool {
 	return ip6 != nil && ip6.TrafficClass != 0
 }
 
-func (s *ICMPSpec) sendICMPv6WithWinDivert(ip6 *layers.IPv6, icmpHdr, icmpEcho gopacket.SerializableLayer, payload []byte) (time.Time, error) {
+func (s *ICMPSpec) sendICMPWithWinDivert(ipv6 bool, packetLayers ...gopacket.SerializableLayer) (time.Time, error) {
 	s.hopLimitLock.Lock()
 	defer s.hopLimitLock.Unlock()
+	if s.closed {
+		return time.Time{}, net.ErrClosed
+	}
 
-	if err := s.ensureICMPSendHandle(true); err != nil {
-		return time.Time{}, err
+	if err := s.ensureICMPSendHandle(ipv6); err != nil {
+		return time.Time{}, &InitializationError{Err: err}
 	}
 
 	buf := gopacket.NewSerializeBuffer()
@@ -247,7 +272,7 @@ func (s *ICMPSpec) sendICMPv6WithWinDivert(ip6 *layers.IPv6, icmpHdr, icmpEcho g
 		ComputeChecksums: true,
 		FixLengths:       true,
 	}
-	if err := gopacket.SerializeLayers(buf, opts, ip6, icmpHdr, icmpEcho, gopacket.Payload(payload)); err != nil {
+	if err := gopacket.SerializeLayers(buf, opts, packetLayers...); err != nil {
 		return time.Time{}, err
 	}
 
@@ -259,11 +284,17 @@ func (s *ICMPSpec) sendICMPv6WithWinDivert(ip6 *layers.IPv6, icmpHdr, icmpEcho g
 }
 
 func (s *ICMPSpec) ensureICMPSendHandle(ipv6 bool) error {
+	return s.ensureICMPSendHandleWithFlags(ipv6, 0)
+}
+
+// ensureICMPSendHandleWithFlags applies extraFlags only when opening a handle.
+// Callers requiring those flags (doctor NO_INSTALL) must use a fresh spec.
+func (s *ICMPSpec) ensureICMPSendHandleWithFlags(ipv6 bool, extraFlags uint64) error {
 	if s.sendHandle != 0 {
 		return nil
 	}
 
-	handle, err := OpenWinDivertHandle("false", 0)
+	handle, err := OpenWinDivertHandle("false", extraFlags)
 	if err != nil {
 		if ipv6 {
 			return fmt.Errorf("%s: %w", formatWinDivertRequiredError("Windows ICMPv6 --tos", err), err)

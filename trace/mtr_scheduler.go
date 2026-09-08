@@ -50,6 +50,7 @@ type mtrSchedulerConfig struct {
 	AsyncMetadata     bool
 	BaseConfig        Config // used for geo/RDNS lookup
 	OnPathEnd         func(*StopReason)
+	OnEvent           func(MTRSessionEvent) error
 	StartErrorPrefix  string
 
 	IsPaused         func() bool

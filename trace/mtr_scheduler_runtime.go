@@ -2,6 +2,7 @@ package trace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -67,6 +68,9 @@ type mtrSchedulerRuntime struct {
 	metadataGeoRetryAt   map[string]time.Time
 	metadataHostRetryAt  map[string]time.Time
 	lastSnapshot         time.Time
+	sessionPaused        bool
+	sessionPathChanged   bool
+	sessionPathEnd       *StopReason
 }
 
 type mtrMetadataResult struct {
@@ -178,7 +182,15 @@ func newMTRSchedulerRuntimeWithSession(
 		metadataHostRetryAt:  make(map[string]time.Time),
 	}
 	rt.knownFinalTTL.Store(-1)
-	rt.pathTracker = newMTRPathTracker(cfg.MaxPerHop > 0, maxHops, cfg.OnPathEnd)
+	rt.pathTracker = newMTRPathTracker(cfg.MaxPerHop > 0, maxHops, func(reason *StopReason) {
+		if cfg.OnEvent != nil {
+			rt.sessionPathChanged = true
+			rt.sessionPathEnd = cloneStopReason(reason)
+		}
+		if cfg.OnPathEnd != nil {
+			cfg.OnPathEnd(reason)
+		}
+	})
 	return rt, nil
 }
 
@@ -189,28 +201,37 @@ func (rt *mtrSchedulerRuntime) run() error {
 	defer tick.Stop()
 
 	for {
+		if rt.ctx.Err() != nil {
+			return rt.handleCancel()
+		}
 		select {
 		case <-rt.ctx.Done():
 			return rt.handleCancel()
 		case cp := <-rt.resultCh:
 			rt.processResult(cp)
+			if rt.ctx.Err() != nil {
+				return rt.handleCancel()
+			}
 			if rt.isDone() {
 				rt.finishRun()
-				return nil
+				return context.Cause(rt.ctx)
 			}
 			rt.scheduleReady()
 		case mr := <-rt.metadataCh:
 			rt.processMetadataResult(mr)
+			if rt.ctx.Err() != nil {
+				return rt.handleCancel()
+			}
 			if rt.isDone() {
 				rt.finishRun()
-				return nil
+				return context.Cause(rt.ctx)
 			}
 		case <-tick.C:
 			rt.handleReset()
 			rt.scheduleReady()
 			if rt.isDone() {
 				rt.finishRun()
-				return nil
+				return context.Cause(rt.ctx)
 			}
 		}
 	}
@@ -310,6 +331,11 @@ func (rt *mtrSchedulerRuntime) processResult(cp mtrCompletedProbe) {
 }
 
 func (rt *mtrSchedulerRuntime) processProbeError(ttl int, err error, doneAt time.Time) {
+	var setup *probeSetupError
+	if errors.As(err, &setup) {
+		rt.workers.cancel(err)
+		return
+	}
 	if rt.ctx.Err() != nil {
 		return
 	}
@@ -327,7 +353,11 @@ func (rt *mtrSchedulerRuntime) processProbeError(ttl int, err error, doneAt time
 }
 
 func (rt *mtrSchedulerRuntime) recordSyntheticTimeout(ttl int, doneAt time.Time) {
-	rt.agg.Update(rt.timeoutProbeResult(ttl), 1)
+	res := rt.timeoutProbeResult(ttl)
+	rt.agg.Update(res, 1)
+	if !rt.emitSessionProbe(res.Hops[ttl-1][0], nil, doneAt) {
+		return
+	}
 	if rt.onProbe != nil {
 		rt.onProbe(mtrProbeResult{TTL: ttl}, rt.computeIteration(), doneAt)
 	}
@@ -383,6 +413,12 @@ func (rt *mtrSchedulerRuntime) processProbeSuccess(ttl int, result mtrProbeResul
 	}
 
 	rt.agg.Update(singleRes, 1)
+	if !rt.emitSessionProbe(singleRes.Hops[ttl-1][0], result.Response, doneAt) {
+		return
+	}
+	if !rt.flushSessionPath() {
+		return
+	}
 	if rt.onProbe != nil {
 		rt.onProbe(result, rt.computeIteration(), doneAt)
 	}
@@ -572,6 +608,9 @@ func (rt *mtrSchedulerRuntime) processMetadataResult(result mtrMetadataResult) {
 	if !rt.agg.PatchMetadataByIP(ip, result.patch.host, result.patch.geo) {
 		return
 	}
+	if !rt.emitSessionMetadata(ip, result.patch) {
+		return
+	}
 	rt.maybeSnapshot(false)
 }
 
@@ -758,7 +797,21 @@ func (rt *mtrSchedulerRuntime) singleProbeResult(ttl int, result mtrProbeResult)
 }
 
 func (rt *mtrSchedulerRuntime) scheduleReady() {
-	if rt.cfg.IsPaused != nil && rt.cfg.IsPaused() {
+	if rt.ctx.Err() != nil {
+		return
+	}
+	paused := rt.cfg.IsPaused != nil && rt.cfg.IsPaused()
+	if paused != rt.sessionPaused {
+		rt.sessionPaused = paused
+		eventType := MTRSessionResumeEvent
+		if paused {
+			eventType = MTRSessionPauseEvent
+		}
+		if !rt.emitSessionEvent(MTRSessionEvent{Type: eventType}) {
+			return
+		}
+	}
+	if paused {
 		return
 	}
 
@@ -811,6 +864,7 @@ func (rt *mtrSchedulerRuntime) isDone() bool {
 
 func (rt *mtrSchedulerRuntime) finishRun() {
 	rt.pathTracker.completeAtMaxHops()
+	rt.flushSessionPath()
 	rt.maybeSnapshot(true)
 }
 
@@ -839,9 +893,12 @@ func (rt *mtrSchedulerRuntime) handleReset() {
 	rt.agg.Reset()
 	_ = rt.prober.Reset()
 	rt.generationCtx, rt.generationCancel = context.WithCancel(rt.ctx)
+	if rt.emitSessionEvent(MTRSessionEvent{Type: MTRSessionResetEvent}) {
+		rt.flushSessionPath()
+	}
 }
 
 func (rt *mtrSchedulerRuntime) handleCancel() error {
 	rt.maybeSnapshot(true)
-	return rt.ctx.Err()
+	return context.Cause(rt.ctx)
 }

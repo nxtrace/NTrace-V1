@@ -186,6 +186,7 @@ Document Language: [English](README.md) | 简体中文
 | 功能                    | `nexttrace`（完整版） | `nexttrace-tiny` |   `ntr`    |
 | ----------------------- | :-------------------: | :--------------: | :--------: |
 | 常规 traceroute         |          ✅           |        ✅        |     —      |
+| 环境自检（`--doctor`） | ✅ | ✅ | ✅ |
 | 独立 MTU（`--mtu`）     |          ✅           |        ✅        |     —      |
 | DNS 客户端（`-l` / `--dns`） |       ✅           |        —         |     —      |
 | CDN 测速（`--speed`）   |          ✅           |        —         |     —      |
@@ -194,6 +195,10 @@ Document Language: [English](README.md) | 简体中文
 | MTR 报告（`-r`）        |          ✅           |        ✅         |     ✅     |
 | MTR 宽报告（`-w`）      |          ✅           |        ✅         |     ✅     |
 | MTR 原始输出（`--raw`） |          ✅           |        ✅         |     ✅     |
+| MTR JSON / NDJSON | ✅ | ✅ | ✅ |
+| MTR 自定义列（`--mtr-columns`） | ✅ | ✅ | ✅ |
+| MTR 录制 / 回放（`--mtr-record` / `--mtr-replay`） | ✅ | ✅ | ✅ |
+| Linux 策略路由（`--fwmark`，仅本地探测） | ✅ | ✅ | ✅ |
 | Globalping（`--from`）  |          ✅           |        —         |     —      |
 | WebUI（`--deploy`）/ MCP（`--deploy --mcp`） |          ✅           |        —         |     —      |
 | 快速跟踪（`-F`）        |          ✅           |        ✅        |     —      |
@@ -201,6 +206,27 @@ Document Language: [English](README.md) | 简体中文
 | 二进制名                |      `nexttrace`      | `nexttrace-tiny` |   `ntr`    |
 
 > **注意：** `APT (nexttrace-debs)` 与 `Homebrew tap (nxtrace/nexttrace)` 目前提供 **Full**（`nexttrace`）、**Tiny**（`nexttrace-tiny`）和 **NTR**（`ntr`）三种包；`homebrew-core`、AUR、Scoop 等其它包管理器目前仍仅提供 **完整版**（`nexttrace`）。
+
+### 探测环境自检
+
+```sh
+nexttrace --doctor example.com
+nexttrace --doctor --tcp --port 443 example.com
+nexttrace-tiny --doctor -6 ::1
+ntr --doctor --dev eth0 example.com
+```
+
+`--doctor` 输出纯文本诊断报告后退出，分别列出请求配置、目标解析与源地址选择、系统路由预测及实际后端初始化结果。自检不发送探测包、不读取捕获流量、不访问 GeoIP/API 服务，也不验证目标可达性；DNS/DoT 解析可能访问网络。
+
+三个版本均支持。可用参数限于 `--ipv4`/`--ipv6`、`--tcp`/`--udp`、`--port`、`--source`、`--source-port`、`--dev`、`--tos`、`--dot-server`、`--timeout`、`--language`、`--no-color`、Windows 的 `--icmp-mode` 及对应短参数，详见 `--doctor --help`。目标仅接受域名或 IP，不接受 URL 和带区域后缀的 IPv6 地址。其他运行模式、JSON/RAW/文件输出及无关探测参数不能与自检组合。`--fwmark` 在自检中不受支持，不能用 Doctor 验证带标记的选路或 `SO_MARK` 权限；Doctor 的 `--source-port` 仅接受 `0..65535`，不接受探测模式的随机值 `-1`。
+
+默认使用 ICMP、中文文本，每项网络检查超时为 5000ms。多个解析候选全部列出，自动选择首个符合地址族的地址，不进行交互选择。目标 DoT 失败不回退系统 DNS。单项失败后继续独立检查；报告写入 stdout，参数与报告写入错误写入 stderr。报告包含目标、源地址和接口信息，不包含 token 或代理凭据。
+
+路由查询分别使用 Linux netlink、macOS 路由 socket 和 Windows `GetBestRoute2`。Linux IPv4 UDP 的内核协议 255 不支持 netlink 查询，因此通过 raw socket 的 `connect` 选源，全程不发送报文；该接口只返回源地址，`--doctor` 将出口接口及网关保留为未知。无法确认的信息显示“未知”。macOS/Windows 的预测不能覆盖全部协议、端口、源策略或 TOS 条件，报告会列明限制。socket 或过滤器初始化成功仅代表该步骤成功，不代表实际出口、收发能力或 TOS 生效。网络等待设有超时；原生同步初始化调用不承诺可被强制取消。
+
+Windows 的 `--dev` 仅用于源地址选择，不能表述为设备绑定已验证。所有 WinDivert 自检使用 `NO_INSTALL`，不解压或安装驱动，不执行 `--init`。驱动尚未安装时标记为未验证，因为普通探测可能自动安装；Socket 备选结果单独报告。后端名称以实际构建架构为准，目前 WinDivert 探测路径编译于 Windows amd64。
+
+退出码：**0** 必要检查完成且无失败；**1** 存在明确失败；**2** 参数错误；**3** 必要检查未能确认；**130/143** 收到 SIGINT/SIGTERM。目标可达性未验证本身不会导致退出码 3。
 
 ### 功能对比
 
@@ -367,7 +393,7 @@ PS: 路由可视化的绘制模块为独立模块，具体代码可在 [nxtrace/
 - 对于管理员模式：  
   **TCP/UDP mode** 依赖 `WinDivert`。  
   **ICMP mode** 支持 `1=Socket` 与 `2=WinDivert`（`0=Auto`）。使用 Socket 模式时，需防火墙配置允许`ICMP/ICMPv6`。  
-  在 `Windows` 上，`ICMPv6` 未传 `--tos` 或显式 `--tos 0` 时继续走原生 Socket 发送路径；只有非零 `ICMPv6 --tos` 才额外依赖 `WinDivert` 发送能力，并要求管理员权限。  
+  在 `Windows amd64` 上，ICMPv4/ICMPv6 未传 `--tos` 或显式 `--tos 0` 时继续走原生 Socket 发送路径；非零 ICMP `--tos` 使用 `WinDivert` 保留完整字段并要求管理员权限，`--icmp-mode 1` 选择 Socket 接收时也适用。原生 Windows ICMPv4 实测将所有测试的非零 TOS 发成了零。
   `WinDivert` 可使用 `--init` 参数自动配置环境；该命令会将运行时解压到可执行文件目录。
 
 #### `NextTrace` 现已经支持快速测试，有一次性测试回程路由需求的朋友可以使用
@@ -392,6 +418,26 @@ nexttrace --file /path/to/your/iplist.txt
 ```
 
 #### `NextTrace` 已支持指定网卡进行路由跟踪
+
+### TOS / IPv6 Traffic Class（`-Q`、`--tos`）
+
+`--tos` 设置完整的 8 位 IPv4 TOS / IPv6 Traffic Class 字段，范围 `0..255`，默认 `0`。计算方式为 `DSCP × 4 + ECN`：DSCP 46、ECN 0 使用 `--tos 184`；`--tos 46` 仍表示原始字段值 46（DSCP 11、ECN 2）。它修改探测报文头，实际选路与优先级由网络策略决定。
+
+Linux、macOS 的发送路径使用原生 socket 选项或完整 IP 报文头。Linux 上非零 TOS 的自动源地址按该 TOS 的路由选择，支持与 `--fwmark` 组合；显式 `--source`、`--dev` 保留约束，各会话独立选源。路由查询按 raw socket 的内核条件匹配，不传用户态报文中的 TCP/UDP 端口。选源或 TOS 设置失败会终止探测，不转换为 MTR 丢包，也不退回默认字段值。
+
+TOS 适用于现有 traceroute、MTR、Fast Trace、文件目标和 Web/API/MCP 探测入口；不影响 DNS/RDNS、GeoIP、API 等辅助请求。独立 MTU 和 Globalping 不支持该参数。JSON 中的 `tos` 记录请求配置，不代表抓包确认值。
+
+BSD、Android 提供相关原生接口，但未完成本次原生抓包验收；实际运行仍受探测所需权限与系统限制影响。Windows 的 WinDivert 发送路径目前仅编译于 amd64，不能将其支持结论套用于 Windows arm64。
+
+### Linux 策略路由（`--fwmark`）
+
+`--fwmark 256` 或 `--fwmark 0x100` 为本地 traceroute、MTR 探测 socket 设置 32 位标记，覆盖各适用构建的 ICMP/TCP/UDP 和 IPv4/IPv6。对应的 `ip rule` 和路由表由用户配置，NextTrace 不修改系统规则；没有匹配的分流规则时，路径可以保持不变。
+
+自动源地址按带标记的路由选择，显式 `--source`、`--dev` 保留约束，标记不会覆盖它们。带标记会话不使用旧的进程级源地址缓存。路由查询包含内核发送协议和 TOS（IPv4 UDP 的 IP_HDRINCL 路径使用协议 255），但不传入 TCP/UDP 端口，以匹配原生 raw socket 的内核选路：用户态构造的传输层头部不会作为该查询的端口条件。后续策略变化及 ECMP 仍可能影响选路。
+
+范围为 `0..4294967295`，支持十进制及 `0x` 十六进制，不支持掩码。未传参数时不设置标记；显式 `0` 仍执行设置并检查权限。Linux 需要 `CAP_NET_ADMIN`，或 Linux 5.17 起的 `CAP_NET_RAW`。初始化失败会终止探测，不退回无标记方式。
+
+DNS/RDNS、GeoIP、API 请求不继承探测标记。终端和 RAW 格式保持不变；MTR JSON/NDJSON 在 `effective_parameters.fwmark` 中记录显式指定的数值。macOS、Windows、BSD、Android，以及 doctor/MTU/DNS/speed/deploy 等独立模式、Globalping、Fast Trace 和文件目标明确拒绝该参数。
 
 在 macOS 和 Linux 上，`--dev` 会绑定到指定源网卡。
 在 Windows 上，`--dev` 会从指定网卡解析 source IP，并用该 source address 发起 ICMP/TCP/UDP 探测；它不会把 WinDivert 或 socket 绑定到真实出接口，实际出口仍可能由 Windows 路由表决定。独立 `--mtu` 模式也遵循相同的 source-address 语义，并额外使用网卡名查询本地 MTU。
@@ -422,7 +468,7 @@ nexttrace --udp 1.0.0.1
 # 可以自行指定目标端口[此处为5353]，默认33494端口
 nexttrace --udp --port 5353 1.0.0.1
 
-# TCP/UDP Trace 可以自行指定源端口，默认使用随机一个固定的端口(如需每次发包随机使用不同的源端口，请设置`ENV` `NEXTTRACE_RANDOMPORT`)
+# TCP/UDP Trace 可以自行指定源端口，默认使用随机一个固定的端口；`--source-port -1` 或环境变量 `NEXTTRACE_RANDOMPORT` 启用逐包随机源端口，适用于传统 traceroute 及 MTR 文本、JSON、录制
 nexttrace --tcp --source-port 14514 www.bing.com
 ```
 
@@ -537,8 +583,8 @@ nexttrace --psize 1024 example.com
 # 让每个 probe 在 1500 字节内随机大小
 nexttrace --psize -1500 example.com
 
-# 设置 TOS / traffic class 字段
-nexttrace -Q 46 example.com
+# 设置 DSCP 46、ECN 0（完整 TOS / traffic class 值为 184）
+nexttrace -Q 184 example.com
 
 # 特色功能：打印Route-Path图
 # Route-Path图示例：
@@ -567,7 +613,7 @@ export NO_COLOR=1
 | `--ttl-time` | 常规 traceroute 的 TTL 组间隔；MTR 的每跳探测间隔 | traceroute: `300ms`；MTR: 未指定时 `1000ms` | 想加速就调低；远程/限速链路调高 |
 | `--timeout` | 单个探测包超时 | `1000ms` | 跨洲或高丢包链路升到 `2000-3000ms` |
 | `--psize` | 探测包大小 | 按协议/IP 族自动取最小合法值 | 含 IP + 探测协议头；负值表示每个 probe 在 `abs(value)` 内随机；超过出接口/路径 MTU 时，链路上可能看到分片 |
-| `-Q`, `--tos` | IP TOS / traffic class | `0` | 设置 IP 头里的 TOS / traffic class；在 Windows 上仅 `ICMPv6` 且值非零时额外依赖 `WinDivert` |
+| `-Q`, `--tos` | IP TOS / traffic class | `0` | 设置完整 8 位字段（DSCP*4+ECN）；Windows amd64 非零 ICMP TOS 依赖 `WinDivert` |
 
 这些探测参数目前仍是 CLI 级配置，`nt_config.yaml` 还不能直接保存它们。若要复用一组调优参数，建议写成 shell alias 或小脚本。
 
@@ -622,17 +668,60 @@ nexttrace -r --raw 1.1.1.1
 nexttrace -t --tcp --max-hops 20 --first 3 --no-rdns 8.8.8.8
 ```
 
+三个版本均支持 MTR JSON：
+
+```bash
+nexttrace --mtr --json 1.1.1.1        # 持续输出 NDJSON 事件
+nexttrace --mtr --json -q 10 1.1.1.1  # 限次输出 NDJSON 事件
+nexttrace -r --json -q 10 1.1.1.1     # 结束后输出一个汇总 JSON
+nexttrace -w --json -q 10 1.1.1.1     # 与 -r --json 完全等价
+ntr --json 1.1.1.1                    # 持续输出 NDJSON 事件
+```
+
+JSON 固定输出完整可用元数据（FULL），忽略 `-y`，仍遵守 Geo/PTR、数据源及语言设置。`-r/-w --json` 共用 wide 采集规则。实时模式省略 `-q` 或传非正值表示无限运行；JSON 报告默认每跳 10 次，显式非正值报错。MTR 中 `--raw` 与 `--json` 互斥。full/tiny 单独 `--json` 保持传统 traceroute JSON，未来默认模式切换后也保持此行为。
+
+NDJSON 输出 `start`、`probe`、`path_end`、`end` 事件，`seq` 连续递增。报告只输出一个对象，中断或失败时保留已有统计。诊断写入 stderr。退出码：完成 `0`，初始化/执行错误 `1`，参数错误 `2`，SIGINT `130`，SIGTERM `143`。完成不表示目的地可达，可达性读取 `path_end`。详见 [MTR JSON v1 契约及示例](docs/mtr-json.md)。
+
+三个版本均支持保存和离线重开 MTR 会话：
+
+```sh
+nexttrace --mtr --mtr-record session.jsonl 1.1.1.1
+nexttrace --mtr-replay session.jsonl
+nexttrace --mtr-replay session.jsonl -r --json
+```
+
+`--mtr-record` 在当前 TUI、报告、RAW 或 JSON 输出之外新建私有记录文件，不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认模式。已有文件不会被覆盖。记录写入失败立即停止探测并报错，保留已写部分。首个会话错误及阶段不会被后续录制启动或结束错误覆盖。
+
+回放只读取已保存的探测和元数据，不探测、不查询 DNS/Geo/PTR。终端默认显示最终统计并暂停；空格原速播放，末尾按空格从头播放；`p` 暂停播放，`r` 返回开头，`j/J` 输入相对会话开始时间 `HH:MM:SS[.mmm]` 定位。Host、统计列和历史视图操作继续可用。非 TTY 或 `-r/-w` 一次输出报告；`--json` 使用独立离线报告，包含记录完整性和回放位置。末尾截断可恢复完整部分，明确标记不完整并返回非零。历史窗口仍为三分钟，随回放位置移动；记录文件保留整个会话。详见[会话格式与恢复规则](docs/mtr-session.md)。
+
+选择并排列 MTR 文字统计列：
+
+```sh
+nexttrace -t --mtr-columns loss,received,avg 1.1.1.1
+nexttrace -w --mtr-columns received,snt,last 1.1.1.1
+ntr --mtr-columns received 1.1.1.1
+```
+
+`--mtr-columns` 支持 `loss,snt,received,last,avg,best,wrst,stdev` 的任意非空子集及顺序，忽略大小写与列名两端空格；未知列、重复列、空项报错。`received` 显示为 `Rcv`。默认仍为 `Loss%、Snt、Last、Avg、Best、Wrst、StDev`。
+
+参数适用于 TUI、非 TTY 表格和 report/wide，也支持离线回放的文字输出；不自动开启 MTR：full/tiny 需配合 `-t/-r/-w`，ntr 使用默认 MTR 模式。RAW、JSON、传统 traceroute 和其他独立模式会在初始化前拒绝该参数。自定义 TUI 保留完整数字及至少 8 格 Host；空间不足时显示提示，加宽终端或减少列后恢复。
+
+按 `o/O` 编辑当前字段码：`L=Loss S=Snt R=Received N=Last A=Avg B=Best W=Wrst V=StDev`。输入不区分大小写，空格用于分隔。Enter 校验并应用，Esc 取消，Backspace 删除末尾字符，Ctrl-U 清空。空串、未知码和重复码保留编辑状态并显示错误。括号粘贴中的换行转为空格，不自动提交；草稿最多 256 个 ASCII 字符。
+
+编辑期间其他快捷键不生效，Ctrl-C 仍退出；探测、计数及暂停状态保持不变。从历史视图应用列后返回统计表，取消则保留历史视图。历史图表的固定列不变，列选择仅在当前会话有效；暂停期间仍可编辑和调整窗口大小。
+
 在终端（TTY）中运行时，MTR 模式使用**交互式全屏 TUI**：
 
 - **`q` / `Q`** — 退出（恢复终端，不留下输出）
 - **`p`** — 暂停探测
 - **空格** — 恢复探测
 - **`r`** — 重置统计（计数器清零，显示模式保持不变）
-- **`y`** — 循环切换主机显示模式：ASN → City → Owner → Full
+- **`y`** — 循环切换主机显示模式：IP/PTR → ASN → City → Owner → Full
 - **`n`** — 切换主机名显示方式：
   - 默认：PTR（无 PTR 时回退 IP）↔ 仅 IP
   - 启用 `--show-ips`：PTR (IP) ↔ 仅 IP
 - **`e`** — 切换 MPLS 标签显示开/关
+- **`o` / `O`** — 编辑统计列
 - **`d` / `D`** — 切换可选历史显示；默认 TUI 仍是经典指标表
 - **`g` / `G`** — 仅在历史显示中循环切换 History 图表：heatmap → bars → sparkline
 - TUI 标题栏显示**源 → 目标**路由信息，指定 `--source`/`--dev` 时会展示对应信息。
@@ -692,7 +781,7 @@ raw stdout 契约仍严格保持 12 列。无限运行的 MTR 中，unreachable 
 
 > 注意：`--show-ips` 仅在 MTR 模式（`--mtr`、`-r`、`-w`）生效，其他模式会忽略。
 >
-> 注意：`--mtr` 不可与 `--traceroute`、`--table`、`--classic`、`--json`、`--output`、`--output-default`、`--route-path`、`--from`、`--fast-trace`、`--file`、`--deploy` 同时使用。
+> 注意：`--mtr` 不可与 `--traceroute`、`--table`、`--classic`、`--output`、`--output-default`、`--route-path`、`--from`、`--fast-trace`、`--file`、`--deploy` 同时使用。
 
 #### `NextTrace`支持用户自主选择 IP 数据库（目前支持：`NextTrace-API`, `IP.SB`, `IPInfo`, `IPInsight`, `IPAPI.com`, `IPInfoLocal`, `IPDB.One`, `CHUNZHEN`, `DN42`）
 
@@ -764,6 +853,8 @@ export GLOBALPING_TOKEN=your_token_here
 ```
 
 ### 环境变量总览
+
+启用 `NEXTTRACE_DEBUG` 时，已知 token、IPDB 凭据及代理 URL 的环境变量读取日志只显示变量名和存在状态，不输出其值。其他诊断仍可能包含目标、源地址和接口信息。
 
 NextTrace 当前会读取下列环境变量。对于 `NEXTTRACE_*` 布尔开关，只识别 `1` 和 `0`，其他值会回退到内置默认值。为了避免混淆，修改后建议重启 NextTrace。
 
@@ -840,15 +931,15 @@ usage: nexttrace [-h|--help] [-4|--ipv4] [-6|--ipv6] [-T|--tcp] [-U|--udp]
                  [-j|--json] [-c|--classic] [--dn42] [--raw] [-f|--first
                  <integer>] [-M|--map] [-e|--disable-mpls] [-V|--version]
                  [-x|--setup-api-v4-token] [-l|--dns] [--speed] [--nali]
-                 [-s|--source "<value>"] [--source-port <integer>] [-D|--dev
+                 [-s|--source "<value>"] [--fwmark "<value>"] [--source-port <integer>] [-D|--dev
                  "<value>"] [--listen "<value>"] [--deploy-token "<value>"]
                  [--mcp] [--deploy] [-z|--send-time <integer>] [-i|--ttl-time
                  <integer>] [--timeout <integer>] [--psize <integer>] [-Q|--tos
                  <integer>] [--dot-server
                  (dnssb|aliyun|dnspod|google|cloudflare)] [-g|--language
                  (en|cn)] [-C|--no-color] [--from "<value>"] [-t|--mtr]
-                 [-r|--report] [-w|--wide] [--show-ips] [-y|--ipinfo <integer>]
-                 [--file "<value>"] [TARGET "<value>"]
+                 [-r|--report] [-w|--wide] [--show-ips] [--mtr-columns <string>] [-y|--ipinfo <integer>]
+                 [--mtr-record "<value>"] [--file "<value>"] [TARGET "<value>"]
 
                  An open source visual route tracking CLI tool
 
@@ -868,9 +959,10 @@ Arguments:
                                      default of 80 for "tcp", 33494 for "udp"
   -q  --queries                      Traceroute: latency samples per hop
                                      (default 3). MTR: max probes per hop. 0 =
-                                     unlimited in TUI/raw. When omitted: 10
-                                     with --report/--wide (including --raw),
-                                     otherwise unlimited
+                                     unlimited in TUI/raw/JSON streams. JSON
+                                     reports require a positive count. When
+                                     omitted: 10 with --report/--wide
+                                     (including --raw), otherwise unlimited
       --max-attempts                 Advanced: hard cap on probe packets per
                                      hop. Leave unset for auto sizing; raise on
                                      lossy links if --queries is not enough
@@ -905,7 +997,8 @@ Arguments:
                                      (/tmp/trace.log)
       --table                        Output trace results as a final summary
                                      table (traceroute report mode)
-  -j  --json                         Output trace results as JSON
+  -j  --json                         Output JSON; MTR streams NDJSON unless
+                                     --report/--wide is selected
   -c  --classic                      Classic Output trace results like
                                      BestTrace
       --dn42                         DN42 Mode
@@ -928,6 +1021,8 @@ Arguments:
                                      NextTrace GeoIP data
   -s  --source                       Use source address src_addr for outgoing
                                      packets
+      --fwmark                       Linux probe socket mark (decimal or 0x
+                                     hex); traceroute/MTR only
       --source-port                  Use source port src_port for outgoing
                                      packets
   -D  --dev                          Use the specified network device for
@@ -959,8 +1054,9 @@ Arguments:
                                      and IP family; raise for MTU or
                                      large-packet testing. Negative values
                                      randomize each probe up to abs(value)
-  -Q  --tos                          Set the IP type-of-service / traffic class
-                                     value [0-255]. Default: 0
+  -Q  --tos                          Set the full 8-bit IP type-of-service /
+                                     traffic class [0-255]: DSCP*4+ECN (DSCP
+                                     46, ECN 0 = 184). Default: 0
       --dot-server                   Use DoT Server for DNS Parse [dnssb,
                                      aliyun, dnspod, google, cloudflare]
   -g  --language                     Choose the language for displaying [en,
@@ -978,17 +1074,25 @@ Arguments:
   -w  --wide                         MTR wide report mode (implies --mtr
                                      --report); alone equals --mtr --report
                                      --wide
+      --mtr-columns                  MTR text columns in order: loss,snt,
+                                     received,last,avg,best,wrst,stdev;
+                                     does not enable MTR
       --show-ips                     MTR only: display both PTR hostnames and
                                      numeric IPs (PTR first, IP in parentheses)
   -y  --ipinfo                       Set initial MTR TUI host info mode (0-4).
-                                     TUI only; ignored in --report/--raw.
+                                     TUI only; ignored in --report/--raw/--json.
                                      0:IP/PTR 1:ASN 2:City 3:Owner 4:Full.
                                      Default: 0
+      --mtr-record                   Save this MTR session to a new file for
+                                     offline replay
       --file                         Read IP Address or domain name from file
       TARGET                         Trace target: IPv4 address (e.g. 8.8.8.8),
                                      IPv6 address (e.g. 2001:db8::1), domain
                                      name (e.g. example.com), or URL (e.g.
                                      https://example.com)
+
+  --doctor  Check local probe prerequisites without sending probes; see --doctor --help
+  --mtr-replay FILE  Open a saved MTR session offline; see --mtr-replay --help
 ```
 
 ## 项目截图

@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/nxtrace/NTrace-core/printer"
 	"golang.org/x/term"
 )
 
@@ -16,16 +19,22 @@ import (
 
 // mtrUI 管理终端交互状态：备份屏幕、raw mode、按键处理。
 type mtrUI struct {
-	isTTY       bool
-	oldState    *term.State // raw mode 之前的终端状态
-	paused      atomic.Bool
-	restartReq  atomic.Bool
-	displayMode atomic.Int32 // 显示模式 0-4
-	nameMode    atomic.Int32 // Host 基础显示 0=PTR/IP, 1=IP only
-	disableMPLS atomic.Bool
-	historyMode atomic.Bool
-	chartMode   atomic.Int32 // history chart mode 0-2
-	cancel      context.CancelFunc
+	columnsMu    sync.Mutex
+	columns      []printer.MTRColumn
+	columnEditor printer.MTRColumnEditor
+	replayEditor printer.MTRReplayEditor
+	replay       *mtrReplayControls
+	redraw       chan struct{}
+	isTTY        bool
+	oldState     *term.State // raw mode 之前的终端状态
+	paused       atomic.Bool
+	restartReq   atomic.Bool
+	displayMode  atomic.Int32 // 显示模式 0-4
+	nameMode     atomic.Int32 // Host 基础显示 0=PTR/IP, 1=IP only
+	disableMPLS  atomic.Bool
+	historyMode  atomic.Bool
+	chartMode    atomic.Int32 // history chart mode 0-2
+	cancel       context.CancelFunc
 }
 
 // newMTRUI 创建 TUI 控制器。cancel 是用于退出 MTR 的 context cancel 函数。
@@ -33,6 +42,7 @@ type mtrUI struct {
 // stdin 和 stdout 都必须是终端才会启用交互式 TUI。
 func newMTRUI(cancel context.CancelFunc, initialDisplayMode int) *mtrUI {
 	ui := &mtrUI{
+		redraw: make(chan struct{}, 1),
 		isTTY:  term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())),
 		cancel: cancel,
 	}
@@ -221,13 +231,18 @@ const (
 	mtrActionMPLSToggle                          // e
 	mtrActionHistoryToggle                       // d
 	mtrActionHistoryChart                        // g
+	mtrActionColumns
+	mtrActionReplayJump
+	mtrActionPasteStart
 )
 
 // mtrInputParser 是一个字节级状态机，能区分普通按键与
 // CSI/SS3/OSC/鼠标/焦点等转义序列，对后者整体吞掉。
 type mtrInputParser struct {
-	state mtrParserState
-	csiN  int // CSI 体内已读字节数（用于限制吞掉长度）
+	state      mtrParserState
+	trackPaste bool
+	csi        string
+	csiN       int // CSI 体内已读字节数（用于限制吞掉长度）
 }
 
 type mtrParserState int
@@ -282,6 +297,7 @@ func (p *mtrInputParser) feedEsc(b byte) mtrInputAction {
 	case '[':
 		p.state = mtrStateCSI
 		p.csiN = 0
+		p.csi = ""
 	case 'O':
 		p.state = mtrStateSS3
 	case ']':
@@ -294,6 +310,13 @@ func (p *mtrInputParser) feedEsc(b byte) mtrInputAction {
 
 func (p *mtrInputParser) feedCSI(b byte) mtrInputAction {
 	p.csiN++
+	if p.trackPaste && len(p.csi) < mtrParserMaxCSI {
+		p.csi += string(b)
+	}
+	if p.trackPaste && p.csi == "200~" {
+		p.state = mtrStateGround
+		return mtrActionPasteStart
+	}
 	switch {
 	case b == 'M':
 		p.state = mtrStateX10Mouse
@@ -361,6 +384,10 @@ func mapKeyToAction(b byte) mtrInputAction {
 		return mtrActionHistoryToggle
 	case 'g', 'G':
 		return mtrActionHistoryChart
+	case 'o', 'O':
+		return mtrActionColumns
+	case 'j', 'J':
+		return mtrActionReplayJump
 	default:
 		return mtrActionNone
 	}
@@ -389,45 +416,45 @@ func (u *mtrUI) ReadKeysLoop(ctx context.Context) {
 }
 
 func (u *mtrUI) readKeysLoop(ctx context.Context, input io.Reader) {
-	var parser mtrInputParser
-	buf := make([]byte, 64) // 批量读取，减少 syscall
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// The reader never writes to the terminal. Cancellation stops the parser even
+	// when an injected reader cannot be interrupted.
+	chunks := make(chan []byte)
+	go func() {
+		defer close(chunks)
+		buf := make([]byte, 64)
+		for {
+			n, err := input.Read(buf)
+			if n > 0 {
+				select {
+				case chunks <- append([]byte(nil), buf[:n]...):
+				case <-ctx.Done():
+					return
+				}
+			}
+			if err != nil || n == 0 {
+				return
+			}
+		}
+	}()
+	var keys mtrKeyInput
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-		}
-		n, err := input.Read(buf)
-		if err != nil || n == 0 {
-			if err == io.EOF {
+		case now := <-ticker.C:
+			keys.expireEscape(u, now)
+		case data, ok := <-chunks:
+			if !ok {
 				return
 			}
-			return
-		}
-		for i := 0; i < n; i++ {
-			action := parser.Feed(buf[i])
-			switch action {
-			case mtrActionQuit:
-				if u.cancel != nil {
-					u.cancel()
+			for _, b := range data {
+				if ctx.Err() != nil || keys.feed(u, b, time.Now()) {
+					return
 				}
-				return
-			case mtrActionPause:
-				u.paused.Store(true)
-			case mtrActionResume:
-				u.paused.Store(false)
-			case mtrActionRestart:
-				u.restartReq.Store(true)
-			case mtrActionDisplayMode:
-				u.CycleDisplayMode()
-			case mtrActionNameToggle:
-				u.ToggleNameMode()
-			case mtrActionMPLSToggle:
-				u.ToggleMPLS()
-			case mtrActionHistoryToggle:
-				u.ToggleHistoryMode()
-			case mtrActionHistoryChart:
-				u.CycleHistoryChartMode()
 			}
 		}
 	}
@@ -461,6 +488,8 @@ func ParseMTRKey(b byte) string {
 		return "history_toggle"
 	case 'g', 'G':
 		return "history_chart"
+	case 'o', 'O':
+		return "columns"
 	default:
 		return ""
 	}

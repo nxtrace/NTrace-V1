@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -28,6 +27,8 @@ type TCPSpec struct {
 	DstPort      int
 	PktSize      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	tcp          net.PacketConn
 	tcp4         *ipv4.PacketConn
@@ -35,7 +36,10 @@ type TCPSpec struct {
 	hopLimitLock sync.Mutex
 }
 
-func (s *TCPSpec) InitTCP() {
+func (s *TCPSpec) InitTCP() error {
+	if err := setPacketConnFWMark(nil, s.FWMark, s.FWMarkSet); err != nil {
+		return err
+	}
 	network := "ip4:tcp"
 	if s.IPVersion == 6 {
 		network = "ip6:tcp"
@@ -43,18 +47,12 @@ func (s *TCPSpec) InitTCP() {
 
 	tcp, err := net.ListenPacket(network, s.SrcIP.String())
 	if err != nil {
-		if util.EnvDevMode {
-			panic(fmt.Errorf("(InitTCP) ListenPacket(%s, %s) failed: %v", network, s.SrcIP, err))
-		}
-		log.Fatalf("(InitTCP) ListenPacket(%s, %s) failed: %v", network, s.SrcIP, err)
+		return fmt.Errorf("(InitTCP) ListenPacket(%s, %s) failed: %w", network, s.SrcIP, err)
 	}
 	if s.SourceDevice != "" {
 		if err := bindPacketConnToSourceDevice(tcp, s.IPVersion, s.SourceDevice); err != nil {
 			_ = tcp.Close()
-			if util.EnvDevMode {
-				panic(fmt.Errorf("(InitTCP) bind source device %q failed: %v", s.SourceDevice, err))
-			}
-			log.Fatalf("(InitTCP) bind source device %q failed: %v", s.SourceDevice, err)
+			return fmt.Errorf("(InitTCP) bind source device %q failed: %w", s.SourceDevice, err)
 		}
 	}
 	s.tcp = tcp
@@ -64,15 +62,20 @@ func (s *TCPSpec) InitTCP() {
 	} else {
 		s.tcp6 = ipv6.NewPacketConn(s.tcp)
 	}
+	return nil
 }
 
 func (s *TCPSpec) Close() {
-	_ = s.icmp.Close()
-	_ = s.tcp.Close()
+	if s.icmp != nil {
+		_ = s.icmp.Close()
+	}
+	if s.tcp != nil {
+		_ = s.tcp.Close()
+	}
 }
 
-func (s *TCPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, data []byte)) {
-	s.listenICMPSock(ctx, ready, onICMP)
+func (s *TCPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, data []byte)) error {
+	return s.listenICMPSock(ctx, ready, onICMP)
 }
 
 func (s *TCPSpec) captureDevice() string {
@@ -92,34 +95,34 @@ func (s *TCPSpec) tcpCaptureFilter() string {
 	)
 }
 
-func mustOpenDarwinTCPSniffHandle(dev string) *pcap.Handle {
+func openDarwinTCPSniffHandle(dev string) (*pcap.Handle, error) {
 	// TCP traceroute only needs packets destined to or sourced from this host.
 	// Some macOS interfaces refuse promiscuous mode even under sudo, so avoid
 	// requesting it for this narrowly filtered capture.
 	handle, err := util.OpenLiveImmediate(dev, 65535, false, 4<<20)
 	if err != nil {
-		if util.EnvDevMode {
-			panic(fmt.Errorf("(ListenTCP) pcap open failed on %s: %v", dev, err))
-		}
-		log.Fatalf("(ListenTCP) pcap open failed on %s: %v", dev, err)
+		return nil, fmt.Errorf("(ListenTCP) pcap open failed on %s: %w", dev, err)
 	}
-	return handle
+	return handle, nil
 }
 
-func mustSetDarwinTCPFilter(handle *pcap.Handle, filter string) {
+func setDarwinTCPFilter(handle *pcap.Handle, filter string) error {
 	if err := handle.SetBPFFilter(filter); err != nil {
-		if util.EnvDevMode {
-			panic(fmt.Errorf("(ListenTCP) set BPF failed: %v (filter=%q)", err, filter))
-		}
-		log.Fatalf("(ListenTCP) set BPF failed: %v (filter=%q)", err, filter)
+		return fmt.Errorf("(ListenTCP) set BPF failed: %w (filter=%q)", err, filter)
 	}
+	return nil
 }
 
-func (s *TCPSpec) ListenTCP(ctx context.Context, ready chan struct{}, onTCP func(srcPort, seq, ack int, peer net.Addr, finish time.Time)) {
-	handle := mustOpenDarwinTCPSniffHandle(s.captureDevice())
+func (s *TCPSpec) ListenTCP(ctx context.Context, ready chan struct{}, onTCP func(srcPort, seq, ack int, peer net.Addr, finish time.Time)) error {
+	handle, err := openDarwinTCPSniffHandle(s.captureDevice())
+	if err != nil {
+		return err
+	}
 	defer handle.Close()
 
-	mustSetDarwinTCPFilter(handle, s.tcpCaptureFilter())
+	if err := setDarwinTCPFilter(handle, s.tcpCaptureFilter()); err != nil {
+		return err
+	}
 	src := gopacket.NewPacketSource(handle, handle.LinkType())
 	pktCh := src.Packets()
 	close(ready)
@@ -127,10 +130,10 @@ func (s *TCPSpec) ListenTCP(ctx context.Context, ready chan struct{}, onTCP func
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case pkt, ok := <-pktCh:
 			if !ok {
-				return
+				return listenerStoppedError(ctx)
 			}
 			finish := pkt.Metadata().Timestamp
 			srcPort, seq, ack, peer, ok := decodeTCPProbePacket(s.IPVersion, s.DstPort, pkt)
@@ -176,7 +179,7 @@ func (s *TCPSpec) SendTCP(ctx context.Context, ipHdr gopacket.NetworkLayer, tcpH
 		defer s.hopLimitLock.Unlock()
 
 		if err := s.tcp4.SetTOS(int(ip4.TOS)); err != nil {
-			return time.Time{}, err
+			return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv4 TOS %d: %w", ip4.TOS, err)}
 		}
 		if err := s.tcp4.SetTTL(ttl); err != nil {
 			return time.Time{}, err
@@ -216,7 +219,7 @@ func (s *TCPSpec) SendTCP(ctx context.Context, ipHdr gopacket.NetworkLayer, tcpH
 	defer s.hopLimitLock.Unlock()
 
 	if err := s.tcp6.SetTrafficClass(int(ip6.TrafficClass)); err != nil {
-		return time.Time{}, err
+		return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv6 Traffic Class %d: %w", ip6.TrafficClass, err)}
 	}
 	if err := s.tcp6.SetHopLimit(ttl); err != nil {
 		return time.Time{}, err

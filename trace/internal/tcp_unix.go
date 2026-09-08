@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -15,8 +14,6 @@ import (
 	"github.com/google/gopacket/layers"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-
-	"github.com/nxtrace/NTrace-core/util"
 )
 
 type TCPSpec struct {
@@ -27,6 +24,8 @@ type TCPSpec struct {
 	DstPort      int
 	PktSize      int
 	SourceDevice string
+	FWMark       uint32
+	FWMarkSet    bool
 	icmp         net.PacketConn
 	tcp          net.PacketConn
 	tcp4         *ipv4.PacketConn
@@ -34,7 +33,7 @@ type TCPSpec struct {
 	hopLimitLock sync.Mutex
 }
 
-func (s *TCPSpec) InitTCP() {
+func (s *TCPSpec) InitTCP() error {
 	network := "ip4:tcp"
 	if s.IPVersion == 6 {
 		network = "ip6:tcp"
@@ -42,18 +41,16 @@ func (s *TCPSpec) InitTCP() {
 
 	tcp, err := net.ListenPacket(network, s.SrcIP.String())
 	if err != nil {
-		if util.EnvDevMode {
-			panic(fmt.Errorf("(InitTCP) ListenPacket(%s, %s) failed: %v", network, s.SrcIP, err))
-		}
-		log.Fatalf("(InitTCP) ListenPacket(%s, %s) failed: %v", network, s.SrcIP, err)
+		return fmt.Errorf("(InitTCP) ListenPacket(%s, %s) failed: %w", network, s.SrcIP, err)
+	}
+	if err := setPacketConnFWMark(tcp, s.FWMark, s.FWMarkSet); err != nil {
+		_ = tcp.Close()
+		return err
 	}
 	if s.SourceDevice != "" {
 		if err := bindPacketConnToSourceDevice(tcp, s.IPVersion, s.SourceDevice); err != nil {
 			_ = tcp.Close()
-			if util.EnvDevMode {
-				panic(fmt.Errorf("(InitTCP) bind source device %q failed: %v", s.SourceDevice, err))
-			}
-			log.Fatalf("(InitTCP) bind source device %q failed: %v", s.SourceDevice, err)
+			return fmt.Errorf("(InitTCP) bind source device %q failed: %w", s.SourceDevice, err)
 		}
 	}
 	s.tcp = tcp
@@ -63,33 +60,38 @@ func (s *TCPSpec) InitTCP() {
 	} else {
 		s.tcp6 = ipv6.NewPacketConn(s.tcp)
 	}
+	return nil
 }
 
 func (s *TCPSpec) Close() {
-	_ = s.icmp.Close()
-	_ = s.tcp.Close()
+	if s.icmp != nil {
+		_ = s.icmp.Close()
+	}
+	if s.tcp != nil {
+		_ = s.tcp.Close()
+	}
 }
 
-func (s *TCPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, data []byte)) {
-	s.listenICMPSock(ctx, ready, onICMP)
+func (s *TCPSpec) ListenICMP(ctx context.Context, ready chan struct{}, onICMP func(msg ReceivedMessage, finish time.Time, data []byte)) error {
+	return s.listenICMPSock(ctx, ready, onICMP)
 }
 
-func (s *TCPSpec) ListenTCP(ctx context.Context, ready chan struct{}, onTCP func(srcPort, seq, ack int, peer net.Addr, finish time.Time)) {
-	lc := NewPacketListener(s.tcp)
-	go lc.Start(ctx)
+func (s *TCPSpec) ListenTCP(ctx context.Context, ready chan struct{}, onTCP func(srcPort, seq, ack int, peer net.Addr, finish time.Time)) error {
+	lc, stop := startPacketListener(ctx, s.tcp)
+	defer stop()
 	close(ready)
 
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case msg, ok := <-lc.Messages:
 			if !ok {
-				return
+				return listenerStoppedError(ctx)
 			}
 
 			if msg.Err != nil {
-				continue
+				return msg.Err
 			}
 			finish := time.Now()
 
@@ -150,7 +152,7 @@ func (s *TCPSpec) SendTCP(ctx context.Context, ipHdr gopacket.NetworkLayer, tcpH
 		defer s.hopLimitLock.Unlock()
 
 		if err := s.tcp4.SetTOS(int(ip4.TOS)); err != nil {
-			return time.Time{}, err
+			return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv4 TOS %d: %w", ip4.TOS, err)}
 		}
 		if err := s.tcp4.SetTTL(ttl); err != nil {
 			return time.Time{}, err
@@ -190,7 +192,7 @@ func (s *TCPSpec) SendTCP(ctx context.Context, ipHdr gopacket.NetworkLayer, tcpH
 	defer s.hopLimitLock.Unlock()
 
 	if err := s.tcp6.SetTrafficClass(int(ip6.TrafficClass)); err != nil {
-		return time.Time{}, err
+		return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv6 Traffic Class %d: %w", ip6.TrafficClass, err)}
 	}
 	if err := s.tcp6.SetHopLimit(ttl); err != nil {
 		return time.Time{}, err

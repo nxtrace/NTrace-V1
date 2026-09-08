@@ -20,6 +20,7 @@ on:
       - "nt_install.sh"
       - ".cross_compile.sh"
       - "scripts/test_nt_install.sh"
+      - "scripts/test_mtr_session_pty.py"
       - "scripts/perf/**"
       - ".github/workflows/*.yml"
   pull_request:
@@ -33,6 +34,7 @@ on:
       - "nt_install.sh"
       - ".cross_compile.sh"
       - "scripts/test_nt_install.sh"
+      - "scripts/test_mtr_session_pty.py"
       - "scripts/perf/**"
       - ".github/workflows/*.yml"
   workflow_dispatch:
@@ -72,6 +74,18 @@ jobs:
         run: |
           go test -tags flavor_tiny ./cmd ./server
           go test -tags flavor_ntr ./cmd ./server
+
+      - name: Doctor native loopback route smoke
+        env:
+          NEXTTRACE_DOCTOR_INTEGRATION: '1'
+        run: go test ./internal/doctor -run '^TestNativeLoopbackRoute$' -count=1
+
+      - name: Doctor privileged backend smoke
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          go test -c -o "${RUNNER_TEMP}/doctor-backend.test" ./trace/internal
+          sudo env NEXTTRACE_DOCTOR_BACKEND_INTEGRATION=1 "${RUNNER_TEMP}/doctor-backend.test" -test.run '^TestDoctorNativeBackend$' -test.v
 
       - name: Verify q v0.19.12 adapter parity
         if: ${{ matrix.os == 'ubuntu-latest' }}
@@ -122,6 +136,51 @@ jobs:
           go build -buildvcs=false -trimpath -o "${RUNNER_TEMP}/nexttrace" .
           go build -buildvcs=false -trimpath -tags flavor_tiny -o "${RUNNER_TEMP}/nexttrace-tiny" .
           go build -buildvcs=false -trimpath -tags flavor_ntr -o "${RUNNER_TEMP}/ntr" .
+
+      - name: MTR column editor PTY smoke
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          go build -o "${RUNNER_TEMP}/nexttrace-mtr-columns" .
+          sudo python3 scripts/test_mtr_columns_pty.py "${RUNNER_TEMP}/nexttrace-mtr-columns"
+
+      - name: MTR column editor ConPTY smoke
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          python -m pip install pywinpty==3.0.5
+          go build -o "$env:RUNNER_TEMP/nexttrace-mtr-columns.exe" .
+          python scripts/test_mtr_columns_pty.py "$env:RUNNER_TEMP/nexttrace-mtr-columns.exe"
+
+      - name: MTR session recording and replay PTY smoke
+        if: ${{ matrix.os != 'windows-latest' }}
+        shell: bash
+        run: |
+          for flavor in full tiny ntr; do
+            binary="${RUNNER_TEMP}/nexttrace-mtr-session-${flavor}"
+            tags=()
+            if [[ "${flavor}" != full ]]; then
+              tags=(-tags "flavor_${flavor}")
+            fi
+            go build -buildvcs=false "${tags[@]}" -o "${binary}" .
+            sudo python3 scripts/test_mtr_session_pty.py "${binary}"
+          done
+
+      - name: MTR session recording and replay ConPTY smoke
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          foreach ($flavor in @("full", "tiny", "ntr")) {
+            $binary = "$env:RUNNER_TEMP/nexttrace-mtr-session-$flavor.exe"
+            $buildArgs = @("build", "-buildvcs=false", "-o", $binary)
+            if ($flavor -ne "full") {
+              $buildArgs += @("-tags", "flavor_$flavor")
+            }
+            go @buildArgs .
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python scripts/test_mtr_session_pty.py $binary
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Test with windows
         if: ${{ matrix.os == 'windows-latest' }}

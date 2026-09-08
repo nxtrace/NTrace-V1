@@ -16,6 +16,7 @@ import (
 	"github.com/nxtrace/NTrace-core/printer"
 	"github.com/nxtrace/NTrace-core/trace"
 	"github.com/nxtrace/NTrace-core/util"
+	"golang.org/x/term"
 )
 
 const defaultMTRInternalTTLIntervalMs = 0
@@ -29,7 +30,6 @@ func checkMTRConflicts(flags map[string]bool) (conflict string, ok bool) {
 	}{
 		{"--table", flags["table"]},
 		{"--classic", flags["classic"]},
-		{"--json", flags["json"]},
 		{"--output", flags["output"]},
 		{"--output-default", flags["outputDefault"]},
 		{"--route-path", flags["routePath"]},
@@ -49,24 +49,27 @@ func checkMTRConflicts(flags map[string]bool) (conflict string, ok bool) {
 // runMTRTUI 执行 MTR 交互式 TUI 模式。
 // 当 stdin 为 TTY 时启用全屏 TUI（备用屏幕、按键控制）；
 // 非 TTY 时降级为简单表格刷新。
-func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, showIPs bool, initialDisplayMode int) {
+func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, showIPs bool, initialDisplayMode int, onEvent func(trace.MTRSessionEvent) error, columns ...printer.MTRColumn) error {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
 	}
 
-	// Ctrl-C 优雅退出
-	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := mtrRunContext(conf)
 	defer stop()
 	ctx, cancel := context.WithCancel(sigCtx)
 	defer cancel()
 
 	// 初始化 TUI 控制器
 	ui := newMTRUI(cancel, initialDisplayMode)
+	ui.columns = append([]printer.MTRColumn(nil), columns...)
 	ui.Enter()
 	defer ui.Leave()
 
 	// 按键读取协程（非 TTY 时内部 no-op）
-	go ui.ReadKeysLoop(ctx)
+	keysCtx, stopKeys := context.WithCancel(ctx)
+	keysDone := make(chan struct{})
+	go func() { defer close(keysDone); ui.ReadKeysLoop(keysCtx) }()
+	defer func() { stopKeys(); <-keysDone }()
 
 	startTime := time.Now()
 	target := conf.DstIP.String()
@@ -87,27 +90,41 @@ func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 	roundConf := normalizeMTRTraceConfig(conf)
 
 	opts := buildMTRInteractiveOptions(ui, hopIntervalMs, maxPerHop)
+	opts.OnEvent = onEvent
 	history := attachMTRHistoryIfTTY(ui, &opts)
 
 	// TTY 模式下使用 TUI 渲染器 + 暂停支持，非 TTY 使用简单表格
 	var onSnapshot trace.MTROnSnapshot
 	if ui.IsTTY() {
 		opts.IsPaused = ui.IsPaused
-		onSnapshot = printer.MTRTUIPrinter(target, domain, target, config.Version, startTime,
+		var frameColumns []printer.MTRColumn
+		var frameEditor printer.MTRColumnEditor
+		render := printer.MTRTUIPrinter(target, domain, target, config.Version, startTime,
 			srcHost, srcIP, lang, func() string { return buildAPIInfo(dataOrigin) }, showIPs, ui.IsPaused,
 			ui.CurrentDisplayMode, ui.CurrentNameMode, ui.IsMPLSDisabled,
-			ui.IsHistoryMode, ui.CurrentHistoryChartMode, history.Snapshot)
+			ui.IsHistoryMode, ui.CurrentHistoryChartMode, history.Snapshot, func() ([]printer.MTRColumn, printer.MTRColumnEditor) { return frameColumns, frameEditor })
+		pasteEnabled := false
+		var stopRedraw func()
+		onSnapshot, stopRedraw = startMTRRedraw(ui.redraw, func() (int, int) { w, h, _ := term.GetSize(int(os.Stdout.Fd())); return w, h }, func(n int, stats []trace.MTRHopStat) {
+			frameColumns, frameEditor = ui.columnSnapshot()
+			if frameEditor.Active != pasteEnabled {
+				pasteEnabled = frameEditor.Active
+				if pasteEnabled {
+					_, _ = fmt.Fprint(os.Stdout, "\033[?2004h")
+				} else {
+					_, _ = fmt.Fprint(os.Stdout, "\033[?2004l")
+				}
+			}
+			render(n, stats)
+		})
+		defer stopRedraw()
 	} else {
 		onSnapshot = func(iteration int, stats []trace.MTRHopStat) {
-			printer.MTRTablePrinter(stats, iteration, ui.CurrentDisplayMode(), ui.CurrentNameMode(), lang, showIPs)
+			printer.MTRTablePrinterWithColumns(stats, iteration, ui.CurrentDisplayMode(), ui.CurrentNameMode(), lang, showIPs, columns)
 		}
 	}
 
-	err := trace.RunMTR(ctx, method, roundConf, opts, onSnapshot)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		// 离开备用屏幕后再打印错误
-		fmt.Println(err)
-	}
+	return mtrRunError(ctx, trace.RunMTR(ctx, method, roundConf, opts, onSnapshot))
 }
 
 func buildMTRInteractiveOptions(ui *mtrUI, hopIntervalMs int, maxPerHop int) trace.MTROptions {
@@ -144,7 +161,7 @@ func attachMTRHistoryIfTTY(ui *mtrUI, opts *trace.MTROptions) *printer.MTRHistor
 
 // runMTRReport 执行 MTR 非全屏报告模式（对齐 mtr -rzw 风格）。
 // 探测完 maxPerHop 后一次性输出最终统计到 stdout，不进入 alternate screen。
-func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, wide bool, showIPs bool) {
+func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, domain string, dataOrigin string, wide bool, showIPs bool, onEvent func(trace.MTRSessionEvent) error, columns ...printer.MTRColumn) error {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
 	}
@@ -152,7 +169,7 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 		maxPerHop = 10
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := mtrRunContext(conf)
 	defer stop()
 
 	startTime := time.Now()
@@ -167,36 +184,32 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 		lang = "cn"
 	}
 
-	// 最终快照
-	var finalStats []trace.MTRHopStat
-	onSnapshot := func(iteration int, stats []trace.MTRHopStat) {
-		finalStats = stats
-	}
-
 	opts := trace.MTROptions{
 		HopInterval: time.Duration(hopIntervalMs) * time.Millisecond,
 		MaxPerHop:   maxPerHop,
+		OnEvent:     onEvent,
 	}
 
 	roundConf := normalizeMTRReportConfig(conf, wide)
-	err := trace.RunMTR(ctx, method, roundConf, opts, onSnapshot)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Println(err)
-		return
+	finalStats, _, err := collectMTRReport(ctx, method, roundConf, opts)
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.Cause(ctx)) {
+		return err
 	}
 
 	if len(finalStats) == 0 {
 		fmt.Println("No data collected.")
-		return
+		return mtrRunError(ctx, err)
 	}
 
 	printer.MTRReportPrint(finalStats, printer.MTRReportOptions{
+		Columns:   columns,
 		StartTime: startTime,
 		SrcHost:   srcHost,
 		Wide:      wide,
 		ShowIPs:   showIPs,
 		Lang:      lang,
 	})
+	return mtrRunError(ctx, err)
 }
 
 // runMTRRaw 执行 MTR 原始流式模式（逐事件输出，'|' 分隔）。
@@ -209,17 +222,20 @@ func writeMTRRawPathEnd(w io.Writer, reason *trace.StopReason) error {
 	return printer.WriteTraceStopReason(w, reason)
 }
 
-func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, dataOrigin string) {
+func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPerHop int, dataOrigin string, onEvent func(trace.MTRSessionEvent) error) error {
 	if hopIntervalMs <= 0 {
 		hopIntervalMs = 1000
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := mtrRunContext(conf)
 	defer stop()
+	ctx, cancel := context.WithCancelCause(sigCtx)
+	defer cancel(nil)
 
 	opts := trace.MTRRawOptions{
 		HopInterval: time.Duration(hopIntervalMs) * time.Millisecond,
 		MaxPerHop:   maxPerHop,
+		OnEvent:     onEvent,
 		OnPathEnd: func(reason *trace.StopReason) {
 			if err := writeMTRRawPathEnd(os.Stderr, reason); err != nil {
 				writeMTRRawRuntimeError(os.Stderr, err)
@@ -229,15 +245,33 @@ func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 
 	roundConf := normalizeMTRTraceConfig(conf)
 	if apiLine := buildRawAPIInfoLine(dataOrigin); apiLine != "" {
-		fmt.Println(apiLine)
+		if _, err := fmt.Fprintln(os.Stdout, apiLine); err != nil {
+			return err
+		}
 	}
 
 	err := trace.RunMTRRaw(ctx, method, roundConf, opts, func(rec trace.MTRRawRecord) {
-		fmt.Println(printer.FormatMTRRawLine(rec))
+		if _, writeErr := fmt.Fprintln(os.Stdout, printer.FormatMTRRawLine(rec)); writeErr != nil {
+			cancel(writeErr)
+		}
 	})
-	if err != nil && !errors.Is(err, context.Canceled) {
-		writeMTRRawRuntimeError(os.Stderr, err)
+	return mtrRunError(ctx, err)
+}
+
+func mtrRunContext(conf trace.Config) (context.Context, context.CancelFunc) {
+	// The caller owns signals when it supplies a context. Another signal
+	// subscriber could cancel first and lose the caller's interruption cause.
+	if conf.Context != nil {
+		return conf.Context, func() {}
 	}
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func mtrRunError(ctx context.Context, err error) error {
+	if cause := context.Cause(ctx); cause != nil && (err == nil || errors.Is(err, context.Canceled)) {
+		return cause
+	}
+	return err
 }
 
 func normalizeMTRTraceConfig(conf trace.Config) trace.Config {

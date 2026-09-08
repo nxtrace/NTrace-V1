@@ -7,10 +7,8 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"os/signal"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/google/gopacket/layers"
@@ -33,25 +31,10 @@ type UDPTracerIPv6 struct {
 	sem       *semaphore.Weighted
 	matchQ    chan matchTask
 	readyICMP chan struct{}
-	readyUDP  chan struct{}
 }
 
-func (t *UDPTracerIPv6) waitAllReady(ctx context.Context) {
-	timeout := time.After(5 * time.Second)
-	waiting := 2
-	for waiting > 0 {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.readyICMP:
-			waiting--
-		case <-t.readyUDP:
-			waiting--
-		case <-timeout:
-			return
-		}
-	}
-	<-time.After(100 * time.Millisecond)
+func (t *UDPTracerIPv6) waitAllReady(ctx context.Context) error {
+	return waitProbeListeners(ctx, t.readyICMP)
 }
 
 func (t *UDPTracerIPv6) ttlComp(ttl int) bool {
@@ -84,7 +67,7 @@ func (t *UDPTracerIPv6) PrintFunc(ctx context.Context, cancel context.CancelCaus
 	}
 }
 
-func (t *UDPTracerIPv6) launchTTL(ctx context.Context, s *internal.UDPSpec, ttl int) {
+func (t *UDPTracerIPv6) launchTTL(ctx context.Context, cancel context.CancelCauseFunc, s *internal.UDPSpec, ttl int) {
 	t.wg.Add(1)
 	go func(ttl int) {
 		defer t.wg.Done()
@@ -102,6 +85,11 @@ func (t *UDPTracerIPv6) launchTTL(ctx context.Context, s *internal.UDPSpec, ttl 
 			go func(ttl, i int) {
 				defer t.wg.Done()
 				err := t.send(ctx, s, ttl, i)
+				if IsInitializationError(err) {
+					cancel(err)
+					t.res.settleAttempt(ttl, i)
+					return
+				}
 				if err != nil && !errors.Is(err, context.Canceled) {
 					if util.EnvDevMode {
 						panic(err)
@@ -232,7 +220,6 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 
 	// 创建就绪通道
 	t.readyICMP = make(chan struct{})
-	t.readyUDP = make(chan struct{})
 
 	if len(t.res.Hops) > 0 {
 		return &t.res, errTracerouteExecuted
@@ -248,7 +235,11 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 	if t.SrcAddr != "" && !util.IsIPv6(SrcAddr) {
 		return nil, errors.New("invalid IPv6 SrcAddr: " + t.SrcAddr)
 	}
-	t.SrcIP, _ = util.LocalIPPortv6(t.DstIP, SrcAddr, "udp6")
+	var sourceErr error
+	t.SrcIP, sourceErr = resolveProbeSource(UDPTrace, &t.Config, SrcAddr)
+	if sourceErr != nil {
+		return nil, wrapProbeSetupError(sourceErr)
+	}
 	if t.SrcIP == nil {
 		return nil, errors.New("cannot determine local IPv6 address")
 	}
@@ -261,17 +252,21 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 		t.DstPort,
 	)
 	s.SourceDevice = t.SourceDevice
+	s.FWMark, s.FWMarkSet = t.FWMark, t.FWMarkSet
 
-	s.InitICMP()
-	s.InitUDP()
-	defer s.Close()
-
-	baseCtx := t.Context
-	if baseCtx == nil {
-		baseCtx = context.Background()
+	closeSpec := sync.OnceFunc(s.Close)
+	defer closeSpec()
+	if err := s.InitICMP(); err != nil {
+		return nil, wrapProbeSetupError(err)
 	}
-	sigCtx, stop := signal.NotifyContext(baseCtx, os.Interrupt, syscall.SIGTERM)
+	if err := s.InitUDP(); err != nil {
+		return nil, wrapProbeSetupError(err)
+	}
+
+	sigCtx, stop := traceSignalContext(t.Context)
 	ctx, cancel := context.WithCancelCause(sigCtx)
+	defer stop()
+	defer cancel(nil)
 	t.final.Store(-1)
 
 	workerN := 16
@@ -282,12 +277,19 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
-		s.ListenICMP(ctx, t.readyICMP, func(msg internal.ReceivedMessage, finish time.Time, data []byte) {
+		if err := s.ListenICMP(ctx, t.readyICMP, func(msg internal.ReceivedMessage, finish time.Time, data []byte) {
 			t.handleICMPMessage(msg, finish, data)
 		},
-		)
+		); err != nil {
+			cancel(wrapProbeSetupError(err))
+		}
 	}()
-	t.waitAllReady(ctx)
+	if err := t.waitAllReady(ctx); err != nil {
+		cancel(err)
+		closeSpec()
+		t.wg.Wait()
+		return &t.res, err
+	}
 	t.wg.Add(1)
 	go t.PrintFunc(ctx, cancel)
 
@@ -297,7 +299,7 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 	go func() {
 		defer t.wg.Done()
 		// 立即启动 BeginHop 对应的 TTL 组
-		t.launchTTL(ctx, s, t.BeginHop)
+		t.launchTTL(ctx, cancel, s, t.BeginHop)
 
 		for ttl := t.BeginHop + 1; ttl <= t.MaxHops; ttl++ {
 			// 之后按 TTLInterval 周期启动后续 TTL 组
@@ -312,7 +314,7 @@ func (t *UDPTracerIPv6) Execute() (res *Result, err error) {
 			}
 
 			// 并发启动这个 TTL 的所有测量
-			t.launchTTL(ctx, s, ttl)
+			t.launchTTL(ctx, cancel, s, ttl)
 		}
 	}()
 
@@ -391,10 +393,10 @@ func (t *UDPTracerIPv6) send(ctx context.Context, s *internal.UDPSpec, ttl, i in
 	seq := (ttl << 8) | (i & 0xFF)
 
 	_, SrcPort := func() (net.IP, int) {
-		if !util.RandomPortEnabled() && t.SrcPort > 0 {
+		if !probeRandomPortEnabled(t.Config) && t.SrcPort > 0 {
 			return nil, t.SrcPort
 		}
-		return util.LocalIPPortv6(t.DstIP, t.SrcIP, "udp6")
+		return probeLocalIPPort(t.Config, t.SrcIP, "udp6")
 	}()
 
 	ipHeader := &layers.IPv6{

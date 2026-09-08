@@ -351,6 +351,7 @@ type deployRunOptions struct {
 }
 
 type mtrCLIFlags struct {
+	columns    *string
 	mtrMode    *bool
 	reportMode *bool
 	wideMode   *bool
@@ -408,7 +409,7 @@ func buildQueriesHelp() string {
 	if enableTraceroute {
 		help = "Traceroute: latency samples per hop (default 3). MTR: max probes per hop."
 	}
-	return help + " 0 = unlimited in TUI/raw. When omitted: 10 with --report/--wide (including --raw), otherwise unlimited"
+	return help + " 0 = unlimited in TUI/raw/JSON streams. JSON reports require a positive count. When omitted: 10 with --report/--wide (including --raw), otherwise unlimited"
 }
 
 func buildMaxAttemptsHelp() string {
@@ -436,7 +437,7 @@ func buildPayloadSizeHelp() string {
 }
 
 func buildTOSHelp() string {
-	return "Set the IP type-of-service / traffic class value [0-255]"
+	return "Set the full 8-bit IP type-of-service / traffic class [0-255]: DSCP*4+ECN (DSCP 46, ECN 0 = 184)"
 }
 
 func registerTracerouteOutputFlags(parser *argparse.Parser) tracerouteOutputFlags {
@@ -444,13 +445,14 @@ func registerTracerouteOutputFlags(parser *argparse.Parser) tracerouteOutputFlag
 }
 
 func registerTracerouteOutputFlagsWithAvailability(parser *argparse.Parser, enabled bool) tracerouteOutputFlags {
+	jsonPrint := parser.Flag("j", "json", &argparse.Options{Help: "Output JSON; with MTR, stream NDJSON unless --report/--wide is selected"})
 	if enabled {
 		return tracerouteOutputFlags{
 			routePath:     parser.Flag("P", "route-path", &argparse.Options{Help: "Print traceroute hop path by ASN and location"}),
 			outputPath:    parser.String("o", "output", &argparse.Options{Help: "Write realtime trace output and final stop reason to FILE"}),
 			outputDefault: parser.Flag("O", "output-default", &argparse.Options{Help: "Write realtime trace output and final stop reason to the default log file (/tmp/trace.log)"}),
 			tablePrint:    parser.Flag("", "table", &argparse.Options{Help: "Output trace results as a final summary table (traceroute report mode)"}),
-			jsonPrint:     parser.Flag("j", "json", &argparse.Options{Help: "Output trace results as JSON"}),
+			jsonPrint:     jsonPrint,
 			classicPrint:  parser.Flag("c", "classic", &argparse.Options{Help: "Classic Output trace results like BestTrace"}),
 		}
 	}
@@ -459,7 +461,7 @@ func registerTracerouteOutputFlagsWithAvailability(parser *argparse.Parser, enab
 		outputPath:    ptrStr(""),
 		outputDefault: ptrBool(false),
 		tablePrint:    ptrBool(false),
-		jsonPrint:     ptrBool(false),
+		jsonPrint:     jsonPrint,
 		classicPrint:  ptrBool(false),
 	}
 }
@@ -566,14 +568,16 @@ func registerMTRFlags(parser *argparse.Parser) mtrCLIFlags {
 		}
 		return mtrCLIFlags{
 			mtrMode:    mtrMode,
+			columns:    parser.String("", "mtr-columns", &argparse.Options{Help: "MTR text columns in order: loss,snt,received,last,avg,best,wrst,stdev (does not enable MTR)"}),
 			reportMode: parser.Flag("r", "report", &argparse.Options{Help: "MTR report mode (non-interactive, implies --mtr); can trigger MTR without --mtr"}),
 			wideMode:   parser.Flag("w", "wide", &argparse.Options{Help: "MTR wide report mode (implies --mtr --report); alone equals --mtr --report --wide"}),
 			showIPs:    parser.Flag("", "show-ips", &argparse.Options{Help: "MTR only: display both PTR hostnames and numeric IPs (PTR first, IP in parentheses)"}),
-			ipInfoMode: parser.Int("y", "ipinfo", &argparse.Options{Default: 0, Help: "Set initial MTR TUI host info mode (0-4). TUI only; ignored in --report/--raw. 0:IP/PTR 1:ASN 2:City 3:Owner 4:Full"}),
+			ipInfoMode: parser.Int("y", "ipinfo", &argparse.Options{Default: 0, Help: "Set initial MTR TUI host info mode (0-4). TUI only; ignored in --report/--raw/--json. 0:IP/PTR 1:ASN 2:City 3:Owner 4:Full"}),
 		}
 	}
 	return mtrCLIFlags{
 		mtrMode:    ptrBool(false),
+		columns:    new(string),
 		reportMode: ptrBool(false),
 		wideMode:   ptrBool(false),
 		showIPs:    ptrBool(false),
@@ -1115,6 +1119,7 @@ func maybeRunMTRMode(
 	dataOrigin string,
 	showIPs bool,
 	ipInfoMode int,
+	columns ...printer.MTRColumn,
 ) bool {
 	if !modes.mtr {
 		return false
@@ -1127,18 +1132,21 @@ func maybeRunMTRMode(
 		ttlInterval,
 	)
 
+	var err error
 	switch chooseMTRRunMode(modes.raw, modes.report) {
 	case mtrRunRaw:
-		runMTRRaw(method, conf, mtrHopIntervalMs, mtrMaxPerHop, dataOrigin)
+		err = runMTRRaw(method, conf, mtrHopIntervalMs, mtrMaxPerHop, dataOrigin, nil)
 	case mtrRunReport:
-		runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs)
+		err = runMTRReport(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, modes.wide, showIPs, nil, columns...)
 	default:
 		if ipInfoMode < 0 || ipInfoMode > 4 {
 			fmt.Fprintf(os.Stderr, "--ipinfo/-y 必须在 0-4 范围内，当前值: %d\n", ipInfoMode)
 			os.Exit(1)
 		}
-		runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode)
+		err = runMTRTUI(method, conf, mtrHopIntervalMs, mtrMaxPerHop, domain, dataOrigin, showIPs, ipInfoMode, nil, columns...)
 	}
+	// Mode-local defers restore the terminal and close listeners before exit.
+	exitOnTraceRunError(err)
 	return true
 }
 
@@ -1291,7 +1299,10 @@ func maybeRunUninterruptedRaw(rawPrint bool, method trace.Method, conf trace.Con
 			if errors.Is(err, context.Canceled) {
 				return true
 			}
-			fmt.Println(err)
+			if trace.IsInitializationError(err) {
+				exitOnTraceRunError(err)
+			}
+			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
 	}
 }
@@ -1299,12 +1310,18 @@ func maybeRunUninterruptedRaw(rawPrint bool, method trace.Method, conf trace.Con
 func runTraceOnce(method trace.Method, conf trace.Config) (*trace.Result, bool) {
 	res, err := trace.Traceroute(method, conf)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			fmt.Println(err)
-		}
+		exitOnTraceRunError(err)
 		return nil, false
 	}
 	return res, true
+}
+
+func exitOnTraceRunError(err error) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
 }
 
 // traceMapPayload preserves the historical external tracemap request shape.
@@ -1368,17 +1385,26 @@ func supportsMapTrace(dataOrigin string) bool {
 }
 
 func Execute() {
-	if handled, exitCode := maybeRunDNSMode(os.Args[1:], os.Stdout, os.Stderr); handled {
+	if handled, exitCode := maybeRunMTRReplayMode(os.Args[1:], os.Stdout, os.Stderr); handled {
 		os.Exit(exitCode)
 	}
-	if handled, exitCode := maybeRunSpeedMode(os.Args[1:], os.Stdout, os.Stderr); handled {
+	if handled, exitCode := maybeRunDoctorMode(os.Args[1:], os.Stdout, os.Stderr); handled {
 		os.Exit(exitCode)
 	}
-
+	mtrJSONRequested := requestsMTRJSON(os.Args[1:])
+	mtrRecordingRequested := containsMTRRecordFlag(os.Args[1:])
+	if !mtrJSONRequested && !mtrRecordingRequested {
+		if handled, exitCode := maybeRunDNSMode(os.Args[1:], os.Stdout, os.Stderr); handled {
+			os.Exit(exitCode)
+		}
+		if handled, exitCode := maybeRunSpeedMode(os.Args[1:], os.Stdout, os.Stderr); handled {
+			os.Exit(exitCode)
+		}
+	}
 	parser := argparse.NewParser(appBinName, "An open source visual route tracking CLI tool")
 	// Override HelpFunc so positional arg names are sanitized in --help output
 	parser.HelpFunc = func(c *argparse.Command, msg interface{}) string {
-		return sanitizeUsagePositionalArgs(c.Usage(msg))
+		return sanitizeUsagePositionalArgs(c.Usage(msg)) + "\n  --doctor  Check local probe prerequisites without sending probes; see --doctor --help\n  --mtr-replay FILE  Open a saved MTR session offline; see --mtr-replay --help\n"
 	}
 	init := registerInitFlag(parser)
 	ipv4Only := parser.Flag("4", "ipv4", &argparse.Options{Help: "Use IPv4 only"})
@@ -1417,6 +1443,7 @@ func Execute() {
 	speedMode := registerSpeedFlag(parser)
 	naliMode := registerNaliFlag(parser)
 	srcAddr := parser.String("s", "source", &argparse.Options{Help: "Use source address src_addr for outgoing packets"})
+	fwmark := parser.String("", "fwmark", &argparse.Options{Help: "Linux probe socket mark (decimal or 0x hex); traceroute/MTR only"})
 	srcPort := parser.Int("", "source-port", &argparse.Options{Help: "Use source port src_port for outgoing packets"})
 	srcDev := parser.String("D", "dev", &argparse.Options{Help: "Use the specified network device for explicit source selection. On Windows, this selects the device source address; routing may still choose the egress interface"})
 
@@ -1444,6 +1471,7 @@ func Execute() {
 
 	// ── MTR flags (all flavors) ──
 	mtrFlags := registerMTRFlags(parser)
+	mtrRecord := parser.String("", "mtr-record", &argparse.Options{Help: "Save this MTR session to a new file for offline replay"})
 	mtrMode := mtrFlags.mtrMode
 	reportMode := mtrFlags.reportMode
 	wideMode := mtrFlags.wideMode
@@ -1458,8 +1486,35 @@ func Execute() {
 	if err != nil {
 		// In case of error print error and print usage
 		// This can also be done by passing -h or --help flags
+		if mtrJSONRequested || mtrRecordingRequested || containsFWMarkFlag(os.Args[1:]) {
+			fmt.Fprint(os.Stderr, sanitizeUsagePositionalArgs(parser.Usage(err)))
+			os.Exit(2)
+		}
 		fmt.Print(sanitizeUsagePositionalArgs(parser.Usage(err)))
 		return
+	}
+	fwmarkSet := parsedFlag(parser, "fwmark")
+	mark, markErr := parseFWMark(*fwmark, fwmarkSet)
+	if markErr == nil {
+		markErr = validateFWMarkMode(fwmarkSet, map[string]bool{
+			"--init": *init, "--mtu": *mtuMode, "--nali": *naliMode,
+			"--deploy": *deploy, "--mcp": *deployMCP, "--dns": *dnsMode,
+			"--speed": *speedMode, "--fast-trace": *fastTraceFlag,
+			"--file": *file != "", "--from": *from != "",
+			"--setup-api-v4-token": *setupNextTraceAPIV4Token,
+		})
+	}
+	if markErr != nil {
+		fmt.Fprintln(os.Stderr, markErr)
+		os.Exit(2)
+	}
+	if mtrJSONRequested && (*setupNextTraceAPIV4Token || *dnsMode || *speedMode) {
+		fmt.Fprintln(os.Stderr, "MTR JSON cannot be combined with a standalone mode")
+		os.Exit(2)
+	}
+	if mtrRecordingRequested && (*setupNextTraceAPIV4Token || *dnsMode || *speedMode) {
+		fmt.Fprintln(os.Stderr, "--mtr-record cannot be combined with a standalone mode")
+		os.Exit(2)
 	}
 	if *dnsMode {
 		fmt.Fprintln(os.Stderr, "-l/--dns must be the first argument")
@@ -1467,7 +1522,14 @@ func Execute() {
 	}
 	if err := validateGlobalpingAvailability(*from, enableGlobalping); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if mtrJSONRequested || mtrRecordingRequested {
+			os.Exit(2)
+		}
 		os.Exit(1)
+	}
+	if *setupNextTraceAPIV4Token && parsedFlag(parser, "mtr-columns") {
+		fmt.Fprintln(os.Stderr, "--mtr-columns cannot be combined with token setup")
+		os.Exit(2)
 	}
 	if *setupNextTraceAPIV4Token {
 		if err := runNextTraceAPIV4TokenSetup(nextTraceAPIV4TokenSetupOptions{
@@ -1479,8 +1541,6 @@ func Execute() {
 		}
 		return
 	}
-	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	util.SrcDev = ""
 
 	standalone := ""
@@ -1498,14 +1558,74 @@ func Execute() {
 		report:     *reportMode,
 		wide:       *wideMode,
 		raw:        *rawPrint,
-		traditional: *jsonPrint || *tablePrint || *classicPrint || *outputPath != "" ||
+		traditional: (*jsonPrint && enableTraceroute) || *tablePrint || *classicPrint || *outputPath != "" ||
 			*outputDefault || *routePath || *fastTraceFlag || *file != "" || *from != "",
 		standalone: standalone,
 	}, defaultMTR)
 	if modeErr != nil {
 		fmt.Fprintln(os.Stderr, modeErr)
+		if mtrJSONRequested || mtrRecordingRequested {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
+	columnsStandalone := standalone
+	if *init {
+		columnsStandalone = "--init"
+	}
+	if err := validateMTRRecordMode(*mtrRecord, parsedFlag(parser, "mtr-record"), mtrModes, columnsStandalone, *deployMCP); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	mtrColumns, columnsErr := resolveMTRColumns(*mtrFlags.columns, parsedFlag(parser, "mtr-columns"), mtrModes, *jsonPrint, columnsStandalone)
+	if columnsErr != nil {
+		fmt.Fprintln(os.Stderr, columnsErr)
+		os.Exit(2)
+	}
+	if mtrModes.mtr && (*jsonPrint || mtrRecordingRequested) {
+		if maybePrintVersion(*ver) {
+			return
+		}
+		conflicts := map[string]bool{
+			"table": *tablePrint, "classic": *classicPrint, "output": *outputPath != "", "outputDefault": *outputDefault,
+			"routePath": *routePath, "from": *from != "", "fastTrace": *fastTraceFlag, "file": *file != "", "deploy": *deploy,
+		}
+		conflict, ok := checkMTRConflicts(conflicts)
+		if !ok || (*rawPrint && *jsonPrint) || *mtuMode || *naliMode || *init || *deployMCP {
+			if ok {
+				conflict = "--raw or a standalone mode"
+			}
+			fmt.Fprintf(os.Stderr, "MTR cannot be combined with %s\n", conflict)
+			os.Exit(2)
+		}
+		queriesSet, intervalSet, packetSet, _ := detectExplicitProbeFlags(parser)
+		count, interval := deriveMTRProbeParams(mtrModes.report, queriesSet, *numMeasurements, intervalSet, *ttlInterval)
+		opts := mtrJSONOptions{
+			Target: *str, Method: resolveTraceMethod(*tcp, *udp), Report: mtrModes.report,
+			RecordPath:    *mtrRecord,
+			RecordDisplay: mtrRecordingDisplay{hostMode: *ipInfoMode, showIPs: *showIPs, wide: mtrModes.wide, columns: *mtrFlags.columns},
+			MaxPerHop:     count, HopIntervalMs: interval, PacketSize: *packetSize, PacketSizeExplicit: packetSet,
+			IPv4Only: *ipv4Only, IPv6Only: *ipv6Only, DataProvider: *dataOrigin, PowProvider: *powProvider, DotServer: *dot,
+			Config: trace.Config{
+				OSType: resolveOSType(), ICMPMode: *icmpMode, DN42: *dn42,
+				SrcAddr: *srcAddr, SourceDevice: *srcDev, SrcPort: *srcPort, DstPort: *port,
+				FWMark: mark, FWMarkSet: fwmarkSet,
+				BeginHop: *beginHop, MaxHops: *maxHops, ParallelRequests: *parallelRequests,
+				Timeout: time.Duration(*timeout) * time.Millisecond, TOS: *tos, Lang: *lang,
+				RDNS: !*norDNS, AlwaysWaitRDNS: *alwaysrDNS, DisableMPLS: *disableMPLS,
+			},
+		}
+		var code int
+		if *jsonPrint {
+			code = runMTRJSONCLI(opts)
+		} else {
+			applyColorMode(*noColor)
+			code = runMTRRecordedCLI(opts, mtrModes, *showIPs, *ipInfoMode, *mtrFlags.columns, mtrColumns)
+		}
+		os.Exit(code)
+	}
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if *naliMode {
 		applyColorMode(*noColor)
 		if maybePrintVersion(*ver) {
@@ -1811,27 +1931,16 @@ func Execute() {
 		return
 	}
 
-	// ResolveConfiguredSrcAddr is used for display/source-IP fallback before tracer runtime normalization.
-	resolvedSrcAddr, _, srcResolveErr := trace.ResolveConfiguredSrcAddr(ip, *srcAddr, *srcDev)
-	if srcResolveErr != nil {
-		fmt.Println(srcResolveErr)
-		os.Exit(1)
-	}
-	// NormalizeExplicitSourceConfig applies explicit --source/--dev selection rules.
-	sourceCfg, srcResolveErr := trace.NormalizeExplicitSourceConfig(method, trace.Config{
-		OSType:       osType,
-		DstIP:        ip,
-		SrcAddr:      *srcAddr,
-		SourceDevice: *srcDev,
+	sourceCfg, srcResolveErr := resolveCLIProbeSource(method, trace.Config{
+		Context: rootCtx, OSType: osType, DstIP: ip, SrcAddr: *srcAddr, SourceDevice: *srcDev,
+		SrcPort: *srcPort, DstPort: *port, TOS: *tos, Timeout: time.Duration(*timeout) * time.Millisecond,
+		FWMark: mark, FWMarkSet: fwmarkSet,
 	})
 	if srcResolveErr != nil {
-		fmt.Println(srcResolveErr)
+		fmt.Fprintln(os.Stderr, srcResolveErr)
 		os.Exit(1)
 	}
-	if sourceCfg.SrcAddr != "" {
-		resolvedSrcAddr = sourceCfg.SrcAddr
-	}
-	resolvedSrcDev := sourceCfg.SourceDevice
+	resolvedSrcAddr, resolvedSrcDev := sourceCfg.SrcAddr, sourceCfg.SourceDevice
 	effectivePacketSize := resolvePacketSizeArg(*packetSize, packetSizeExplicit, method, ip)
 	printTraceNav(*jsonPrint, mtrModes.mtr, ip, domain, *dataOrigin, *maxHops, effectivePacketSize, resolvedSrcAddr, method)
 
@@ -1870,8 +1979,10 @@ func Execute() {
 		*disableMPLS,
 	)
 	conf.Context = rootCtx
+	conf.FWMark, conf.FWMarkSet = mark, fwmarkSet
+	conf.SrcPort = sourceCfg.SrcPort
 
-	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode) {
+	if maybeRunMTRMode(mtrModes, method, conf, queriesExplicit, *numMeasurements, ttlTimeExplicit, *ttlInterval, domain, *dataOrigin, *showIPs, *ipInfoMode, mtrColumns...) {
 		return
 	}
 	if err := writeIgnoredTraceOutputWarning(os.Stderr, outputMode, resolvedOutputPath); err != nil {

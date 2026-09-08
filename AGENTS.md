@@ -87,11 +87,11 @@
     - `--tos` 同样只是在现有路径上设置 `TOS/TrafficClass`。
   - Windows：
     - `TCP/UDP` 的 IPv4/IPv6 一直走 WinDivert raw send。
-    - `ICMPv4` 一直走 socket path（`SetTOS` / `SetTTL`）。
+    - `ICMPv4` 默认或 `--tos 0` 走 socket path（`SetTOS` / `SetTTL`）；非零 TOS 改用 WinDivert 完整报文发送，因为原生路径实测将非零字段发成零。
     - `ICMPv6`：
       - 默认或 `--tos 0`：继续走原生 socket path，只设置 `HopLimit`，保持与 `v1.5.2` 一致。
       - 非零 `--tos`：切到 WinDivert raw send，直接发送完整 `IPv6 + ICMPv6` 报文，因为 Windows 的 `x/net/ipv6.PacketConn` 不能可靠设置 `TrafficClass`。
-    - 因此，Windows 上只有“`ICMPv6` 且 `--tos != 0`”这个组合会额外依赖 WinDivert 发送能力；README 中英两份都已写明。
+    - 因此，Windows amd64 上 ICMPv4/ICMPv6 的 `--tos != 0` 均额外依赖 WinDivert 发送能力；`--icmp-mode 1` 仍仅选择接收后端。其他 Windows 架构未接入此 WinDivert 发送实现。
 
 ### 间隔默认值（分层体系）
 
@@ -108,12 +108,33 @@
 - `-w/--wide`：宽报告模式，隐式等价 `--mtr --report --wide`。
 - `--raw`：与 MTR 组合时进入 **MTR raw 流式模式**（`runMTRRaw`），不再与 MTR 冲突。
 - 有效 MTR 开关：`effectiveMTR = mtr || report || wide`。
-- MTR 三路分支（`chooseMTRRunMode`）：
+- MTR 文本/RAW 三路分支（`chooseMTRRunMode`；JSON 提前单独分发）：
   1. `effectiveMTRRaw` → `runMTRRaw`（流式行输出，适合管道/脚本）
   2. `effectiveReport` → `runMTRReport`（非交互报告表）
   3. 默认 → `runMTRTUI`（全屏 TUI）
-- MTR 冲突参数（会直接报错退出）：`--table` `--classic` `--json` `--output` `--route-path` `--from` `--fast-trace` `--file` `--deploy`。
-  - **注意**：`--raw` 不再是冲突参数。
+- MTR 冲突参数（会直接报错退出）：`--table` `--classic` `--output` `--route-path` `--from` `--fast-trace` `--file` `--deploy`。
+  - **注意**：`--raw`、`--json` 均可选择 MTR 输出，但两者互斥。
+
+### JSON、录制、回放与自定义列
+
+- 三个 flavor 均支持 MTR JSON；`--mtr --json` 为 NDJSON，`-r/-w --json` 为最终单文档，`ntr --json` 默认流式。完整/tiny 单独 `--json` 仍为传统 traceroute。
+- JSON stream 的非正 `-q` 表示无限；JSON report 默认 10，显式非正值报错。FULL metadata 不保证 Geo/PTR 一定存在，遵守 provider/DNS 设置。
+- TCP/UDP 的 `--source-port -1` 在文本、JSON、录制中均为逐包随机；`0` 自动选择，正数固定端口。
+- `probe` 先于其 `path_end`；录制失败丢弃 causal probe 时，JSON 不得发布该 pending path。max-hops 可在最后 probe 后单独 flush。
+- `--mtr-record FILE` 独占创建新文件，保留完整 UTF-8 JSON 行；写入失败停止探测。首个会话错误及阶段不被后续录制 start/finish 错误覆盖。
+- `--mtr-replay FILE` 为纯离线独立入口，拒绝 target/探测参数/stdin；TTY 默认停在末尾，非 TTY/report 输出最终表，JSON 使用独立 `mtr_replay` 文档。
+- 回放 `j/J` 定位、Space 播放、`p` 暂停、`r` 回到开头；残缺文件恢复有效前缀但非零退出。显示副本过滤 Unicode Cc/Cf，文件与 JSON 原值保留。
+- `--mtr-columns` 只控制 MTR/回放文本列，不改变 RAW/JSON；`o/O` 会话内编辑，`d/D` 历史视图、`g/G` 切换三种图表。默认统计列不变，新增可选 Received/Rcv。
+- 契约与验收入口：[MTR JSON](docs/mtr-json.md)、[录制/回放](docs/mtr-session.md)、[CLI 说明](skills/nexttrace/references/cli-fallback.md)。
+
+### Doctor、fwmark 与 TOS
+
+- `--doctor` 三个 flavor 可用，只做纯文本本地初始化检查，不发送探测；DNS/DoT 可以联网。Windows 使用 NO_INSTALL，不安装驱动。成功不等于可达、TOS 生效或实际出口已验证。
+- Doctor 明确拒绝 `--fwmark` 与随机源端口 `-1`；不要为此扩展 BackendOptions 来暗示该组合受支持。
+- `--fwmark` 仅 Linux 本地 traceroute/MTR，支持十进制/十六进制 uint32，显式零也设置并检查权限；独立模式、批量、远程及 deploy/MCP 不支持。
+- 标记与非零 TOS 参与 Linux 会话选源，保留显式 source/device 约束，不标记 DNS/Geo/API 请求；初始化失败停止探测，不变成 MTR 丢包。
+- Linux IPv4 UDP 使用 raw connect 选源且不发送报文；只能确认源地址，Doctor 不据此推断出口接口/网关。netlink DONE 无匹配路由立即返回错误。
+- Windows amd64 非零 ICMP TOS 使用 WinDivert 发送；默认/零仍为原生 socket。详见中英文 README 的平台限制与参数说明。
 
 ### MTR 中 `-q/-i/-y` 的新语义
 
