@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -131,6 +132,43 @@ def verify_recording(binary, path):
     return records[-1]["elapsed_ns"]
 
 
+def verify_recording_signals(binary, directory, mode, log):
+    # Unix delivers actual OS signals; ConPTY key input is a separate contract.
+    for output_mode, flags in (("tui", mode), ("report", ["-r"]), ("raw", mode + ["--raw"])):
+        for sig, expected_code in ((signal.SIGINT, 130), (signal.SIGTERM, 143)):
+            path = os.path.join(directory, f"{output_mode}-{sig.name}.jsonl")
+            terminal = Terminal([binary] + flags + [
+                "--mtr-record", path, "-q", "1000", "-i", "40", "--timeout", "100",
+                "-d", "disable-geoip", "-n", "-s", "127.0.0.1", "-m", "1", "127.0.0.1",
+            ], log)
+            try:
+                deadline = time.monotonic() + 5
+                ready = False
+                while time.monotonic() < deadline:
+                    terminal.read(0.05)
+                    try:
+                        with open(path, encoding="utf-8") as source:
+                            ready = any('"type":"probe"' in line for line in source)
+                    except FileNotFoundError:
+                        pass
+                    if ready:
+                        break
+                assert ready, f"{output_mode} did not record a probe before {sig.name}"
+                terminal.process.send_signal(sig)
+                deadline = time.monotonic() + 5
+                while terminal.process.poll() is None and time.monotonic() < deadline:
+                    terminal.read(0.05)
+                assert terminal.process.poll() == expected_code, (output_mode, sig.name, terminal.process.poll())
+                assert termios.tcgetattr(terminal.slave) == terminal.original, "Signal exit did not restore terminal"
+                with open(path, encoding="utf-8") as source:
+                    records = [json.loads(line) for line in source]
+                assert records[-1]["type"] == "end", (output_mode, sig.name)
+                assert records[-1]["end"]["end_reason"] == "interrupted", records[-1]
+                assert records[-1]["end"]["signal"] == sig.name, records[-1]
+            finally:
+                terminal.close()
+
+
 def main(binary):
     binary = os.path.abspath(binary)
     log = bytearray()
@@ -190,11 +228,14 @@ def main(binary):
                 offline.quit()
             finally:
                 offline.close()
+            if os.name != "nt":
+                verify_recording_signals(binary, directory, mode, log)
         print(json.dumps({
             "platform": platform.system(), "binary": os.path.basename(binary), "session_pty": "PASS",
             "checks": ["loopback recording", "pause/resume", "reset generation", "ordered file",
                        "offline count/RTT parity", "final snapshot", "time seek", "history", "column editor",
-                       "play/pause", "rewind", "EOF pause", "terminal restore"],
+                       "play/pause", "rewind", "EOF pause", "terminal restore"]
+                      + (["recorded SIGINT/SIGTERM"] if os.name != "nt" else []),
         }, indent=2))
     finally:
         with open(os.path.join(tempfile.gettempdir(), "mtr-session-pty.log"), "wb") as output:

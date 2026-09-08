@@ -1535,8 +1535,6 @@ func Execute() {
 		}
 		return
 	}
-	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	util.SrcDev = ""
 
 	standalone := ""
@@ -1618,9 +1616,10 @@ func Execute() {
 			applyColorMode(*noColor)
 			code = runMTRRecordedCLI(opts, mtrModes, *showIPs, *ipInfoMode, *mtrFlags.columns, mtrColumns)
 		}
-		stop()
 		os.Exit(code)
 	}
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if *naliMode {
 		applyColorMode(*noColor)
 		if maybePrintVersion(*ver) {

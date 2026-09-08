@@ -54,8 +54,7 @@ func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 		hopIntervalMs = 1000
 	}
 
-	// Ctrl-C 优雅退出
-	sigCtx, stop := signal.NotifyContext(mtrParentContext(conf), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := mtrRunContext(conf)
 	defer stop()
 	ctx, cancel := context.WithCancel(sigCtx)
 	defer cancel()
@@ -125,7 +124,7 @@ func runMTRTUI(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 		}
 	}
 
-	return trace.RunMTR(ctx, method, roundConf, opts, onSnapshot)
+	return mtrRunError(ctx, trace.RunMTR(ctx, method, roundConf, opts, onSnapshot))
 }
 
 func buildMTRInteractiveOptions(ui *mtrUI, hopIntervalMs int, maxPerHop int) trace.MTROptions {
@@ -170,7 +169,7 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 		maxPerHop = 10
 	}
 
-	ctx, stop := signal.NotifyContext(mtrParentContext(conf), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := mtrRunContext(conf)
 	defer stop()
 
 	startTime := time.Now()
@@ -193,13 +192,13 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 
 	roundConf := normalizeMTRReportConfig(conf, wide)
 	finalStats, _, err := collectMTRReport(ctx, method, roundConf, opts)
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.Cause(ctx)) {
 		return err
 	}
 
 	if len(finalStats) == 0 {
 		fmt.Println("No data collected.")
-		return nil
+		return mtrRunError(ctx, err)
 	}
 
 	printer.MTRReportPrint(finalStats, printer.MTRReportOptions{
@@ -210,7 +209,7 @@ func runMTRReport(method trace.Method, conf trace.Config, hopIntervalMs int, max
 		ShowIPs:   showIPs,
 		Lang:      lang,
 	})
-	return nil
+	return mtrRunError(ctx, err)
 }
 
 // runMTRRaw 执行 MTR 原始流式模式（逐事件输出，'|' 分隔）。
@@ -228,7 +227,7 @@ func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 		hopIntervalMs = 1000
 	}
 
-	sigCtx, stop := signal.NotifyContext(mtrParentContext(conf), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := mtrRunContext(conf)
 	defer stop()
 	ctx, cancel := context.WithCancelCause(sigCtx)
 	defer cancel(nil)
@@ -256,17 +255,23 @@ func runMTRRaw(method trace.Method, conf trace.Config, hopIntervalMs int, maxPer
 			cancel(writeErr)
 		}
 	})
+	return mtrRunError(ctx, err)
+}
+
+func mtrRunContext(conf trace.Config) (context.Context, context.CancelFunc) {
+	// The caller owns signals when it supplies a context. Another signal
+	// subscriber could cancel first and lose the caller's interruption cause.
+	if conf.Context != nil {
+		return conf.Context, func() {}
+	}
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func mtrRunError(ctx context.Context, err error) error {
 	if cause := context.Cause(ctx); cause != nil && (err == nil || errors.Is(err, context.Canceled)) {
 		return cause
 	}
 	return err
-}
-
-func mtrParentContext(conf trace.Config) context.Context {
-	if conf.Context != nil {
-		return conf.Context
-	}
-	return context.Background()
 }
 
 func normalizeMTRTraceConfig(conf trace.Config) trace.Config {
