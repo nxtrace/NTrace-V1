@@ -414,3 +414,11 @@ func TestMTRReplayLongSessionStreamingSeek(t *testing.T) {
 	}
 	t.Logf("400s / 4000 probes, bytes=%d generation=%s load=%s seek-to-10s=%s", r.Size(), generated, loaded, sought)
 }
+
+func TestMTRReplayStripsUnicodeFormatControls(t *testing.T) {
+	input := "中文\u202ehost\u202c\u2066name\u2069\u200b"
+	want := "中文 host  name  "
+	if got := sanitizeMTRReplayText(input); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}

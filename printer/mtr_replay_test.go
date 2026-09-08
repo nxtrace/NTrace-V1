@@ -54,3 +54,22 @@ func TestMTRReplayReportPlainSink(t *testing.T) {
 		t.Fatal("ignored write error")
 	}
 }
+
+func TestMTRReplayReportLongSourceAlignment(t *testing.T) {
+	stats := []trace.MTRHopStat{{TTL: 1, IP: "192.0.2.1", Snt: 2, Received: 1, Loss: 50}}
+	for _, wide := range []bool{false, true} {
+		var b bytes.Buffer
+		opts := MTRReportOptions{Columns: []MTRColumn{MTRColumnSnt}, Wide: wide, SrcHost: strings.Repeat("源host", 12)}
+		if err := WriteMTRReplayReport(&b, stats, opts); err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(b.String(), "\n")
+		// HOST: has one more prefix cell than the live report's TTL prefix.
+		if reportDisplayWidth(lines[1]) != reportDisplayWidth(lines[2])+1 {
+			t.Fatalf("misaligned: %s", b.String())
+		}
+		if wide && !strings.Contains(lines[1], opts.SrcHost) {
+			t.Fatal("wide source truncated")
+		}
+	}
+}

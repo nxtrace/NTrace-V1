@@ -78,7 +78,11 @@ func WriteMTRReplayReport(w io.Writer, stats []trace.MTRHopStat, opts MTRReportO
 		columns = DefaultMTRColumns()
 	}
 	widths := mtrColumnWidths(columns, stats)
-	fmt.Fprintf(&b, "HOST: %s %s\n", reportPadRight(opts.SrcHost, hostWidth), mtrSelectedMetrics(columns, widths, nil, false))
+	hostHeader := opts.SrcHost
+	if !opts.Wide {
+		hostHeader = reportTruncateToWidth(hostHeader, hostWidth)
+	}
+	fmt.Fprintf(&b, "HOST: %s %s\n", reportPadRight(hostHeader, hostWidth), mtrSelectedMetrics(columns, widths, nil, false))
 	previous := 0
 	for i, stat := range stats {
 		fmt.Fprintf(&b, "%s%s %s\n", mtrReportPrefix(stat.TTL, previous), reportPadRight(hosts[i], hostWidth), mtrSelectedMetrics(columns, widths, &stat, false))

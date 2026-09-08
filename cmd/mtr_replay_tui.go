@@ -189,7 +189,7 @@ func runMTRReplayTUI(parent context.Context, reader *mtrsession.Reader, current 
 
 func sanitizeMTRReplayText(value string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return ' '
 		}
 		return r
