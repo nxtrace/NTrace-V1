@@ -653,3 +653,80 @@ func TestRejectContradictoryFooter(t *testing.T) {
 		})
 	}
 }
+
+func TestPerHopRecordingBounds(t *testing.T) {
+	for _, scenario := range []string{"overflow", "below_begin", "premature_max", "other_ttl_unfinished", "complete", "reset", "unbounded_max"} {
+		t.Run(scenario, func(t *testing.T) {
+			session := testSession()
+			session.EffectiveParameters.BeginHop = 2
+			session.EffectiveParameters.MaxHops = 3
+			session.EffectiveParameters.MaxPerHop = 2
+			if scenario == "unbounded_max" {
+				session.EffectiveParameters.MaxPerHop = 0
+			}
+			records := []Record{{MTRSessionEvent: trace.MTRSessionEvent{Type: StartEvent}, Session: &session}}
+			generation := uint64(0)
+			probe := func(ttl int) {
+				event := testProbe(session.StartedAt)
+				event.Generation, event.Probe.TTL = generation, ttl
+				records = append(records, Record{MTRSessionEvent: event})
+			}
+			probe(2)
+			probe(3)
+			switch scenario {
+			case "overflow":
+				probe(2)
+				probe(2)
+			case "below_begin":
+				probe(1)
+			case "other_ttl_unfinished":
+				probe(3)
+			case "complete", "reset":
+				probe(2)
+				probe(3)
+				if scenario == "reset" {
+					generation++
+					records = append(records, Record{MTRSessionEvent: trace.MTRSessionEvent{Type: trace.MTRSessionResetEvent, Generation: generation}})
+					probe(2)
+					probe(2)
+					probe(3)
+					probe(3)
+				}
+			}
+			if scenario != "overflow" && scenario != "below_begin" {
+				records = append(records, Record{MTRSessionEvent: trace.MTRSessionEvent{Type: trace.MTRSessionPathEndEvent, Generation: generation, PathEnd: &trace.StopReason{Hop: 3, Reason: trace.StopReasonMaxHops}}})
+			}
+			var data bytes.Buffer
+			writer, err := Open(filepath.Join(t.TempDir(), "writer.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = writer.Close() }()
+			var writeErr error
+			for i := range records {
+				r := &records[i]
+				r.Format, r.SchemaVersion, r.Seq = FormatName, SchemaVersion, uint64(i+1)
+				r.Timestamp = session.StartedAt
+				if err := json.NewEncoder(&data).Encode(r); err != nil {
+					t.Fatal(err)
+				}
+				if writeErr == nil {
+					if i == 0 {
+						writeErr = writer.Start(session)
+					} else {
+						writeErr = writer.Event(r.MTRSessionEvent)
+					}
+				}
+			}
+			path := filepath.Join(t.TempDir(), "reader.jsonl")
+			if err := os.WriteFile(path, data.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, _, readErr := readRecords(t, path)
+			valid := scenario == "complete" || scenario == "reset"
+			if (writeErr == nil) != valid || (readErr == nil) != valid {
+				t.Fatalf("valid=%v write=%v read=%v", valid, writeErr, readErr)
+			}
+		})
+	}
+}

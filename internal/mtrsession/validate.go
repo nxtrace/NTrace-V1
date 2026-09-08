@@ -18,6 +18,9 @@ type recordState struct {
 	elapsed    int64
 	generation uint64
 	maxHops    int
+	beginHop   int
+	maxPerHop  int
+	probes     [256]int
 	ended      bool
 }
 
@@ -62,7 +65,7 @@ func (s *recordState) acceptStart(r Record) error {
 		if p.MaxHops < 1 || p.MaxHops > 255 || p.BeginHop < 1 || p.BeginHop > p.MaxHops || p.MaxPerHop < 0 || p.HopIntervalMs <= 0 || p.TimeoutMs <= 0 || p.ParallelRequests <= 0 || p.TOS < 0 || p.TOS > 255 {
 			return errors.New("invalid effective MTR session parameters")
 		}
-		s.maxHops = p.MaxHops
+		s.maxHops, s.beginHop, s.maxPerHop = p.MaxHops, p.BeginHop, p.MaxPerHop
 	}
 	return nil
 }
@@ -90,7 +93,7 @@ func (s *recordState) acceptEvent(r Record) error {
 	}
 	switch r.Type {
 	case trace.MTRSessionProbeEvent:
-		if r.Probe == nil || r.Metadata != nil || r.PathEnd != nil || r.Probe.TTL < 1 || r.Probe.TTL > s.maxHops || r.Probe.RTT < 0 || r.Probe.CompletedAt.IsZero() {
+		if r.Probe == nil || r.Metadata != nil || r.PathEnd != nil || r.Probe.TTL < s.beginHop || r.Probe.TTL > s.maxHops || r.Probe.RTT < 0 || r.Probe.CompletedAt.IsZero() {
 			return errors.New("invalid MTR session probe")
 		}
 		if response := r.Probe.Response; response != nil {
@@ -103,6 +106,12 @@ func (s *recordState) acceptEvent(r Record) error {
 				return fmt.Errorf("invalid MTR session response kind %q", response.Kind)
 			}
 		}
+		if s.maxPerHop > 0 {
+			if s.probes[r.Probe.TTL] >= s.maxPerHop {
+				return errors.New("MTR session probe exceeds max_per_hop")
+			}
+			s.probes[r.Probe.TTL]++
+		}
 	case trace.MTRSessionMetadataEvent:
 		if r.Metadata == nil || r.Metadata.IP == "" || r.Probe != nil || r.PathEnd != nil {
 			return errors.New("invalid MTR session metadata")
@@ -111,9 +120,22 @@ func (s *recordState) acceptEvent(r Record) error {
 		if r.Probe != nil || r.Metadata != nil {
 			return errors.New("invalid MTR session path end")
 		}
+		if r.PathEnd != nil && r.PathEnd.Reason == trace.StopReasonMaxHops {
+			if s.maxPerHop <= 0 || r.PathEnd.Hop != s.maxHops {
+				return errors.New("MTR session max_hops requires bounded completion")
+			}
+			for ttl := s.beginHop; ttl <= s.maxHops; ttl++ {
+				if s.probes[ttl] != s.maxPerHop {
+					return errors.New("MTR session max_hops precedes per-hop completion")
+				}
+			}
+		}
 	case trace.MTRSessionPauseEvent, trace.MTRSessionResumeEvent, trace.MTRSessionResetEvent:
 		if r.Probe != nil || r.Metadata != nil || r.PathEnd != nil {
 			return errors.New("unexpected MTR session control payload")
+		}
+		if r.Type == trace.MTRSessionResetEvent {
+			s.probes = [256]int{}
 		}
 	default:
 		return fmt.Errorf("unknown MTR session event %q", r.Type)
