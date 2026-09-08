@@ -275,3 +275,33 @@ func TestMTRRecordKeepsResolutionErrorWhenStartFails(t *testing.T) {
 		}
 	}
 }
+
+func TestMTRJSONRecordingProbeFailureKeepsRecordStage(t *testing.T) {
+	oldLookup, oldRaw := domainLookupFn, runMTRJSONRawFn
+	oldPort, oldDst := util.SrcPort, util.DstIP
+	t.Cleanup(func() {
+		domainLookupFn, runMTRJSONRawFn = oldLookup, oldRaw
+		util.SrcPort, util.DstIP = oldPort, oldDst
+	})
+	domainLookupFn = func(context.Context, string, string, string, bool) (net.IP, error) {
+		return net.ParseIP("127.0.0.1"), nil
+	}
+	runMTRJSONRawFn = func(_ context.Context, _ trace.Method, _ trace.Config, opts trace.MTRRawOptions, _ trace.MTRRawOnRecord) error {
+		// A rejected probe makes the real recording writer fail before RAW output.
+		return opts.OnEvent(trace.MTRSessionEvent{Type: trace.MTRSessionProbeEvent, Probe: &trace.MTRSessionProbe{TTL: 0}})
+	}
+	opts := testMTRJSONOptions()
+	opts.RecordPath = filepath.Join(t.TempDir(), "failed-probe.jsonl")
+	var stdout, stderr bytes.Buffer
+	if code := runMTRJSON(t.Context(), opts, &stdout, &stderr); code != 1 {
+		t.Fatalf("code=%d", code)
+	}
+	events := decodeMTRJSON(t, stdout.Bytes())
+	var failure mtrJSONError
+	if err := json.Unmarshal(events[len(events)-1]["error"], &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Stage != "record" {
+		t.Fatalf("recording failure misclassified: %+v", failure)
+	}
+}

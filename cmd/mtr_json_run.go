@@ -158,8 +158,13 @@ func runMTRJSON(parent context.Context, opts mtrJSONOptions, stdout, stderr io.W
 		cleanup()
 	}
 	if recording != nil {
-		if recordErr := recording.finish(err, stage); recordErr != nil && err == nil {
-			err, stage = recordErr, "record"
+		if recordErr := recording.finish(err, stage); recordErr != nil && (err == nil || errors.Is(recordErr, err)) {
+			// The scheduler can return the writer's original failure. Keep that
+			// cause while classifying it as recording, not a probe failure.
+			if err == nil {
+				err = recordErr
+			}
+			stage = "record"
 		}
 	}
 	return out.finish(err, stage, stderr)
