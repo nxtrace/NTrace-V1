@@ -218,7 +218,7 @@ ntr --doctor --dev eth0 example.com
 
 默认使用 ICMP、中文文本，每项网络检查超时为 5000ms。多个解析候选全部列出，自动选择首个符合地址族的地址，不进行交互选择。目标 DoT 失败不回退系统 DNS。单项失败后继续独立检查；报告写入 stdout，参数与报告写入错误写入 stderr。报告包含目标、源地址和接口信息，不包含 token 或代理凭据。
 
-路由查询分别使用 Linux netlink、macOS 路由 socket 和 Windows `GetBestRoute2`，无法确认的信息显示“未知”。macOS/Windows 的预测不能覆盖全部协议、端口、源策略或 TOS 条件，报告会列明限制。socket 或过滤器初始化成功仅代表该步骤成功，不代表实际出口、收发能力或 TOS 生效。网络等待设有超时；原生同步初始化调用不承诺可被强制取消。
+路由查询分别使用 Linux netlink、macOS 路由 socket 和 Windows `GetBestRoute2`。Linux IPv4 UDP 的内核协议 255 不支持 netlink 查询，因此通过 raw socket 的 `connect` 选源，全程不发送报文；该接口只返回源地址，`--doctor` 将出口接口及网关保留为未知。无法确认的信息显示“未知”。macOS/Windows 的预测不能覆盖全部协议、端口、源策略或 TOS 条件，报告会列明限制。socket 或过滤器初始化成功仅代表该步骤成功，不代表实际出口、收发能力或 TOS 生效。网络等待设有超时；原生同步初始化调用不承诺可被强制取消。
 
 Windows 的 `--dev` 仅用于源地址选择，不能表述为设备绑定已验证。所有 WinDivert 自检使用 `NO_INSTALL`，不解压或安装驱动，不执行 `--init`。驱动尚未安装时标记为未验证，因为普通探测可能自动安装；Socket 备选结果单独报告。后端名称以实际构建架构为准，目前 WinDivert 探测路径编译于 Windows amd64。
 
@@ -389,7 +389,7 @@ PS: 路由可视化的绘制模块为独立模块，具体代码可在 [nxtrace/
 - 对于管理员模式：  
   **TCP/UDP mode** 依赖 `WinDivert`。  
   **ICMP mode** 支持 `1=Socket` 与 `2=WinDivert`（`0=Auto`）。使用 Socket 模式时，需防火墙配置允许`ICMP/ICMPv6`。  
-  在 `Windows` 上，`ICMPv6` 未传 `--tos` 或显式 `--tos 0` 时继续走原生 Socket 发送路径；只有非零 `ICMPv6 --tos` 才额外依赖 `WinDivert` 发送能力，并要求管理员权限。  
+  在 `Windows amd64` 上，ICMPv4/ICMPv6 未传 `--tos` 或显式 `--tos 0` 时继续走原生 Socket 发送路径；非零 ICMP `--tos` 使用 `WinDivert` 保留完整字段并要求管理员权限，`--icmp-mode 1` 选择 Socket 接收时也适用。原生 Windows ICMPv4 实测将所有测试的非零 TOS 发成了零。
   `WinDivert` 可使用 `--init` 参数自动配置环境；该命令会将运行时解压到可执行文件目录。
 
 #### `NextTrace` 现已经支持快速测试，有一次性测试回程路由需求的朋友可以使用
@@ -415,11 +415,21 @@ nexttrace --file /path/to/your/iplist.txt
 
 #### `NextTrace` 已支持指定网卡进行路由跟踪
 
+### TOS / IPv6 Traffic Class（`-Q`、`--tos`）
+
+`--tos` 设置完整的 8 位 IPv4 TOS / IPv6 Traffic Class 字段，范围 `0..255`，默认 `0`。计算方式为 `DSCP × 4 + ECN`：DSCP 46、ECN 0 使用 `--tos 184`；`--tos 46` 仍表示原始字段值 46（DSCP 11、ECN 2）。它修改探测报文头，实际选路与优先级由网络策略决定。
+
+Linux、macOS 的发送路径使用原生 socket 选项或完整 IP 报文头。Linux 上非零 TOS 的自动源地址按该 TOS 的路由选择，支持与 `--fwmark` 组合；显式 `--source`、`--dev` 保留约束，各会话独立选源。路由查询按 raw socket 的内核条件匹配，不传用户态报文中的 TCP/UDP 端口。选源或 TOS 设置失败会终止探测，不转换为 MTR 丢包，也不退回默认字段值。
+
+TOS 适用于现有 traceroute、MTR、Fast Trace、文件目标和 Web/API/MCP 探测入口；不影响 DNS/RDNS、GeoIP、API 等辅助请求。独立 MTU 和 Globalping 不支持该参数。JSON 中的 `tos` 记录请求配置，不代表抓包确认值。
+
+BSD、Android 提供相关原生接口，但未完成本次原生抓包验收；实际运行仍受探测所需权限与系统限制影响。Windows 的 WinDivert 发送路径目前仅编译于 amd64，不能将其支持结论套用于 Windows arm64。
+
 ### Linux 策略路由（`--fwmark`）
 
 `--fwmark 256` 或 `--fwmark 0x100` 为本地 traceroute、MTR 探测 socket 设置 32 位标记，覆盖各适用构建的 ICMP/TCP/UDP 和 IPv4/IPv6。对应的 `ip rule` 和路由表由用户配置，NextTrace 不修改系统规则；没有匹配的分流规则时，路径可以保持不变。
 
-自动源地址按带标记的路由选择，显式 `--source`、`--dev` 保留约束，标记不会覆盖它们。带标记会话不使用旧的进程级源地址缓存。路由查询包含协议和 TOS，但不传入 TCP/UDP 端口，以匹配原生 raw socket 的内核选路：用户态构造的传输层头部不会作为该查询的端口条件。后续策略变化及 ECMP 仍可能影响选路。
+自动源地址按带标记的路由选择，显式 `--source`、`--dev` 保留约束，标记不会覆盖它们。带标记会话不使用旧的进程级源地址缓存。路由查询包含内核发送协议和 TOS（IPv4 UDP 的 IP_HDRINCL 路径使用协议 255），但不传入 TCP/UDP 端口，以匹配原生 raw socket 的内核选路：用户态构造的传输层头部不会作为该查询的端口条件。后续策略变化及 ECMP 仍可能影响选路。
 
 范围为 `0..4294967295`，支持十进制及 `0x` 十六进制，不支持掩码。未传参数时不设置标记；显式 `0` 仍执行设置并检查权限。Linux 需要 `CAP_NET_ADMIN`，或 Linux 5.17 起的 `CAP_NET_RAW`。初始化失败会终止探测，不退回无标记方式。
 
@@ -569,8 +579,8 @@ nexttrace --psize 1024 example.com
 # 让每个 probe 在 1500 字节内随机大小
 nexttrace --psize -1500 example.com
 
-# 设置 TOS / traffic class 字段
-nexttrace -Q 46 example.com
+# 设置 DSCP 46、ECN 0（完整 TOS / traffic class 值为 184）
+nexttrace -Q 184 example.com
 
 # 特色功能：打印Route-Path图
 # Route-Path图示例：
@@ -599,7 +609,7 @@ export NO_COLOR=1
 | `--ttl-time` | 常规 traceroute 的 TTL 组间隔；MTR 的每跳探测间隔 | traceroute: `300ms`；MTR: 未指定时 `1000ms` | 想加速就调低；远程/限速链路调高 |
 | `--timeout` | 单个探测包超时 | `1000ms` | 跨洲或高丢包链路升到 `2000-3000ms` |
 | `--psize` | 探测包大小 | 按协议/IP 族自动取最小合法值 | 含 IP + 探测协议头；负值表示每个 probe 在 `abs(value)` 内随机；超过出接口/路径 MTU 时，链路上可能看到分片 |
-| `-Q`, `--tos` | IP TOS / traffic class | `0` | 设置 IP 头里的 TOS / traffic class；在 Windows 上仅 `ICMPv6` 且值非零时额外依赖 `WinDivert` |
+| `-Q`, `--tos` | IP TOS / traffic class | `0` | 设置完整 8 位字段（DSCP*4+ECN）；Windows amd64 非零 ICMP TOS 依赖 `WinDivert` |
 
 这些探测参数目前仍是 CLI 级配置，`nt_config.yaml` 还不能直接保存它们。若要复用一组调优参数，建议写成 shell alias 或小脚本。
 
@@ -1024,8 +1034,9 @@ Arguments:
                                      and IP family; raise for MTU or
                                      large-packet testing. Negative values
                                      randomize each probe up to abs(value)
-  -Q  --tos                          Set the IP type-of-service / traffic class
-                                     value [0-255]. Default: 0
+  -Q  --tos                          Set the full 8-bit IP type-of-service /
+                                     traffic class [0-255]: DSCP*4+ECN (DSCP
+                                     46, ECN 0 = 184). Default: 0
       --dot-server                   Use DoT Server for DNS Parse [dnssb,
                                      aliyun, dnspod, google, cloudflare]
   -g  --language                     Choose the language for displaying [en,

@@ -152,7 +152,7 @@ func (s *TCPSpec) SendTCP(ctx context.Context, ipHdr gopacket.NetworkLayer, tcpH
 		defer s.hopLimitLock.Unlock()
 
 		if err := s.tcp4.SetTOS(int(ip4.TOS)); err != nil {
-			return time.Time{}, err
+			return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv4 TOS %d: %w", ip4.TOS, err)}
 		}
 		if err := s.tcp4.SetTTL(ttl); err != nil {
 			return time.Time{}, err
@@ -192,7 +192,7 @@ func (s *TCPSpec) SendTCP(ctx context.Context, ipHdr gopacket.NetworkLayer, tcpH
 	defer s.hopLimitLock.Unlock()
 
 	if err := s.tcp6.SetTrafficClass(int(ip6.TrafficClass)); err != nil {
-		return time.Time{}, err
+		return time.Time{}, &InitializationError{Err: fmt.Errorf("set IPv6 Traffic Class %d: %w", ip6.TrafficClass, err)}
 	}
 	if err := s.tcp6.SetHopLimit(ttl); err != nil {
 		return time.Time{}, err

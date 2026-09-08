@@ -2,6 +2,6 @@
 
 package trace
 
-func resolveFWMarkSource(_ Method, _ Config) (string, error) {
+func resolveProbeRouteSource(_ Method, _ Config) (string, error) {
 	return "", ValidateFWMarkPlatform(true)
 }

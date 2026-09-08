@@ -260,11 +260,11 @@ func prepareTrace(ctx context.Context, req traceRequest) (*traceExecution, int, 
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	exec.Config.Context = ctx
 	exec.Config, err = trace.NormalizeExplicitSourceConfig(exec.Method, exec.Config)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	exec.Config.Context = ctx
 
 	return exec, 0, nil
 }

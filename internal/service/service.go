@@ -369,11 +369,11 @@ func (s *Service) prepareTrace(ctx context.Context, req TraceRequest) (*traceSet
 	if err != nil {
 		return nil, err
 	}
+	cfg.Context = ctx
 	cfg, err = trace.NormalizeExplicitSourceConfig(method, cfg)
 	if err != nil {
 		return nil, err
 	}
-	cfg.Context = ctx
 
 	return &traceSetup{
 		Request:             req,

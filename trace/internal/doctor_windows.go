@@ -79,9 +79,9 @@ func CheckProbeBackend(ctx context.Context, o BackendOptions) []BackendCheck {
 		s.SourceDevice = o.Device
 		defer s.Close()
 		checks = append(checks, backendStep(ctx, "icmp_socket_bind", s.InitICMP))
-		if o.IPVersion == 6 && o.TOS != 0 {
+		if o.TOS != 0 {
 			checks = append(checks, doctorWinStep(ctx, "windivert_icmp_send", func() error {
-				return s.ensureICMPSendHandleWithFlags(true, wd.FlagNoInstall)
+				return s.ensureICMPSendHandleWithFlags(o.IPVersion == 6, wd.FlagNoInstall)
 			}))
 		}
 	}
