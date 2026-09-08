@@ -75,7 +75,7 @@ func TestTraceSendTOSConfigurationFailureIsTerminal(t *testing.T) {
 		for _, method := range []Method{ICMPTrace, TCPTrace, UDPTrace} {
 			t.Run(string(method)+"/"+addr, func(t *testing.T) {
 				ip := net.ParseIP(addr)
-				cfg := Config{DstIP: ip, SrcAddr: addr, SrcPort: 40000, DstPort: 443, TOS: 184, Timeout: time.Second, BeginHop: 1, MaxHops: 1, NumMeasurements: 1, MaxAttempts: 1, ParallelRequests: 1}
+				cfg := Config{DstIP: ip, SrcAddr: addr, SrcPort: 40000, DstPort: 443, PktSize: packetSizeMinPayload(method, ip), TOS: 184, Timeout: time.Second, BeginHop: 1, MaxHops: 1, NumMeasurements: 1, MaxAttempts: 1, ParallelRequests: 1}
 				version := 4
 				if ip.To4() == nil {
 					version = 6
